@@ -25,6 +25,10 @@ backed by its own lightweight engine and materialized into an Obsidian vault.
   Rank Fusion. Off by default (zero-dependency lexical search).
 - **Eval harness** — `eval/ygg_eval.py`: retrieval quality (recall@k, MRR) on a
   fixed corpus; the metric that gates every retrieval change.
+- **Smart write-path (optional)** — `scripts/ygg_writepath.py`: a background
+  local model (Ollama) finds SEMANTIC duplicates/contradictions the lexical
+  queue misses and consolidates them non-destructively (similarity-gated,
+  archive-only, high-confidence). Autonomous, zero agent tokens.
 
 ## Quick start
 
