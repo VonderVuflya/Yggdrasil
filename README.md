@@ -59,9 +59,11 @@ memory with zero per-session setup. Manage with
 search is optional via `--embed-model`; the default is zero-dependency lexical.
 
 Optional auto-bootstrap: `scripts/install.sh hooks` adds a Claude Code
-`SessionStart` hook (backs up `settings.json` first) that injects the current
-project's durable memory at session start — the retrieval half of the
-self-learning loop. Remove with `scripts/install.sh unhooks`. Writeback stays
+`SessionStart` hook (backs up `settings.json` first) that injects a small
+**identity** block (a named, consistent assistant persona — the "soul") plus
+the current project's durable memory at session start — the retrieval half of
+the self-learning loop. Customize the identity in `~/.yggdrasil/identity.json`
+(`name`, `persona`, `user_facts`). Remove with `scripts/install.sh unhooks`. Writeback stays
 explicit (the agent calls `ygg_remember`): auto-writing on every stop is
 intentionally avoided to prevent memory pollution.
 
