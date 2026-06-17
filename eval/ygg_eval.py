@@ -62,6 +62,16 @@ CORPUS = [
      "To tail service logs use journalctl with the unit name and the follow flag; filter by priority for errors."),
     ("W5", "webapp", "debugging_lesson",
      "getBoundingClientRect returns zero height inside a display none parent; measure after the element is visible."),
+    # Russian-language memories (synthetic): real memory is often bilingual.
+    ("RU1", "ru", "debugging_lesson",
+     "Локальный сервер разработки случайно подключается к боевой базе данных вместо тестовой; "
+     "проверяйте переменные окружения перед запуском."),
+    ("RU2", "ru", "debugging_lesson",
+     "Платёж по подписке отклонён из-за недостатка средств на карте; "
+     "повторить попытку через несколько дней по расписанию."),
+    ("RU3", "ru", "debugging_lesson",
+     "Сборка докер-образа каждый раз пересобирается с нуля, потому что зависимости копируются после исходников; "
+     "сначала копируйте файл блокировки зависимостей."),
 ]
 
 # --- labelled queries: (query, expected_label, project, klass) ------------
@@ -85,6 +95,10 @@ CASES = [
     ("the page is too wide on small phones", "W1", "webapp", "paraphrase"),
     ("client got billed two times on a repeated call", "P3", "payments", "paraphrase"),
     ("too many open database links during traffic spikes", "O2", "ops", "paraphrase"),
+    # crosslingual — English query, Russian-content target (needs a multilingual model)
+    ("dev server accidentally connects to the production database", "RU1", "ru", "crosslingual"),
+    ("subscription payment was declined due to insufficient funds", "RU2", "ru", "crosslingual"),
+    ("docker image rebuilds from scratch every time", "RU3", "ru", "crosslingual"),
 ]
 
 

@@ -59,15 +59,18 @@ All four pass on the bundled engine (`scripts/run_gates.sh`).
 ## Retrieval quality
 
 `eval/ygg_eval.py` scores recall@1/recall@3/MRR on a fixed corpus, split by
-query class. Current numbers:
+query class (keyword / identifier / paraphrase / crosslingual). Current numbers:
 
-| Mode | recall@1 | MRR | paraphrase recall@1 |
+| Mode | recall@1 | paraphrase | crosslingual (EN→RU) |
 | --- | --- | --- | --- |
-| lexical (default) | 0.77 | 0.77 | 0.00 |
-| dense on (`YGG_EMBED_MODEL=all-minilm`) | 0.92 | 0.96 | 0.67 |
+| lexical (default) | 0.63 | 0.00 | 0.00 |
+| dense — `all-minilm` (45 MB, English) | 0.75 | 0.67 | 0.00 |
+| dense — `paraphrase-multilingual` (562 MB) | 0.94 | 0.67 | 1.00 |
 
-`keyword` and `identifier` classes are 1.0 in both modes; dense closes most of
-the `paraphrase` (semantic) gap.
+`keyword` and `identifier` classes are 1.0 in every mode. Pick the embedding
+model by your memory's languages: `all-minilm` is a light English-only default;
+a multilingual model closes the EN↔RU gap (real bilingual memory needs it). Set
+`YGG_EMBED_MODEL` accordingly.
 
 ## Footprint
 
@@ -80,8 +83,9 @@ Measured on a live instance (13 memories, 4 projects):
 | Disk | SQLite + FTS index, ~tens of KB per memory |
 | Dependencies | none (Python 3.10+ stdlib only) |
 
-Dense search is opt-in and adds a local Ollama embedding model (e.g.
-`all-minilm`, ~45 MB) — no API key, nothing leaves the machine.
+Dense search is opt-in and adds a local Ollama embedding model — no API key,
+nothing leaves the machine. Model size is your call: `all-minilm` (~45 MB,
+English) or `paraphrase-multilingual` (~562 MB, EN/RU and more).
 
 ## Backend strategy
 
