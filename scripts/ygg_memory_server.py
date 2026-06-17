@@ -61,10 +61,28 @@ STOPWORDS = {
 }
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+# Split camelCase / PascalCase: "scrollWidth" -> [scroll, Width],
+# "getBoundingClientRect" -> [get, Bounding, Client, Rect], "HTMLParser" -> [HTML, Parser].
+_CAMEL_SPLIT_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+")
 
 
 def tokenize(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) >= 2 and t not in STOPWORDS]
+
+
+def expand_identifiers(text: str) -> str:
+    """Append space-split forms of camelCase/PascalCase identifiers so code
+    memory is searchable by words (e.g. 'scrollWidth' also matches 'scroll width').
+    Original text is preserved; split forms are appended."""
+    if not text:
+        return text
+    extra: list[str] = []
+    for word in _WORD_RE.findall(text):
+        parts = _CAMEL_SPLIT_RE.findall(word)
+        if len(parts) > 1:
+            extra.append(" ".join(parts))
+    return text + (" " + " ".join(extra)) if extra else text
 
 
 class MemoryStore:
@@ -173,7 +191,7 @@ class MemoryStore:
             )
             seq = cur.lastrowid
             if self.use_fts:
-                self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, content))
+                self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, expand_identifiers(content)))
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         record = self._row_to_record(row)
@@ -217,7 +235,7 @@ class MemoryStore:
                 ),
             )
             if data is not None and self.use_fts:
-                self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (content, seq))
+                self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         return self._row_to_record(row)
@@ -250,7 +268,7 @@ class MemoryStore:
         namespaces: list[str] | None,
     ) -> list[dict[str, Any]]:
         filters = filters or {}
-        terms = tokenize(query)
+        terms = tokenize(expand_identifiers(query))
         if not terms:
             return []
 
@@ -294,7 +312,7 @@ class MemoryStore:
             if self.use_fts:
                 relevance = max(0.0, -float(row["rank"]))  # bm25: more negative = better
             else:
-                doc_terms = tokenize(row["content"])
+                doc_terms = tokenize(expand_identifiers(row["content"]))
                 overlap = sum(1 for t in doc_terms if t in term_set) if doc_terms else 0
                 if overlap <= 0:
                     continue  # FTS MATCH already filters; the fallback must too

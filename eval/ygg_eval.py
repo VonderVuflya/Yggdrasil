@@ -42,7 +42,7 @@ CORPUS = [
      "Hydration mismatch from rendering a timestamp during SSR; move the dynamic value into useEffect "
      "so it only runs on the client."),
     ("W4", "webapp", "decision",
-     "Largest Contentful Paint was slow; preload the hero image and set fetchpriority high to speed first paint."),
+     "Largest Contentful Paint was slow; preload the hero image and set fetchPriority high to speed first paint."),
     ("P1", "payments", "debugging_lesson",
      "Recurring subscription charge fails with an insufficient-funds decline code; retry after three days per the dunning schedule."),
     ("P2", "payments", "debugging_lesson",
