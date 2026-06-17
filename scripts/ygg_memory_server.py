@@ -39,6 +39,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from ygg_embeddings import cosine, get_embedder
+
 
 DEFAULT_HOST = os.environ.get("YGG_MEMORY_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("YGG_MEMORY_PORT", "42069"))
@@ -88,8 +90,9 @@ def expand_identifiers(text: str) -> str:
 class MemoryStore:
     """SQLite-backed memory store with FTS5 (or in-Python fallback) search."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, embedder: Any = None):
         self.db_path = db_path
+        self.embedder = embedder
         directory = os.path.dirname(db_path)
         if directory:
             os.makedirs(directory, exist_ok=True)
@@ -120,12 +123,17 @@ class MemoryStore:
                 created_at    REAL NOT NULL,
                 access_count  INTEGER DEFAULT 0,
                 archived      INTEGER DEFAULT 0,
-                metadata_json TEXT
+                metadata_json TEXT,
+                embedding     TEXT
             )
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_user ON memories(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(user_id, namespace, project, scope)")
+        # Lazy migration for pre-existing DBs created before the embedding column.
+        existing_cols = {r[1] for r in cur.execute("PRAGMA table_info(memories)").fetchall()}
+        if "embedding" not in existing_cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN embedding TEXT")
         use_fts = True
         try:
             cur.execute(
@@ -165,6 +173,18 @@ class MemoryStore:
             "metadata": metadata,
         }
 
+    def _embed_raw(self, text: str) -> list[float] | None:
+        if self.embedder is None:
+            return None
+        try:
+            return self.embedder.embed(text)
+        except Exception:
+            return None
+
+    def _embed_json(self, text: str) -> str | None:
+        vec = self._embed_raw(text)
+        return json.dumps(vec) if vec else None
+
     # ---- write path --------------------------------------------------------
 
     def add(self, *, content: str, user_id: str, namespace: str | None, scope: str | None, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -176,17 +196,18 @@ class MemoryStore:
         confidence = metadata.get("confidence")
         content_hash = metadata.get("content_hash")
         importance = float(metadata.get("importance", 0.5)) if metadata.get("importance") is not None else 0.5
+        embedding_json = self._embed_json(content)  # network call outside the lock
         with self._lock:
             cur = self._conn.execute(
                 """
                 INSERT INTO memories
-                    (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?)
+                    (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)
                 """,
                 (
                     memory_id, user_id, namespace, scope, project, mem_type, content,
                     content_hash, source, confidence, importance, created_at,
-                    json.dumps(metadata, sort_keys=True),
+                    json.dumps(metadata, sort_keys=True), embedding_json,
                 ),
             )
             seq = cur.lastrowid
@@ -238,6 +259,12 @@ class MemoryStore:
                 self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
+        if data is not None and self.embedder is not None:
+            emb_json = self._embed_json(content)  # network call outside the lock
+            with self._lock:
+                self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, seq))
+                self._conn.commit()
+                row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         return self._row_to_record(row)
 
     # ---- read path ---------------------------------------------------------
@@ -300,14 +327,17 @@ class MemoryStore:
                 )
                 rows = self._conn.execute(sql, [match_query, *params]).fetchall()
             else:
-                sql = f"SELECT m.* FROM memories m WHERE {where_sql}"
-                rows = self._conn.execute(sql, params).fetchall()
+                rows = self._conn.execute(f"SELECT m.* FROM memories m WHERE {where_sql}", params).fetchall()
+            vec_rows = []
+            if self.embedder is not None:
+                vec_rows = self._conn.execute(
+                    f"SELECT m.* FROM memories m WHERE {where_sql} AND m.embedding IS NOT NULL", params
+                ).fetchall()
 
-        # Composite ranking: lexical relevance + importance + recency boost.
-        # (The architecture calls for a recency/importance boost on top of
-        # BM25; without it single-match BM25 scores collapse toward 0.)
+        # Lexical ranking: BM25/overlap relevance + importance + recency boost.
         term_set = set(terms)
-        scored = []
+        records: dict[str, dict[str, Any]] = {}
+        lex_scored: list[dict[str, Any]] = []
         for row in rows:
             if self.use_fts:
                 relevance = max(0.0, -float(row["rank"]))  # bm25: more negative = better
@@ -321,10 +351,53 @@ class MemoryStore:
             importance = float(record.get("importance") or 0.5)
             age_days = max(0.0, (now - float(record.get("created_at") or now)) / 86400.0)
             recency = 0.5 * (0.5 ** (age_days / 30.0))  # 30-day half-life, max 0.5
-            record["score"] = round(relevance + 0.25 * importance + recency, 6)
-            scored.append(record)
-        scored.sort(key=lambda r: r["score"], reverse=True)
-        return scored[:limit]
+            record["lexical_score"] = round(relevance + 0.25 * importance + recency, 6)
+            records[record["id"]] = record
+            lex_scored.append(record)
+        lex_scored.sort(key=lambda r: r["lexical_score"], reverse=True)
+
+        # Pure-lexical mode (dense disabled): composite ranking is the result.
+        if self.embedder is None:
+            for r in lex_scored:
+                r["score"] = r["lexical_score"]
+            return lex_scored[:limit]
+
+        # Dense ranking: cosine of the query vs stored embeddings over the scoped set.
+        query_vec = self._embed_raw(query)
+        vec_scored: list[dict[str, Any]] = []
+        if query_vec:
+            for row in vec_rows:
+                try:
+                    emb = json.loads(row["embedding"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                sim = cosine(query_vec, emb)
+                if sim <= 0:
+                    continue
+                record = records.get(row["id"]) or self._row_to_record(row)
+                record["vector_score"] = round(sim, 6)
+                records[record["id"]] = record
+                vec_scored.append(record)
+            vec_scored.sort(key=lambda r: r["vector_score"], reverse=True)
+
+        # Reciprocal Rank Fusion of the lexical and vector rankings (k=60).
+        K = 60
+        lex_rank = {r["id"]: i + 1 for i, r in enumerate(lex_scored)}
+        vec_rank = {r["id"]: i + 1 for i, r in enumerate(vec_scored)}
+        fused: dict[str, float] = {}
+        for mid in set(lex_rank) | set(vec_rank):
+            score = 0.0
+            if mid in lex_rank:
+                score += 1.0 / (K + lex_rank[mid])
+            if mid in vec_rank:
+                score += 1.0 / (K + vec_rank[mid])
+            fused[mid] = score
+        result = []
+        for mid, score in sorted(fused.items(), key=lambda kv: kv[1], reverse=True):
+            rec = records[mid]
+            rec["score"] = round(score, 6)
+            result.append(rec)
+        return result[:limit]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -461,7 +534,7 @@ def main() -> int:
             except FileNotFoundError:
                 pass
 
-    store = MemoryStore(args.db)
+    store = MemoryStore(args.db, embedder=get_embedder())
     Handler.store = store
     Handler.token = args.token
 

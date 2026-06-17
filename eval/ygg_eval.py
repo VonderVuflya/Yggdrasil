@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from ygg_memory_server import MemoryStore  # noqa: E402
+from ygg_embeddings import get_embedder  # noqa: E402
 
 NS = "yggdrasil-eval"
 USER = "eval-user"
@@ -102,7 +103,7 @@ def evaluate() -> dict:
     fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
     os.close(fd)
     try:
-        store = MemoryStore(db_path)
+        store = MemoryStore(db_path, embedder=get_embedder())
         label_to_id = seed(store)
         per_class: dict[str, dict] = {}
         details = []
