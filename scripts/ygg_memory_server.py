@@ -54,6 +54,14 @@ DEFAULT_DB = os.environ.get("YGG_MEMORY_DB") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "ygg-memory.sqlite"
 )
 
+# Hybrid fusion for dense search. "score" = normalized weighted sum (vector
+# weighted above lexical, so a strong semantic / cross-lingual match can outrank
+# a coincidental keyword hit); "rrf" = classic reciprocal rank fusion. Tuned
+# against eval/ygg_eval.py. Overridable for A/B and operator tuning.
+FUSION_MODE = os.environ.get("YGG_FUSION", "score")
+FUSION_W_LEX = float(os.environ.get("YGG_FUSION_W_LEX", "0.3"))
+FUSION_W_VEC = float(os.environ.get("YGG_FUSION_W_VEC", "1.0"))
+
 # Small stopword set so natural-language paraphrase queries still match on the
 # content words rather than being diluted by glue words.
 STOPWORDS = {
@@ -380,18 +388,26 @@ class MemoryStore:
                 vec_scored.append(record)
             vec_scored.sort(key=lambda r: r["vector_score"], reverse=True)
 
-        # Reciprocal Rank Fusion of the lexical and vector rankings (k=60).
-        K = 60
-        lex_rank = {r["id"]: i + 1 for i, r in enumerate(lex_scored)}
-        vec_rank = {r["id"]: i + 1 for i, r in enumerate(vec_scored)}
         fused: dict[str, float] = {}
-        for mid in set(lex_rank) | set(vec_rank):
-            score = 0.0
-            if mid in lex_rank:
-                score += 1.0 / (K + lex_rank[mid])
-            if mid in vec_rank:
-                score += 1.0 / (K + vec_rank[mid])
-            fused[mid] = score
+        if FUSION_MODE == "rrf":
+            # Classic reciprocal rank fusion (rank-only).
+            K = 60
+            lex_rank = {r["id"]: i + 1 for i, r in enumerate(lex_scored)}
+            vec_rank = {r["id"]: i + 1 for i, r in enumerate(vec_scored)}
+            for mid in set(lex_rank) | set(vec_rank):
+                fused[mid] = (1.0 / (K + lex_rank[mid]) if mid in lex_rank else 0.0) \
+                    + (1.0 / (K + vec_rank[mid]) if mid in vec_rank else 0.0)
+        else:
+            # Score-normalized weighted sum: normalize each signal to its
+            # in-result max, then weight (vector higher). Lets a strong vector
+            # match — e.g. a cross-lingual hit with no lexical overlap — outrank
+            # a coincidental keyword match, which rank-only RRF cannot.
+            max_lex = max((r["lexical_score"] for r in lex_scored), default=0.0) or 1.0
+            max_vec = max((r["vector_score"] for r in vec_scored), default=0.0) or 1.0
+            for mid, rec in records.items():
+                lex_norm = (rec.get("lexical_score") or 0.0) / max_lex
+                vec_norm = (rec.get("vector_score") or 0.0) / max_vec
+                fused[mid] = FUSION_W_LEX * lex_norm + FUSION_W_VEC * vec_norm
         result = []
         for mid, score in sorted(fused.items(), key=lambda kv: kv[1], reverse=True):
             rec = records[mid]

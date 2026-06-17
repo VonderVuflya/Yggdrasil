@@ -72,6 +72,11 @@ CORPUS = [
     ("RU3", "ru", "debugging_lesson",
      "Сборка докер-образа каждый раз пересобирается с нуля, потому что зависимости копируются после исходников; "
      "сначала копируйте файл блокировки зависимостей."),
+    # English lexical distractor in the same project: shares keywords with the
+    # RU1 crosslingual query ("production database connection") but is a
+    # different topic — exposes RRF's lexical dominance over a better vector hit.
+    ("RUD", "ru", "note",
+     "Set the production build flag to minify and fingerprint assets before the release."),
 ]
 
 # --- labelled queries: (query, expected_label, project, klass) ------------
