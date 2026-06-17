@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from ygg_core import record_is_archived
+from ygg_core import MuninnBackend, YggConfig, YggError, record_is_archived
 
 
 DEFAULT_URL = "http://127.0.0.1:42069"
@@ -31,10 +31,6 @@ SECRET_PATTERNS = [
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret|client_secret)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,}"),
 ]
-
-
-class YggError(RuntimeError):
-    pass
 
 
 def env_default(name: str, fallback: str) -> str:
@@ -61,21 +57,24 @@ def user_default() -> str:
     return env_default("YGG_USER_ID", DEFAULT_USER)
 
 
+_BACKEND: MuninnBackend | None = None
+
+
+def backend() -> MuninnBackend:
+    """Shared engine-agnostic REST client (from ygg_core), built from the env.
+
+    The CLI no longer hand-rolls REST transport — it goes through the same
+    backend contract the gates and review tools use, so swapping the engine
+    (own server vs external Muninn) flows through one place.
+    """
+    global _BACKEND
+    if _BACKEND is None:
+        _BACKEND = MuninnBackend(YggConfig.from_env())
+    return _BACKEND
+
+
 def request_json(method: str, path: str, body: dict[str, Any] | None = None, query: dict[str, Any] | None = None) -> dict[str, Any]:
-    url = muninn_url() + path
-    if query:
-        url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v is not None})
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    headers = {"Authorization": f"Bearer {muninn_token()}", "Content-Type": "application/json"}
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise YggError(f"{method} {path} failed: HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise YggError(f"{method} {path} failed: {exc.reason}") from exc
+    return backend().request_json(method, path, body=body, query=query)
 
 
 def health(_: argparse.Namespace) -> None:
