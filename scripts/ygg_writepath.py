@@ -116,9 +116,9 @@ def main() -> int:
                      and h["id"] not in archived_now
                      and (h.get("vector_score") or 0) >= SIM_THRESHOLD), None)
 
-        # mark processed regardless (idempotent for scheduled runs)
-        if args.apply:
-            backend.update_memory(mid, metadata_patch={"writepath_seen": True})
+        # mark processed in both modes so scheduled runs are idempotent (only
+        # new memories are re-evaluated next time)
+        backend.update_memory(mid, metadata_patch={"writepath_seen": True})
 
         if not peer:
             continue

@@ -170,11 +170,61 @@ json.dump(cfg, open(path, "w"), indent=2)
 print("removed Yggdrasil SessionStart hook")
 PY
     ;;
+  consolidate)
+    CLABEL="com.yggdrasil.consolidate"
+    CPLIST="$HOME/Library/LaunchAgents/${CLABEL}.plist"
+    TOKEN="$(cat "$YGG_HOME/token" 2>/dev/null)"
+    INTERVAL="${YGG_CONSOLIDATE_INTERVAL:-86400}"
+    CUSER="${YGG_CONS_USER:-dogfood-user}"
+    CNS="${YGG_CONS_NS:-yggdrasil-dogfood}"
+    # SAFE DEFAULT: propose only (detect + log candidates, archive nothing). A
+    # small local model confidently mislabels distinct-but-similar lessons, so
+    # auto-archiving is opt-in (YGG_CONSOLIDATE_APPLY=1) and best with a strong model.
+    APPLY_ARG=""
+    [ "${YGG_CONSOLIDATE_APPLY:-0}" = "1" ] && APPLY_ARG="    <string>--apply</string>"
+    cat > "$CPLIST" <<PEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${CLABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${PYTHON}</string>
+    <string>${YGG_HOME}/scripts/ygg_writepath.py</string>
+${APPLY_ARG}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>YGG_MUNINN_URL</key><string>${URL}</string>
+    <key>YGG_MUNINN_TOKEN</key><string>${TOKEN}</string>
+    <key>YGG_USER_ID</key><string>${CUSER}</string>
+    <key>YGG_NAMESPACE</key><string>${CNS}</string>
+  </dict>
+  <key>StartInterval</key><integer>${INTERVAL}</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>${YGG_HOME}/logs/consolidate.log</string>
+  <key>StandardErrorPath</key><string>${YGG_HOME}/logs/consolidate.log</string>
+</dict>
+</plist>
+PEOF
+    launchctl bootout "$domain/$CLABEL" 2>/dev/null || true
+    launchctl bootstrap "$domain" "$CPLIST" 2>/dev/null || launchctl load -w "$CPLIST" 2>/dev/null || true
+    echo "scheduled auto-consolidation every ${INTERVAL}s (logs: $YGG_HOME/logs/consolidate.log)"
+    ;;
+  unconsolidate)
+    CLABEL="com.yggdrasil.consolidate"
+    launchctl bootout "$domain/$CLABEL" 2>/dev/null || launchctl unload "$HOME/Library/LaunchAgents/${CLABEL}.plist" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/${CLABEL}.plist"
+    echo "removed scheduled auto-consolidation"
+    ;;
   uninstall)
     _stop; rm -f "$PLIST"
+    launchctl bootout "$domain/com.yggdrasil.consolidate" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/com.yggdrasil.consolidate.plist"
     command -v claude >/dev/null 2>&1 && claude mcp remove yggdrasil -s user >/dev/null 2>&1 || true
     command -v codex  >/dev/null 2>&1 && codex mcp remove yggdrasil >/dev/null 2>&1 || true
     echo "uninstalled service + MCP registration. Data kept at $YGG_HOME (rm -rf to remove)."
     ;;
-  *) echo "usage: install.sh {install|recommend|status|start|stop|restart|logs|token|hooks|unhooks|uninstall}"; exit 2;;
+  *) echo "usage: install.sh {install|recommend|status|start|stop|restart|logs|token|hooks|unhooks|consolidate|unconsolidate|uninstall}"; exit 2;;
 esac

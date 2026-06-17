@@ -77,6 +77,13 @@ the self-learning loop. Customize the identity in `~/.yggdrasil/identity.json`
 explicit (the agent calls `ygg_remember`): auto-writing on every stop is
 intentionally avoided to prevent memory pollution.
 
+Scheduled consolidation: `scripts/install.sh consolidate` installs a launchd job
+that periodically runs the smart write-path in **propose mode** (detect + log
+consolidation candidates, archive nothing). Auto-archiving is opt-in
+(`YGG_CONSOLIDATE_APPLY=1`) and best paired with a strong model — a small local
+model can confidently mislabel distinct-but-similar lessons, so the safe default
+only proposes.
+
 ## Gates (the test suite that backs the status claims)
 
 | Gate | Proves |
