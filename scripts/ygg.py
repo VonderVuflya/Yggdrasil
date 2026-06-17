@@ -214,6 +214,31 @@ def search(args: argparse.Namespace) -> None:
         print(textwrap.indent(preview, "  "))
 
 
+def recall(args: argparse.Namespace) -> None:
+    """Cross-project recall: search durable memory across ALL projects."""
+    filters: dict[str, Any] = {}
+    if args.type:
+        filters["type"] = args.type
+    payload = {
+        "query": args.query,
+        "user_id": args.user_id,
+        "limit": args.limit,
+        "rerank": args.rerank,
+        "filters": filters,  # no project/scope filter -> spans every project
+        "namespaces": [args.namespace],
+        "explain": False,
+    }
+    result = request_json("POST", "/search", payload)
+    if args.json:
+        print(json.dumps(result["data"], indent=2, sort_keys=True))
+        return
+    for item in result["data"]:
+        metadata = item.get("metadata") or {}
+        preview = " ".join((item.get("memory") or "").split())[:160]
+        print(f"{item.get('id')}  score={item.get('score'):.4f}  project={metadata.get('project')}  type={metadata.get('type')}")
+        print(textwrap.indent(preview, "  "))
+
+
 def yaml_scalar(value: Any) -> str:
     if value is None:
         return '""'
@@ -316,6 +341,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--explain", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=search)
+
+    p = sub.add_parser("recall", parents=[common])
+    p.add_argument("--query", required=True)
+    p.add_argument("--type")
+    p.add_argument("--limit", type=int, default=5)
+    p.add_argument("--rerank", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=recall)
 
     p = sub.add_parser("bootstrap", parents=[common])
     p.add_argument("--project", required=True)

@@ -58,6 +58,21 @@ def tool_schema() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "ygg_recall",
+            "description": "Search durable memory ACROSS ALL projects for prior solutions/lessons. Use before solving a non-trivial problem to find similar past work to reuse.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "type": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                    "json": {"type": "boolean", "default": False},
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "ygg_remember",
             "description": "Save reusable project memory. Refuses common secret patterns.",
             "inputSchema": {
@@ -135,6 +150,13 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str:
             "--limit",
             str(arguments.get("limit", 5)),
         ]
+        if arguments.get("type"):
+            args.extend(["--type", str(arguments["type"])])
+        if arguments.get("json"):
+            args.append("--json")
+        return run_ygg(args)
+    if name == "ygg_recall":
+        args = ["recall", "--query", str(arguments["query"]), "--limit", str(arguments.get("limit", 5))]
         if arguments.get("type"):
             args.extend(["--type", str(arguments["type"])])
         if arguments.get("json"):

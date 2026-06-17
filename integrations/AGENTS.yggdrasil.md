@@ -4,8 +4,9 @@ Before non-trivial work:
 
 1. Identify the active project id.
 2. Search durable memory before asking the user to repeat context.
-3. Use context-mode for large files, logs, and command output.
-4. Treat the repository as source of truth when memory conflicts with code.
+3. Recall across ALL projects (`ygg_recall` / `scripts/ygg.py recall`): if you solved something similar elsewhere, propose reusing it and name the project; if you improve on it, save a `follow_up` to backport it.
+4. Use context-mode for large files, logs, and command output.
+5. Treat the repository as source of truth when memory conflicts with code.
 
 After meaningful work:
 
@@ -25,5 +26,6 @@ Demo commands:
 scripts/ygg.py bootstrap --project PROJECT --query "task summary"
 scripts/ygg.py remember --project PROJECT --type debugging_lesson --json-file lesson.json
 scripts/ygg.py search --project PROJECT --query "symptom terms"
+scripts/ygg.py recall --query "prior solution across all projects"
 scripts/ygg.py materialize --id MEMORY_ID --project PROJECT
 ```

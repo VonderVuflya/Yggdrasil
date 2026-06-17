@@ -16,6 +16,7 @@ export YGG_MUNINN_URL="http://127.0.0.1:${PORT}"
 export YGG_MUNINN_TOKEN="${YGG_MUNINN_TOKEN:-yggdrasil-demo-token}"
 DB="$(mktemp -t ygg-gates-XXXX.sqlite)"
 
+lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null; sleep 0.3
 echo "==> starting own engine on :${PORT} (db=${DB})"
 python3 scripts/ygg_memory_server.py --reset --db "$DB" --port "$PORT" --token "$YGG_MUNINN_TOKEN" &
 SERVER_PID=$!

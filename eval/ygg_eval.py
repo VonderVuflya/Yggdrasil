@@ -107,6 +107,17 @@ CASES = [
 ]
 
 
+# Cross-project recall: query the FULL corpus (no project filter) and expect the
+# right memory to surface regardless of which project it lives in — the
+# "have I solved this anywhere before?" path.
+CROSS_PROJECT_CASES = [
+    ("horizontal overflow on a narrow phone screen", "W1"),
+    ("retry a declined recurring subscription charge", "P1"),
+    ("docker layer cache keeps invalidating on every build", "O3"),
+    ("dev environment pointing at the production database", "RU1"),
+]
+
+
 def seed(store: MemoryStore) -> dict[str, str]:
     label_to_id: dict[str, str] = {}
     for label, project, mtype, content in CORPUS:
@@ -141,8 +152,17 @@ def evaluate() -> dict:
             pc = per_class.setdefault(klass, {"n": 0, "r1": 0, "r3": 0, "rr": 0.0})
             pc["n"] += 1; pc["r1"] += hit1; pc["r3"] += hit3; pc["rr"] += rr
             details.append({"query": query, "expected": label, "class": klass, "rank": rank})
+        # cross-project recall@3 over the full corpus (no project filter)
+        cp_hits = 0
+        for query, label in CROSS_PROJECT_CASES:
+            res = store.search(query=query, user_id=USER, limit=3, filters={}, namespaces=[NS])
+            if label_to_id[label] in [r["id"] for r in res]:
+                cp_hits += 1
+        cross_project = round(cp_hits / len(CROSS_PROJECT_CASES), 4) if CROSS_PROJECT_CASES else None
+
         n = len(CASES)
         metrics = {
+            "cross_project_recall@3": cross_project,
             "n_cases": n,
             "recall@1": round(r1 / n, 4),
             "recall@3": round(r3 / n, 4),

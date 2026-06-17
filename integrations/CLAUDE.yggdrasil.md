@@ -11,7 +11,10 @@ Session start:
 During work:
 
 - Search memory when you see familiar symptoms.
-- Use context-mode for large outputs.
+- Before solving a non-trivial problem, recall ACROSS ALL projects (`ygg_recall`).
+  If you solved something similar elsewhere, propose reusing that approach and
+  name the project. If you improve on a past approach, record a follow-up
+  (type `follow_up`) to backport the improvement to the original project.
 - If memory contradicts repository reality, repository wins.
 
 Session close:
