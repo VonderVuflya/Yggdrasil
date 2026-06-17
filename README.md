@@ -48,8 +48,14 @@ for the engine contract.
 ## Install as an always-on service (macOS)
 
 ```bash
-scripts/install.sh install [--embed-model paraphrase-multilingual]
+scripts/install.sh install [--embed-model paraphrase-multilingual] [--bg-model qwen2.5:1.5b]
 ```
+
+Run with no flags in a terminal for a **guided wizard**: it detects your
+hardware, shows an embedding/background model menu with descriptions and
+per-model fit verdicts (e.g. "✓ fine on CPU" vs "⚠ slow on CPU-only"),
+recommends picks for your machine, and lets you toggle features. See the
+catalog anytime with `scripts/install.sh recommend`.
 
 Copies the engine to `~/.yggdrasil`, generates an auth token (not hardcoded),
 installs a launchd agent (auto-starts at login, restarts on crash), and

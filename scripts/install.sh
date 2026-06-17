@@ -18,10 +18,11 @@ PYTHON="$(command -v python3)"
 URL="http://127.0.0.1:${PORT}"
 
 cmd="${1:-install}"; shift || true
-EMBED_MODEL=""; SEED_DB=""
+EMBED_MODEL=""; BG_MODEL=""; SEED_DB=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --embed-model) EMBED_MODEL="${2:-}"; shift 2;;
+    --bg-model) BG_MODEL="${2:-}"; shift 2;;
     --seed-db) SEED_DB="${2:-}"; shift 2;;
     *) shift;;
   esac
@@ -39,6 +40,11 @@ _start() {
 
 case "$cmd" in
   install)
+    # Interactive, no model choice given -> run the guided wizard (which re-invokes
+    # install with the chosen flags). Skipped when piped/non-interactive.
+    if [ -t 0 ] && [ -z "$EMBED_MODEL" ] && [ -z "$BG_MODEL" ] && [ "${YGG_NONINTERACTIVE:-}" != "1" ]; then
+      exec "$PYTHON" "$SRC_SCRIPTS/ygg_setup.py" wizard
+    fi
     echo "==> installing into $YGG_HOME"
     mkdir -p "$YGG_HOME/scripts" "$YGG_HOME/data" "$YGG_HOME/logs"
     cp "$SRC_SCRIPTS"/*.py "$YGG_HOME/scripts/"
@@ -50,6 +56,19 @@ case "$cmd" in
       echo "    generated auth token -> $YGG_HOME/token"
     fi
     TOKEN="$(cat "$YGG_HOME/token")"
+
+    # Pull chosen models (best-effort) and record the config for the write-path.
+    for M in "$EMBED_MODEL" "$BG_MODEL"; do
+      if [ -n "$M" ] && command -v ollama >/dev/null 2>&1; then
+        echo "    pulling model: $M"
+        ollama pull "$M" >/dev/null 2>&1 || echo "    (pull failed for $M — run 'ollama pull $M' later)"
+      fi
+    done
+    "$PYTHON" - "$YGG_HOME/config.json" "$EMBED_MODEL" "$BG_MODEL" <<'PY'
+import json, sys
+path, embed, bg = sys.argv[1], sys.argv[2], sys.argv[3]
+json.dump({"embed_model": embed, "bg_model": bg}, open(path, "w"), indent=2)
+PY
 
     if [ -n "$SEED_DB" ] && [ -f "$SEED_DB" ]; then
       cp "$SEED_DB" "$YGG_HOME/data/memory.sqlite"
@@ -119,6 +138,7 @@ PLISTEOF
   restart) _stop; sleep 1; _start; echo "restarted";;
   logs) tail -n "${LINES:-40}" "$YGG_HOME/logs/engine.log";;
   token) cat "$YGG_HOME/token";;
+  recommend) "$PYTHON" "$SRC_SCRIPTS/ygg_setup.py" recommend;;
   hooks)
     HOOK_CMD="${PYTHON} ${YGG_HOME}/scripts/hooks/ygg_session_start.py"
     "$PYTHON" - "$HOME/.claude/settings.json" "$HOOK_CMD" <<'PY'
@@ -156,5 +176,5 @@ PY
     command -v codex  >/dev/null 2>&1 && codex mcp remove yggdrasil >/dev/null 2>&1 || true
     echo "uninstalled service + MCP registration. Data kept at $YGG_HOME (rm -rf to remove)."
     ;;
-  *) echo "usage: install.sh {install|status|start|stop|restart|logs|token|hooks|unhooks|uninstall}"; exit 2;;
+  *) echo "usage: install.sh {install|recommend|status|start|stop|restart|logs|token|hooks|unhooks|uninstall}"; exit 2;;
 esac
