@@ -83,6 +83,31 @@ def project_for(cwd: str) -> str:
     return Path(cwd).name
 
 
+def fetch_status_block(project: str) -> str:
+    """Surface open follow-ups and latest project status (recency-sorted) so
+    'what's the status of X in project N?' is answerable immediately."""
+    try:
+        url = f"{URL}/get_all?user_id={USER_ID}&limit=500&namespace={NAMESPACE}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token()}"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read()).get("data", [])
+    except Exception:
+        return ""
+    items = [r for r in data
+             if not r.get("archived")
+             and (r.get("metadata") or {}).get("project") == project
+             and (r.get("metadata") or {}).get("type") in ("follow_up", "project_status")]
+    items.sort(key=lambda r: r.get("created_at") or 0, reverse=True)
+    if not items:
+        return ""
+    lines = ["Open follow-ups & status:"]
+    for r in items[:5]:
+        mtype = (r.get("metadata") or {}).get("type")
+        preview = " ".join((r.get("memory") or "").split())[:180]
+        lines.append(f"- [{mtype}] {preview}")
+    return "\n".join(lines)
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -122,7 +147,8 @@ def main() -> int:
             lines.append(f"- [{meta.get('type', 'memory')}] {preview}")
         memory_block = "\n".join(lines)
 
-    context = identity_block + (("\n\n" + memory_block) if memory_block else "")
+    status_block = fetch_status_block(project)
+    context = "\n\n".join(b for b in (identity_block, status_block, memory_block) if b)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}))
     return 0
 

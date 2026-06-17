@@ -73,7 +73,9 @@ Optional auto-bootstrap: `scripts/install.sh hooks` adds a Claude Code
 **identity** block (a named, consistent assistant persona — the "soul") plus
 the current project's durable memory at session start — the retrieval half of
 the self-learning loop. Customize the identity in `~/.yggdrasil/identity.json`
-(`name`, `persona`, `user_facts`). Remove with `scripts/install.sh unhooks`. Writeback stays
+(`name`, `persona`, `user_facts`). The hook also surfaces open follow-ups and
+the latest project status, so "what's the status of X?" is answerable from the
+first message in a new session — on any machine, any agent. Remove with `scripts/install.sh unhooks`. Writeback stays
 explicit (the agent calls `ygg_remember`): auto-writing on every stop is
 intentionally avoided to prevent memory pollution.
 
