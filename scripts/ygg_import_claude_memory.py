@@ -48,11 +48,23 @@ def parse_frontmatter(text: str) -> dict[str, str]:
     block = text[3:end]
     name = re.search(r"^name:\s*(.+)$", block, re.M)
     mtype = re.search(r"^\s*type:\s*([A-Za-z_]+)", block, re.M)
+    desc = re.search(r"^description:\s*(.+)$", block, re.M)
     if name:
         out["name"] = name.group(1).strip()
     if mtype:
         out["type"] = mtype.group(1).strip()
+    if desc:
+        out["description"] = desc.group(1).strip().strip('"')
     return out
+
+
+def strip_frontmatter(text: str) -> str:
+    """Return the note body without its leading YAML frontmatter block."""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            return text[end + 4:].lstrip("\n")
+    return text
 
 
 def run_ygg(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -67,6 +79,7 @@ def main() -> int:
     parser.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "dogfood-user"))
     parser.add_argument("--materialize", action="store_true", help="Also write each memory to the Obsidian vault.")
     parser.add_argument("--output-dir", default="vault/04-learnings")
+    parser.add_argument("--confidence", type=float, default=0.7, help="Confidence recorded on imported memories.")
     args = parser.parse_args()
 
     source = Path(args.source_dir).expanduser()
@@ -88,8 +101,17 @@ def main() -> int:
         fm = parse_frontmatter(text)
         mem_type = TYPE_MAP.get(fm.get("type", ""), "debugging_lesson")
 
+        # Clean body: drop the source frontmatter, keep a readable title/summary
+        # header so the materialized note has no nested frontmatter.
+        title = fm.get("name") or path.stem
+        summary = fm.get("description", "")
+        body = strip_frontmatter(text)
+        content = (f"{title}\n{summary}\n\n{body}" if summary else f"{title}\n\n{body}").strip()
+
         remembered = run_ygg(
-            ["remember", "--project", args.project, "--type", mem_type, "--source", "claude-memory-import", "--file", str(path)],
+            ["remember", "--project", args.project, "--type", mem_type,
+             "--source", "claude-memory-import", "--confidence", str(args.confidence),
+             "--content", content],
             env,
         )
         if remembered.returncode != 0:

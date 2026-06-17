@@ -120,10 +120,6 @@ the matching environment-corruption lesson ranks first).
 - Default retrieval is lexical (FTS5/BM25 + importance/recency boost); semantic
   paraphrase matching needs dense search enabled (`YGG_EMBED_MODEL`). See the
   Retrieval quality table.
-- The importer stores each source note's full Markdown (including its original
-  frontmatter) as the memory body, so materialized notes have nested
-  frontmatter and an empty `confidence`. Cosmetic; strip-on-import is a polish
-  item.
 
 The engine has unit tests (`tests/test_ygg_memory_server.py`, run via
 `python3 -m unittest`) in addition to the integration gates.
