@@ -71,7 +71,7 @@ Nada de "déjame recordarte lo que hicimos ayer". Simplemente está ahí.
 > **Requisitos:** macOS, Python 3.10+. Opcional (para búsqueda semántica): [Ollama](https://ollama.com).
 
 ```bash
-git clone https://github.com/your-org/yggdrasil.git
+git clone https://github.com/VonderVuflya/yggdrasil.git
 cd yggdrasil
 scripts/install.sh install          # interactive wizard — detects your hardware,
                                     # recommends models, sets up the background service

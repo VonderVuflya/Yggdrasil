@@ -71,7 +71,7 @@ No "let me remind you what we did yesterday." It's just there.
 > **Requirements:** macOS, Python 3.10+. Optional (for semantic search): [Ollama](https://ollama.com).
 
 ```bash
-git clone https://github.com/your-org/yggdrasil.git
+git clone https://github.com/VonderVuflya/yggdrasil.git
 cd yggdrasil
 scripts/install.sh install          # interactive wizard — detects your hardware,
                                     # recommends models, sets up the background service

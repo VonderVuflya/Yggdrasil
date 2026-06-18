@@ -71,7 +71,7 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 > **Требования:** macOS, Python 3.10+. Опционально (для семантического поиска): [Ollama](https://ollama.com).
 
 ```bash
-git clone https://github.com/your-org/yggdrasil.git
+git clone https://github.com/VonderVuflya/yggdrasil.git
 cd yggdrasil
 scripts/install.sh install          # interactive wizard — detects your hardware,
                                     # recommends models, sets up the background service
