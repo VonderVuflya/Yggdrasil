@@ -231,6 +231,17 @@ Es una <b>alpha</b> honesta: el camino feliz y el bucle completo de gobernanza e
 
 ## 🆚 Yggdrasil frente a las alternativas
 
+La mayoría de las herramientas de "memoria/contexto de IA" se adueñan de una **capa diferente** del stack. La que nadie llenó — **memoria duradera, entre sesiones y entre agentes, de _tu propio_ trabajo** — es exactamente donde se sitúa Yggdrasil. No compite con ellas; es la memoria a la que todas se conectan.
+
+| Herramienta | La capa de la que se adueña | Solapamiento con Yggdrasil | Mejor juntas |
+| --- | --- | --- | --- |
+| **[Context7](https://github.com/upstash/context7)** | **documentación pública de bibliotecas** actualizada (solo lectura) | ninguno | Context7 da la API actual de una biblioteca; Yggdrasil recuerda *tus* decisiones y lecciones |
+| **[autoresearch](https://github.com/karpathy/autoresearch)** | **bucle de experimentos** autónomo (editar → entrenar → medir → conservar/revertir) | ninguno — es el *bucle*, no la memoria | Yggdrasil es la memoria a largo plazo de la que carece el bucle: recuerda lo que ya probaste, conserva cada resultado a través de noches y forks → [integración](../integrations/autoresearch/) |
+| **context-mode** y compresores en contexto | compactación de contexto **en sesión** / análisis en sandbox | ninguno — por sesión | Yggdrasil persiste las *conclusiones* a través de sesiones, herramientas y máquinas |
+| **memoria de LLM simple** | borrador por sesión | parcial | Yggdrasil es duradera, entre proyectos, gobernada y local |
+
+Matriz de capacidades:
+
 | | **Yggdrasil** | Context7 | Memoria de LLM simple |
 | --- | --- | --- | --- |
 | Conoce **tus** decisiones/lecciones | ✅ | ❌ | ⚠️ dentro de una sesión |
@@ -241,7 +252,7 @@ Es una <b>alpha</b> honesta: el camino feliz y el bucle completo de gobernanza e
 | Local y privado | ✅ | ☁️ alojado | depende |
 | Autoconsolidante | ✅ | ❌ | ❌ |
 
-**En resumen:** Context7 = la API correcta de la biblioteca de *otra persona*. Yggdrasil = la memoria de *tu propio* trabajo. Usa ambos.
+**En resumen:** estas herramientas obtienen documentación, ejecutan experimentos o comprimen una sesión. **Yggdrasil es la memoria duradera de _tu propio_ trabajo que a todas les faltaba — úsala *con* ellas y solo ganas.**
 
 ## 🗺️ Hoja de ruta
 
