@@ -1,6 +1,6 @@
 # Memory Review Queue
 
-`scripts/ygg_review_queue.py` scans Muninn memories and creates a human review queue.
+`scripts/ygg_review_queue.py` scans memories and creates a human review queue.
 
 It is intentionally conservative: it does not delete, update, or archive memories. It only reports candidates.
 
@@ -12,10 +12,10 @@ It is intentionally conservative: it does not delete, update, or archive memorie
 
 ## Run
 
-Start a backend first:
+Start the engine first:
 
 ```bash
-scripts/run_muninn_demo.sh fallback
+python3 scripts/ygg_memory_server.py --reset --db /tmp/ygg.sqlite
 ```
 
 Then:
@@ -27,7 +27,7 @@ scripts/ygg_review_queue.py --user-id demo-user
 Dense demo:
 
 ```bash
-scripts/run_muninn_demo.sh dense-small
+YGG_EMBED_MODEL=all-minilm python3 scripts/ygg_memory_server.py --reset --db /tmp/ygg.sqlite
 YGG_USER_ID=dense-user scripts/ygg_review_queue.py --user-id dense-user
 ```
 
