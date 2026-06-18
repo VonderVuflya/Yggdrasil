@@ -24,7 +24,7 @@ def tool_schema() -> list[dict[str, Any]]:
     return [
         {
             "name": "ygg_health",
-            "description": "Check Muninn backend health through the Yggdrasil facade.",
+            "description": "Check backend health through the Yggdrasil facade.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
@@ -43,7 +43,7 @@ def tool_schema() -> list[dict[str, Any]]:
         },
         {
             "name": "ygg_search",
-            "description": "Search Muninn memory with mandatory project scoping by default.",
+            "description": "Search memory with mandatory project scoping by default.",
             "inputSchema": {
                 "type": "object",
                 "required": ["project", "query"],
@@ -107,8 +107,8 @@ def tool_schema() -> list[dict[str, Any]]:
 
 def run_ygg(args: list[str]) -> str:
     env = os.environ.copy()
-    env.setdefault("YGG_MUNINN_URL", "http://127.0.0.1:42069")
-    env.setdefault("YGG_MUNINN_TOKEN", env.get("MUNINN_AUTH_TOKEN", "yggdrasil-demo-token"))
+    env.setdefault("YGG_ENGINE_URL", "http://127.0.0.1:42069")
+    env.setdefault("YGG_ENGINE_TOKEN", env.get("YGG_ENGINE_TOKEN", "yggdrasil-demo-token"))
     env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
     env.setdefault("YGG_USER_ID", "demo-user")
     completed = subprocess.run(

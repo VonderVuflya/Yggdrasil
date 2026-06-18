@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a Muninn memory record to an Obsidian-readable Markdown note."""
+"""Export a memory record to an Obsidian-readable Markdown note."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def memory_to_markdown(record: dict[str, Any]) -> str:
     memory_type = metadata.get("type") or record.get("memory_type") or "memory"
     scope = record.get("scope") or metadata.get("scope") or "project"
     confidence = metadata.get("confidence", "")
-    source = metadata.get("source") or "muninn"
+    source = metadata.get("source") or "yggdrasil"
     created_at = record.get("created_at") or metadata.get("created_at")
     if isinstance(created_at, (int, float)):
         created_at = dt.datetime.fromtimestamp(created_at, tz=dt.UTC).isoformat()

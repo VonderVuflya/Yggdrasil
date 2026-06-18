@@ -109,13 +109,13 @@ PLISTEOF
     # Register the MCP facade with Claude Code and Codex (best-effort).
     if command -v claude >/dev/null 2>&1; then
       claude mcp remove yggdrasil -s user >/dev/null 2>&1 || true
-      claude mcp add yggdrasil -s user -e "YGG_MUNINN_URL=${URL}" -e "YGG_MUNINN_TOKEN=${TOKEN}" \
+      claude mcp add yggdrasil -s user -e "YGG_ENGINE_URL=${URL}" -e "YGG_ENGINE_TOKEN=${TOKEN}" \
         -- "$PYTHON" "$YGG_HOME/scripts/ygg_mcp_server.py" >/dev/null 2>&1 \
         && echo "    registered MCP with Claude Code" || echo "    (claude mcp add failed; register manually)"
     fi
     if command -v codex >/dev/null 2>&1; then
       codex mcp remove yggdrasil >/dev/null 2>&1 || true
-      codex mcp add yggdrasil --env "YGG_MUNINN_URL=${URL}" --env "YGG_MUNINN_TOKEN=${TOKEN}" \
+      codex mcp add yggdrasil --env "YGG_ENGINE_URL=${URL}" --env "YGG_ENGINE_TOKEN=${TOKEN}" \
         -- "$PYTHON" "$YGG_HOME/scripts/ygg_mcp_server.py" >/dev/null 2>&1 \
         && echo "    registered MCP with Codex" || echo "    (codex mcp add failed; register manually)"
     fi
@@ -196,8 +196,8 @@ ${APPLY_ARG}
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>YGG_MUNINN_URL</key><string>${URL}</string>
-    <key>YGG_MUNINN_TOKEN</key><string>${TOKEN}</string>
+    <key>YGG_ENGINE_URL</key><string>${URL}</string>
+    <key>YGG_ENGINE_TOKEN</key><string>${TOKEN}</string>
     <key>YGG_USER_ID</key><string>${CUSER}</string>
     <key>YGG_NAMESPACE</key><string>${CNS}</string>
   </dict>

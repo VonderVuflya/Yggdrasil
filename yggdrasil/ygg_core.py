@@ -11,7 +11,7 @@ import urllib.request
 from typing import Any, Protocol, runtime_checkable
 
 
-DEFAULT_MUNINN_URL = "http://127.0.0.1:42069"
+DEFAULT_ENGINE_URL = "http://127.0.0.1:42069"
 DEFAULT_DEMO_TOKEN = "yggdrasil-demo-token"
 
 
@@ -27,21 +27,16 @@ class BackendCapabilityError(YggError):
 class YggConfig:
     """Runtime configuration for a Yggdrasil memory backend."""
 
-    url: str = DEFAULT_MUNINN_URL
+    url: str = DEFAULT_ENGINE_URL
     token: str = DEFAULT_DEMO_TOKEN
     namespace: str = "yggdrasil-demo"
     user_id: str = "global_user"
 
     @classmethod
     def from_env(cls) -> "YggConfig":
-        token = (
-            os.environ.get("YGG_MUNINN_TOKEN")
-            or os.environ.get("MUNINN_AUTH_TOKEN")
-            or os.environ.get("MUNINN_SERVER_AUTH_TOKEN")
-            or DEFAULT_DEMO_TOKEN
-        )
+        token = os.environ.get("YGG_ENGINE_TOKEN") or DEFAULT_DEMO_TOKEN
         return cls(
-            url=(os.environ.get("YGG_MUNINN_URL") or os.environ.get("MUNINN_SERVER_URL") or DEFAULT_MUNINN_URL).rstrip("/"),
+            url=(os.environ.get("YGG_ENGINE_URL") or DEFAULT_ENGINE_URL).rstrip("/"),
             token=token,
             namespace=os.environ.get("YGG_NAMESPACE") or "yggdrasil-demo",
             user_id=os.environ.get("YGG_USER_ID") or "global_user",
@@ -55,9 +50,10 @@ class MemoryBackend(Protocol):
     This is the entire surface area that the CLI, MCP facade, review queue and
     gates require. Any engine that satisfies it is a drop-in backend. The
     DEFAULT engine is Yggdrasil's own ``ygg_memory_server.py`` (stdlib SQLite +
-    FTS5, zero heavy dependencies). An external Muninn instance is an OPTIONAL
-    alternative: point ``YGG_MUNINN_URL`` at it. Both are reached through the
-    same REST client below, so nothing in the workflow layer is engine-specific.
+    FTS5, zero heavy dependencies). Any external engine that satisfies this
+    contract is a drop-in: point ``YGG_ENGINE_URL`` at it. Both are reached
+    through the same REST client below, so nothing in the workflow layer is
+    engine-specific.
     """
 
     def health(self) -> dict[str, Any]: ...
@@ -71,12 +67,11 @@ class MemoryBackend(Protocol):
 class RestMemoryBackend:
     """Engine-agnostic REST client for any backend speaking the memory contract.
 
-    Despite the historical name kept for backwards compatibility
-    (``MuninnBackend``), this talks to ANY compatible REST engine. By default
-    that is Yggdrasil's own ``ygg_memory_server.py``; setting ``YGG_MUNINN_URL``
-    lets you point it at an external Muninn instead. It reports missing backend
-    capabilities at the boundary (e.g. an engine without the metadata-update
-    contract raises :class:`BackendCapabilityError`).
+    This talks to ANY compatible REST engine. By default that is Yggdrasil's own
+    ``ygg_memory_server.py``; setting ``YGG_ENGINE_URL`` lets you point it at an
+    external engine instead. It reports missing backend capabilities at the
+    boundary (e.g. an engine without the metadata-update contract raises
+    :class:`BackendCapabilityError`).
     """
 
     def __init__(self, config: YggConfig | None = None, timeout: int = 30):
@@ -147,18 +142,13 @@ class RestMemoryBackend:
         except YggError as exc:
             if metadata_patch is not None or archived is not None:
                 raise BackendCapabilityError(
-                    "Muninn backend does not expose Yggdrasil's required metadata update contract. "
+                    "The configured backend does not expose Yggdrasil's required metadata update contract. "
                     "Required: PUT /update accepting metadata_patch and archived."
                 ) from exc
             raise
 
     def archive_memory(self, memory_id: str, metadata_patch: dict[str, Any]) -> dict[str, Any]:
         return self.update_memory(memory_id, metadata_patch=metadata_patch, archived=True)
-
-
-# Backwards-compatible alias: existing workflow scripts import ``MuninnBackend``.
-# The client is engine-agnostic; the name is historical.
-MuninnBackend = RestMemoryBackend
 
 
 def metadata_of(record: dict[str, Any]) -> dict[str, Any]:

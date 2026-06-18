@@ -12,19 +12,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PORT="${YGG_MEMORY_PORT:-42069}"
-export YGG_MUNINN_URL="http://127.0.0.1:${PORT}"
-export YGG_MUNINN_TOKEN="${YGG_MUNINN_TOKEN:-yggdrasil-demo-token}"
+export YGG_ENGINE_URL="http://127.0.0.1:${PORT}"
+export YGG_ENGINE_TOKEN="${YGG_ENGINE_TOKEN:-yggdrasil-demo-token}"
 DB="$(mktemp -t ygg-gates-XXXX.sqlite)"
 
 lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null; sleep 0.3
 echo "==> starting own engine on :${PORT} (db=${DB})"
-python3 yggdrasil/ygg_memory_server.py --reset --db "$DB" --port "$PORT" --token "$YGG_MUNINN_TOKEN" &
+python3 yggdrasil/ygg_memory_server.py --reset --db "$DB" --port "$PORT" --token "$YGG_ENGINE_TOKEN" &
 SERVER_PID=$!
 trap 'kill -9 "$SERVER_PID" 2>/dev/null; rm -f "$DB" "$DB"-wal "$DB"-shm' EXIT
 
 # wait for health
 for _ in $(seq 1 40); do
-  if python3 -c "import urllib.request;urllib.request.urlopen('${YGG_MUNINN_URL}/health',timeout=2)" 2>/dev/null; then break; fi
+  if python3 -c "import urllib.request;urllib.request.urlopen('${YGG_ENGINE_URL}/health',timeout=2)" 2>/dev/null; then break; fi
   sleep 0.25
 done
 

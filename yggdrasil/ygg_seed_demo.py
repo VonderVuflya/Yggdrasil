@@ -19,9 +19,9 @@ import json
 import os
 
 try:
-    from .ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+    from .ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+    from ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
 
 
 # test-a: a debugging lesson that must be findable by the gate's bootstrap query
@@ -76,7 +76,7 @@ def fixture(project: str, mem_type: str, content: str, namespace: str, user_id: 
             "source": "ygg-seed-demo",
             "confidence": 0.85,
             "content_hash": digest,
-            "muninn_skip_extraction": True,
+            "skip_extraction": True,
         },
     }
 
@@ -100,9 +100,9 @@ def main() -> int:
     parser.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "demo-user"))
     args = parser.parse_args()
 
-    backend = MuninnBackend(YggConfig(
-        url=os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069").rstrip("/"),
-        token=os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token",
+    backend = RestMemoryBackend(YggConfig(
+        url=os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069").rstrip("/"),
+        token=os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token",
         namespace=args.namespace,
         user_id=args.user_id,
     ))

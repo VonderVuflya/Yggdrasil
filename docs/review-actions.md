@@ -53,7 +53,7 @@ The apply flow:
 - only applies actions whose latest audit decision is `approve`;
 - only supports `archive`;
 - does not delete memories;
-- calls Muninn `/update` with `metadata_patch` and `archived=true`;
+- calls the engine `/update` with `metadata_patch` and `archived=true`;
 - appends each planned, applied, failed, missing, or already-archived attempt to `reports/review-action-audit.jsonl`.
 
 Archive metadata includes:

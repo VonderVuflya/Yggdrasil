@@ -88,8 +88,8 @@ def main() -> int:
         return 2
 
     env = os.environ.copy()
-    env.setdefault("YGG_MUNINN_URL", "http://127.0.0.1:42069")
-    env.setdefault("YGG_MUNINN_TOKEN", env.get("MUNINN_AUTH_TOKEN", "yggdrasil-demo-token"))
+    env.setdefault("YGG_ENGINE_URL", "http://127.0.0.1:42069")
+    env.setdefault("YGG_ENGINE_TOKEN", env.get("YGG_ENGINE_TOKEN", "yggdrasil-demo-token"))
     env["YGG_NAMESPACE"] = args.namespace
     env["YGG_USER_ID"] = args.user_id
 

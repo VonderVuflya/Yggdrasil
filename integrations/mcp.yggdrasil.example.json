@@ -3,8 +3,8 @@
     "yggdrasil-memory": {
       "command": "/Users/vuflya/Documents/Codex/2026-05-25/obsidian-codex-twitter-obsidian-hermes-agents/yggdrasil-demo/yggdrasil/ygg_mcp_server.py",
       "env": {
-        "YGG_MUNINN_URL": "http://127.0.0.1:42069",
-        "YGG_MUNINN_TOKEN": "yggdrasil-demo-token",
+        "YGG_ENGINE_URL": "http://127.0.0.1:42069",
+        "YGG_ENGINE_TOKEN": "yggdrasil-demo-token",
         "YGG_NAMESPACE": "yggdrasil-demo",
         "YGG_USER_ID": "demo-user"
       }

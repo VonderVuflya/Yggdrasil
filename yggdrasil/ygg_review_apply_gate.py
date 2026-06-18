@@ -11,17 +11,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .ygg_core import MuninnBackend
+    from .ygg_core import RestMemoryBackend
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import MuninnBackend
+    from ygg_core import RestMemoryBackend
 
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "reports"
 REVIEW_QUEUE = Path(__file__).resolve().parent / "ygg_review_queue.py"
 REVIEW_ACTIONS = Path(__file__).resolve().parent / "ygg_review_actions.py"
-URL = os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069")
-TOKEN = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token"
+URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
+TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
 
 
 def run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -41,7 +41,7 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def add_duplicate(backend: MuninnBackend, project: str, user_id: str, namespace: str, content: str) -> dict[str, Any]:
+def add_duplicate(backend: RestMemoryBackend, project: str, user_id: str, namespace: str, content: str) -> dict[str, Any]:
     payload = {
         "content": content,
         "user_id": user_id,
@@ -53,7 +53,7 @@ def add_duplicate(backend: MuninnBackend, project: str, user_id: str, namespace:
             "type": "debugging_lesson",
             "source": "review-apply-gate",
             "confidence": 0.75,
-            "muninn_skip_extraction": True,
+            "skip_extraction": True,
         },
     }
     return backend.add(payload)["data"]
@@ -94,8 +94,8 @@ def main() -> int:
         "- follow-up review queue ignores the archived duplicate\n"
     )
     env = os.environ.copy()
-    env.setdefault("YGG_MUNINN_URL", URL)
-    env.setdefault("YGG_MUNINN_TOKEN", TOKEN)
+    env.setdefault("YGG_ENGINE_URL", URL)
+    env.setdefault("YGG_ENGINE_TOKEN", TOKEN)
     env["YGG_USER_ID"] = user_id
     env["YGG_NAMESPACE"] = namespace
 
@@ -108,7 +108,7 @@ def main() -> int:
         "checks": {},
     }
     failures: list[str] = []
-    backend = MuninnBackend()
+    backend = RestMemoryBackend()
 
     try:
         results["health_before"] = backend.health()

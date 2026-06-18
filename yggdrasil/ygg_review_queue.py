@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .ygg_core import MuninnBackend, metadata_of, record_is_archived
+    from .ygg_core import RestMemoryBackend, metadata_of, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import MuninnBackend, metadata_of, record_is_archived
+    from ygg_core import RestMemoryBackend, metadata_of, record_is_archived
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,7 +183,7 @@ def main() -> int:
     parser.add_argument("--json-only", action="store_true")
     args = parser.parse_args()
 
-    backend = MuninnBackend()
+    backend = RestMemoryBackend()
     all_records = backend.get_all(user_id=args.user_id, limit=args.limit)
     data = [record for record in all_records if not record_is_archived(record)]
     issues = []

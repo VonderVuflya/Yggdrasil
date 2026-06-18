@@ -33,6 +33,7 @@ governance loop are covered by passing gates (`scripts/run_gates.sh`).
   others as a hosted/managed service).
 
 ### Notes
-- An external **Muninn** backend (Apache-2.0) is optional and not bundled.
+- The engine is swappable: any REST service satisfying the `MemoryBackend`
+  contract is a drop-in (point `YGG_ENGINE_URL` at it). Yggdrasil ships its own.
 - Auto-applying background consolidation is opt-in; the safe default only
   proposes (a small local model can mislabel distinct-but-similar lessons).

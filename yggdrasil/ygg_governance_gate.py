@@ -23,17 +23,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+    from .ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+    from ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
 
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEW_QUEUE = Path(__file__).resolve().parent / "ygg_review_queue.py"
 REVIEW_ACTIONS = Path(__file__).resolve().parent / "ygg_review_actions.py"
 REPORTS = ROOT / "reports"
-URL = os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069")
-TOKEN = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token"
+URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
+TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
 
 # >32 shared words so both near-duplicate memories share an identical 32-word
 # signature (-> near_duplicate) while differing in the tail (-> not exact dup).
@@ -60,7 +60,7 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def add(backend: MuninnBackend, project: str, mem_type: str, content: str, user_id: str, namespace: str) -> dict[str, Any]:
+def add(backend: RestMemoryBackend, project: str, mem_type: str, content: str, user_id: str, namespace: str) -> dict[str, Any]:
     payload = {
         "content": content,
         "user_id": user_id,
@@ -72,7 +72,7 @@ def add(backend: MuninnBackend, project: str, mem_type: str, content: str, user_
             "type": mem_type,
             "source": "governance-gate",
             "confidence": 0.7,
-            "muninn_skip_extraction": True,
+            "skip_extraction": True,
         },
     }
     return backend.add(payload)["data"]
@@ -94,12 +94,12 @@ def main() -> int:
     )
 
     env = os.environ.copy()
-    env.setdefault("YGG_MUNINN_URL", URL)
-    env.setdefault("YGG_MUNINN_TOKEN", TOKEN)
+    env.setdefault("YGG_ENGINE_URL", URL)
+    env.setdefault("YGG_ENGINE_TOKEN", TOKEN)
     env["YGG_USER_ID"] = user_id
     env["YGG_NAMESPACE"] = namespace
 
-    backend = MuninnBackend(YggConfig(url=URL.rstrip("/"), token=TOKEN, namespace=namespace, user_id=user_id))
+    backend = RestMemoryBackend(YggConfig(url=URL.rstrip("/"), token=TOKEN, namespace=namespace, user_id=user_id))
     results: dict[str, Any] = {"started_at": started, "backend_url": URL, "user_id": user_id, "namespace": namespace, "checks": {}}
     failures: list[str] = []
 

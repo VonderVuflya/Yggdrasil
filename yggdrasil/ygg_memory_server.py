@@ -3,7 +3,7 @@
 
 This is the DEFAULT Yggdrasil backend. It speaks the same small REST contract
 that the Yggdrasil workflow scripts already use, so the CLI (ygg.py), the MCP
-facade, and every quality gate work against it unchanged — point YGG_MUNINN_URL
+facade, and every quality gate work against it unchanged — point YGG_ENGINE_URL
 at this server instead of an external engine.
 
 Design notes:
@@ -49,8 +49,8 @@ DEFAULT_HOST = os.environ.get("YGG_MEMORY_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("YGG_MEMORY_PORT", "42069"))
 DEFAULT_TOKEN = (
     os.environ.get("YGG_MEMORY_TOKEN")
-    or os.environ.get("YGG_MUNINN_TOKEN")
-    or os.environ.get("MUNINN_AUTH_TOKEN")
+    or os.environ.get("YGG_ENGINE_TOKEN")
+    or os.environ.get("YGG_ENGINE_TOKEN")
     or "yggdrasil-demo-token"
 )
 DEFAULT_DB = os.environ.get("YGG_MEMORY_DB") or os.path.join(

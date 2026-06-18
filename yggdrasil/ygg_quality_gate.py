@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Yggdrasil MVP quality gate for the Muninn-backed demo."""
+"""Yggdrasil MVP quality gate for the engine-backed demo."""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 YGG = Path(__file__).resolve().parent / "ygg.py"
 YGG_MCP = Path(__file__).resolve().parent / "ygg_mcp_server.py"
 REPORTS = ROOT / "reports"
-DEFAULT_URL = os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069")
-DEFAULT_TOKEN = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token"
+DEFAULT_URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
+DEFAULT_TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
 
 
 def run(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.setdefault("YGG_MUNINN_URL", DEFAULT_URL)
-    env.setdefault("YGG_MUNINN_TOKEN", DEFAULT_TOKEN)
+    env.setdefault("YGG_ENGINE_URL", DEFAULT_URL)
+    env.setdefault("YGG_ENGINE_TOKEN", DEFAULT_TOKEN)
     env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
     env.setdefault("YGG_USER_ID", "demo-user")
     return subprocess.run(args, cwd=ROOT, env=env, text=True, capture_output=True, check=check)
@@ -61,8 +61,8 @@ def search(project: str, query: str) -> list[dict[str, Any]]:
 
 def mcp_smoke() -> dict[str, Any]:
     env = os.environ.copy()
-    env.setdefault("YGG_MUNINN_URL", DEFAULT_URL)
-    env.setdefault("YGG_MUNINN_TOKEN", DEFAULT_TOKEN)
+    env.setdefault("YGG_ENGINE_URL", DEFAULT_URL)
+    env.setdefault("YGG_ENGINE_TOKEN", DEFAULT_TOKEN)
     env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
     env.setdefault("YGG_USER_ID", "demo-user")
     messages = [

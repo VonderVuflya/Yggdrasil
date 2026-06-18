@@ -23,9 +23,9 @@ import urllib.request
 from pathlib import Path
 
 try:
-    from .ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+    from .ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+    from ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "reports"
@@ -99,7 +99,7 @@ def main() -> int:
         print(json.dumps({"status": "skipped", "reason": "no bg_model configured"}))
         return 0
 
-    backend = MuninnBackend(YggConfig.from_env())
+    backend = RestMemoryBackend(YggConfig.from_env())
     records = backend.get_all(user_id=args.user_id, limit=args.limit, namespace=args.namespace)
     active = {r["id"]: r for r in records if not record_is_archived(r)}
     archived_now: set[str] = set()

@@ -165,7 +165,7 @@ Yggdrasil 提供的是**记忆 + 工具**——*智能*来自你的 LLM。它只
 
 - **Claude Code**——在 `ygg install` 之后,工具就已注册(`/mcp` 会显示 `yggdrasil`),SessionStart 钩子会自动注入记忆。打开一个项目直接干活即可。
 - **Codex**——同样已注册;每个会话里批准一次 `ygg_*` 工具调用。
-- **任何 MCP 宿主**——将其指向 `ygg mcp`（stdio）,并配上 `YGG_MUNINN_URL` 与 `YGG_MUNINN_TOKEN`。
+- **任何 MCP 宿主**——将其指向 `ygg mcp`（stdio）,并配上 `YGG_ENGINE_URL` 与 `YGG_ENGINE_TOKEN`。
 
 给它设定个性——编辑 `~/.yggdrasil/identity.json`:
 
@@ -260,4 +260,3 @@ Context7 抓取的是最新的<i>公开库文档</i>(比如最新的 React/Next.
 
 **Elastic License 2.0** —— 参见 [LICENSE](./LICENSE)。你可以自由使用、修改、自托管和分发 Yggdrasil，但**不得**将其作为产品出售，也**不得**作为托管/managed 服务提供给他人。它是 source-available，并非 OSI 认可的开源协议。
 
-> 外部的 **Muninn** 后端(`github.com/wjohns989/Muninn`,Apache-2.0)是可选的,且**不随本项目打包**;请把 `YGG_MUNINN_URL` 指向你自己的实例。如果你要再分发它,请保留其 `NOTICE`/署名信息。

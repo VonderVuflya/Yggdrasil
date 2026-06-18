@@ -163,7 +163,7 @@ Yggdrasil, c'est **de la mémoire + des outils** — l'*intelligence*, c'est vot
 
 - **Claude Code** — après `ygg install`, les outils sont enregistrés (`/mcp` affiche `yggdrasil`) et le hook SessionStart injecte automatiquement la mémoire. Ouvrez simplement un projet et travaillez.
 - **Codex** — enregistré lui aussi ; approuvez l'appel d'outil `ygg_*` une fois par session.
-- **N'importe quel hôte MCP** — pointez-le vers `ygg mcp` (stdio) avec `YGG_MUNINN_URL` + `YGG_MUNINN_TOKEN`.
+- **N'importe quel hôte MCP** — pointez-le vers `ygg mcp` (stdio) avec `YGG_ENGINE_URL` + `YGG_ENGINE_TOKEN`.
 
 Donnez-lui une personnalité — modifiez `~/.yggdrasil/identity.json` :
 
@@ -258,4 +258,3 @@ Issues et PR bienvenues. Lancez `scripts/run_gates.sh` et `python3 -m unittest d
 
 **Elastic License 2.0** — voir [LICENSE](./LICENSE). Vous pouvez utiliser, modifier, auto-héberger et redistribuer Yggdrasil librement. Vous ne pouvez **pas** le vendre comme produit ni le proposer à des tiers comme service hébergé/géré. Il est source-available, pas open source au sens de l'OSI.
 
-> Un backend **Muninn** externe (`github.com/wjohns989/Muninn`, Apache-2.0) est optionnel et **non inclus** ; pointez `YGG_MUNINN_URL` vers votre propre instance. Préservez son `NOTICE`/son attribution si vous le redistribuez.

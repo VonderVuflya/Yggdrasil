@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .ygg_core import BackendCapabilityError, MuninnBackend, record_is_archived
+    from .ygg_core import BackendCapabilityError, RestMemoryBackend, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import BackendCapabilityError, MuninnBackend, record_is_archived
+    from ygg_core import BackendCapabilityError, RestMemoryBackend, record_is_archived
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,7 +69,7 @@ def load_source_user_id(bundle: dict[str, Any]) -> str | None:
     return load_json(source_path).get("user_id")
 
 
-def find_memory(backend: MuninnBackend, memory_id: str, user_id: str | None, limit: int) -> dict[str, Any] | None:
+def find_memory(backend: RestMemoryBackend, memory_id: str, user_id: str | None, limit: int) -> dict[str, Any] | None:
     records = backend.get_all(user_id=user_id, limit=limit)
     for record in records:
         if record.get("id") == memory_id:
@@ -224,7 +224,7 @@ def record(args: argparse.Namespace) -> int:
 
 
 def _archive_one(
-    backend: MuninnBackend,
+    backend: RestMemoryBackend,
     memory_id: str,
     metadata_patch: dict[str, Any],
     *,
@@ -264,7 +264,7 @@ def _archive_one(
 
 
 def _patch_one(
-    backend: MuninnBackend,
+    backend: RestMemoryBackend,
     memory_id: str,
     metadata_patch: dict[str, Any],
     *,
@@ -301,7 +301,7 @@ def apply_actions(args: argparse.Namespace) -> int:
     user_id = args.user_id or load_source_user_id(bundle)
     dry_run = not args.execute
     results = []
-    backend = MuninnBackend()
+    backend = RestMemoryBackend()
 
     for action in bundle.get("actions", []):
         decision = decisions.get(action["id"], {})
@@ -388,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("apply")
     p.add_argument("--actions-report", required=True)
-    p.add_argument("--user-id", help="Muninn user_id to scan; defaults to the source review report user_id.")
+    p.add_argument("--user-id", help="engine user_id to scan; defaults to the source review report user_id.")
     p.add_argument("--limit", type=int, default=1000)
     p.add_argument("--actor", default="user")
     mode = p.add_mutually_exclusive_group()

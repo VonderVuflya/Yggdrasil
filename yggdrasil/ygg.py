@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Yggdrasil MVP CLI: a thin, safe facade over Muninn REST."""
+"""Yggdrasil MVP CLI: a thin, safe facade over the engine.s REST API."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .ygg_core import MuninnBackend, YggConfig, YggError, record_is_archived
+    from .ygg_core import RestMemoryBackend, YggConfig, YggError, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import MuninnBackend, YggConfig, YggError, record_is_archived
+    from ygg_core import RestMemoryBackend, YggConfig, YggError, record_is_archived
 
 
 DEFAULT_URL = "http://127.0.0.1:42069"
@@ -41,14 +41,14 @@ def env_default(name: str, fallback: str) -> str:
     return value if value else fallback
 
 
-def muninn_url() -> str:
-    return env_default("YGG_MUNINN_URL", env_default("MUNINN_SERVER_URL", DEFAULT_URL)).rstrip("/")
+def engine_url() -> str:
+    return env_default("YGG_ENGINE_URL", env_default("YGG_ENGINE_URL", DEFAULT_URL)).rstrip("/")
 
 
-def muninn_token() -> str:
-    token = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or os.environ.get("MUNINN_SERVER_AUTH_TOKEN")
+def engine_token() -> str:
+    token = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN")
     if not token:
-        raise YggError("Missing token. Set YGG_MUNINN_TOKEN or MUNINN_AUTH_TOKEN.")
+        raise YggError("Missing token. Set YGG_ENGINE_TOKEN or YGG_ENGINE_TOKEN.")
     return token
 
 
@@ -60,19 +60,19 @@ def user_default() -> str:
     return env_default("YGG_USER_ID", DEFAULT_USER)
 
 
-_BACKEND: MuninnBackend | None = None
+_BACKEND: RestMemoryBackend | None = None
 
 
-def backend() -> MuninnBackend:
+def backend() -> RestMemoryBackend:
     """Shared engine-agnostic REST client (from ygg_core), built from the env.
 
     The CLI no longer hand-rolls REST transport — it goes through the same
     backend contract the gates and review tools use, so swapping the engine
-    (own server vs external Muninn) flows through one place.
+    (own server vs an external engine) flows through one place.
     """
     global _BACKEND
     if _BACKEND is None:
-        _BACKEND = MuninnBackend(YggConfig.from_env())
+        _BACKEND = RestMemoryBackend(YggConfig.from_env())
     return _BACKEND
 
 
@@ -81,7 +81,7 @@ def request_json(method: str, path: str, body: dict[str, Any] | None = None, que
 
 
 def health(_: argparse.Namespace) -> None:
-    url = muninn_url() + "/health"
+    url = engine_url() + "/health"
     with urllib.request.urlopen(url, timeout=10) as response:
         print(response.read().decode("utf-8"))
 
@@ -165,7 +165,7 @@ def remember(args: argparse.Namespace) -> None:
         "scope": args.scope,
         "type": memory_type,
         "source": args.source or file_metadata.get("source") or "ygg-cli",
-        "muninn_skip_extraction": not args.extract,
+        "skip_extraction": not args.extract,
     }
     if args.confidence is not None:
         metadata["confidence"] = args.confidence
@@ -273,7 +273,7 @@ def note_for_record(record: dict[str, Any]) -> str:
         "scope": metadata.get("scope") or record.get("scope") or "project",
         "confidence": metadata.get("confidence", ""),
         "created_at": created_at,
-        "source": metadata.get("source") or "muninn",
+        "source": metadata.get("source") or "yggdrasil",
     }
     yaml = "\n".join(f"{key}: {yaml_scalar(value)}" for key, value in frontmatter.items())
     title = f"{frontmatter['type']}: {frontmatter['project']}"
@@ -312,7 +312,7 @@ def bootstrap(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Yggdrasil MVP CLI over Muninn REST")
+    parser = argparse.ArgumentParser(description="Yggdrasil MVP CLI over the engine.s REST API")
     parser.set_defaults(func=None)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--namespace", default=namespace_default())
@@ -331,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--content")
     p.add_argument("--file")
     p.add_argument("--json-file")
-    p.add_argument("--extract", action="store_true", help="Allow Muninn extraction. Default skips extraction for deterministic agent writeback.")
+    p.add_argument("--extract", action="store_true", help="Allow server-side extraction. Default skips extraction for deterministic agent writeback.")
     p.set_defaults(func=remember)
 
     p = sub.add_parser("search", parents=[common])

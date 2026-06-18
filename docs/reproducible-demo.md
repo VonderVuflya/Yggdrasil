@@ -5,7 +5,7 @@ Yggdrasil is a thin workflow/governance layer over a memory engine:
 - **Yggdrasil's own engine** (`yggdrasil/ygg_memory_server.py`) is the default durable backend — stdlib only (SQLite + FTS5), zero heavy dependencies.
 - `yggdrasil/ygg.py` is the agent-facing facade; `yggdrasil/ygg_mcp_server.py` exposes it over MCP.
 - Obsidian Markdown is a materialized view.
-- An external Muninn instance is an **optional** alternative backend (see `docs/backend-boundary.md`).
+- An external engine is an **optional** alternative backend (see `docs/backend-boundary.md`).
 
 ## One command: start engine, seed, run every gate
 
@@ -91,16 +91,16 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 Reports for every gate are written to `reports/*.json`.
 
-## Optional: run against an external Muninn backend
+## Optional: run against an external engine backend
 
 Point Yggdrasil at any compatible REST engine instead of the bundled one:
 
 ```bash
-export YGG_MUNINN_URL=http://127.0.0.1:42069   # your Muninn instance
-export YGG_MUNINN_TOKEN=...                     # its auth token
+export YGG_ENGINE_URL=http://127.0.0.1:42069   # your engine instance
+export YGG_ENGINE_TOKEN=...                     # its auth token
 yggdrasil/ygg_quality_gate.py
 ```
 
 The client (`yggdrasil/ygg_core.py`) is engine-agnostic. See
-`docs/backend-boundary.md` for the contract a Muninn instance must satisfy
+`docs/backend-boundary.md` for the contract an engine must satisfy
 (notably `PUT /update` accepting `metadata_patch` and `archived`).

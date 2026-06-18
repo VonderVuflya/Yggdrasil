@@ -1,12 +1,12 @@
 # Yggdrasil MVP CLI
 
-`yggdrasil/ygg.py` is a thin facade over Muninn REST. It exists so agents do not need to remember Muninn's exact payload shape.
+`yggdrasil/ygg.py` is a thin facade over the engine.s REST API. It exists so agents do not need to remember the engine.s exact payload shape.
 
 ## Environment
 
 ```bash
-export YGG_MUNINN_URL="http://127.0.0.1:42069"
-export YGG_MUNINN_TOKEN="..."
+export YGG_ENGINE_URL="http://127.0.0.1:42069"
+export YGG_ENGINE_TOKEN="..."
 export YGG_NAMESPACE="yggdrasil-demo"
 export YGG_USER_ID="global_user"
 ```
@@ -53,6 +53,6 @@ yggdrasil/ygg.py materialize \
 
 - Project memories require `--project`.
 - `project` is written into `metadata.project`.
-- `scope` is always sent to Muninn and mirrored into metadata.
+- `scope` is always sent to the engine and mirrored into metadata.
 - The CLI refuses common secret patterns before writeback.
-- By default, writeback sets `muninn_skip_extraction=true` for deterministic agent-authored memories.
+- By default, writeback sets `skip_extraction=true` for deterministic agent-authored memories.
