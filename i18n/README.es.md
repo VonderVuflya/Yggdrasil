@@ -68,18 +68,20 @@ Nada de "déjame recordarte lo que hicimos ayer". Simplemente está ahí.
 
 ## 🚀 Inicio rápido
 
-> **Requisitos:** macOS, Python 3.10+. Opcional (para búsqueda semántica): [Ollama](https://ollama.com).
+> **Requisitos:** macOS, Python 3.10+ *(o deja que `uv`/`npx` obtengan Python por ti)*. Opcional (para búsqueda semántica): [Ollama](https://ollama.com).
 
-```bash
-# una línea, sin clonar — instala el comando `ygg` y ejecuta la configuración guiada (vía uv):
-uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install
-```
+Instala con lo que ya usas: **todos los canales instalan el mismo motor:**
 
-…o con [pipx](https://pipx.pypa.io):
+| Herramienta | Comando |
+| --- | --- |
+| **uv** _(recomendado)_ | `uvx --from yggdrasil-memory ygg install` |
+| **npm / npx** | `npx yggdrasil-memory install` |
+| **pipx** | `pipx install yggdrasil-memory && ygg install` |
+| **pip** | `pip install yggdrasil-memory && ygg install` |
+| **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **desde el código** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-```bash
-pipx install git+https://github.com/VonderVuflya/yggdrasil.git && ygg install
-```
+> Los canales de los registros se habilitan a medida que se publican (consulta [RELEASING.md](../RELEASING.md)); la línea **desde el código** ya funciona con este repositorio. `npx` y `uvx` pueden obtener Python por ti.
 
 Eso es todo. `ygg install`:
 1. 🔍 detecta tu CPU/RAM/GPU y **recomienda modelos que se ajusten a tu máquina** (o elige `none` para una configuración cero, solo léxica),

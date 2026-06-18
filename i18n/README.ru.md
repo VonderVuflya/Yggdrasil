@@ -68,18 +68,20 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 ## 🚀 Быстрый старт
 
-> **Требования:** macOS, Python 3.10+. Опционально (для семантического поиска): [Ollama](https://ollama.com).
+> **Требования:** macOS, Python 3.10+ *(или позвольте `uv`/`npx` скачать Python за вас)*. Опционально (для семантического поиска): [Ollama](https://ollama.com).
 
-```bash
-# одной строкой, без клонирования — ставит команду `ygg` и запускает мастер настройки (через uv):
-uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install
-```
+Установить можно тем, чем ты уже пользуешься — **любой канал ставит один и тот же движок:**
 
-…или через [pipx](https://pipx.pypa.io):
+| Инструмент | Команда |
+| --- | --- |
+| **uv** _(рекомендуется)_ | `uvx --from yggdrasil-memory ygg install` |
+| **npm / npx** | `npx yggdrasil-memory install` |
+| **pipx** | `pipx install yggdrasil-memory && ygg install` |
+| **pip** | `pip install yggdrasil-memory && ygg install` |
+| **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **из исходников** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-```bash
-pipx install git+https://github.com/VonderVuflya/yggdrasil.git && ygg install
-```
+> Каналы в реестрах становятся доступны по мере публикации (см. [RELEASING.md](../RELEASING.md)); строка **из исходников** работает с этим репозиторием уже сейчас. `npx` и `uvx` сами скачают Python при необходимости.
 
 Готово. `ygg install`:
 1. 🔍 определяет ваши CPU/RAM/GPU и **рекомендует модели, подходящие вашей машине** (или выберите `none` для нулевой конфигурации — только лексический режим),

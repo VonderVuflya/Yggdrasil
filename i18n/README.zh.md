@@ -68,18 +68,20 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 ## 🚀 快速开始
 
-> **环境要求:** macOS、Python 3.10+。可选(用于语义搜索):[Ollama](https://ollama.com)。
+> **环境要求:** macOS、Python 3.10+ *（或让 `uv`/`npx` 替你获取 Python）*。可选(用于语义搜索):[Ollama](https://ollama.com)。
 
-```bash
-# 一行命令，无需 clone —— 安装 `ygg` 命令并运行引导式安装（通过 uv）:
-uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install
-```
+用你已经在用的工具安装即可 —— **每个渠道安装的都是同一个引擎：**
 
-…或使用 [pipx](https://pipx.pypa.io):
+| 工具 | 命令 |
+| --- | --- |
+| **uv** _(推荐)_ | `uvx --from yggdrasil-memory ygg install` |
+| **npm / npx** | `npx yggdrasil-memory install` |
+| **pipx** | `pipx install yggdrasil-memory && ygg install` |
+| **pip** | `pip install yggdrasil-memory && ygg install` |
+| **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **从源码** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-```bash
-pipx install git+https://github.com/VonderVuflya/yggdrasil.git && ygg install
-```
+> 各注册表渠道会在发布后陆续可用（参见 [RELEASING.md](../RELEASING.md)）；**从源码** 这一行现在就能用于本仓库。`npx` 和 `uvx` 可以替你获取 Python。
 
 就这样。`ygg install` 会:
 1. 🔍 检测你的 CPU/RAM/GPU,并**推荐适合你机器的模型**（或选择 `none` 进行零配置、仅词法的安装）,
