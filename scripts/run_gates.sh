@@ -18,7 +18,7 @@ DB="$(mktemp -t ygg-gates-XXXX.sqlite)"
 
 lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null; sleep 0.3
 echo "==> starting own engine on :${PORT} (db=${DB})"
-python3 scripts/ygg_memory_server.py --reset --db "$DB" --port "$PORT" --token "$YGG_MUNINN_TOKEN" &
+python3 yggdrasil/ygg_memory_server.py --reset --db "$DB" --port "$PORT" --token "$YGG_MUNINN_TOKEN" &
 SERVER_PID=$!
 trap 'kill -9 "$SERVER_PID" 2>/dev/null; rm -f "$DB" "$DB"-wal "$DB"-shm' EXIT
 
@@ -29,7 +29,7 @@ for _ in $(seq 1 40); do
 done
 
 echo "==> seeding demo fixtures (test-a / test-b)"
-YGG_NAMESPACE=yggdrasil-demo YGG_USER_ID=demo-user python3 scripts/ygg_seed_demo.py >/dev/null || { echo "SEED FAILED"; exit 1; }
+YGG_NAMESPACE=yggdrasil-demo YGG_USER_ID=demo-user python3 yggdrasil/ygg_seed_demo.py >/dev/null || { echo "SEED FAILED"; exit 1; }
 
 declare -a GATES=(
   "ygg_quality_gate.py"
@@ -42,7 +42,7 @@ rc=0
 for gate in "${GATES[@]}"; do
   echo ""
   echo "==> ${gate}"
-  if python3 "scripts/${gate}" >/tmp/ygg-gate.out 2>&1; then
+  if python3 "yggdrasil/${gate}" >/tmp/ygg-gate.out 2>&1; then
     echo "    PASS"
   else
     echo "    FAIL"

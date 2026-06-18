@@ -6,7 +6,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "yggdrasil"))
 
 from ygg_core import record_is_archived  # noqa: E402
 from ygg_review_actions import build_actions  # noqa: E402

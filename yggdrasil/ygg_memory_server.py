@@ -39,7 +39,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from ygg_embeddings import OllamaEmbedder, cosine
+try:
+    from .ygg_embeddings import OllamaEmbedder, cosine
+except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
+    from ygg_embeddings import OllamaEmbedder, cosine
 
 
 DEFAULT_HOST = os.environ.get("YGG_MEMORY_HOST", "127.0.0.1")

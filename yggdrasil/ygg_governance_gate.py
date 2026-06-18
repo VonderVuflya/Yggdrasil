@@ -22,12 +22,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+try:
+    from .ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
+    from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REVIEW_QUEUE = ROOT / "scripts" / "ygg_review_queue.py"
-REVIEW_ACTIONS = ROOT / "scripts" / "ygg_review_actions.py"
+REVIEW_QUEUE = Path(__file__).resolve().parent / "ygg_review_queue.py"
+REVIEW_ACTIONS = Path(__file__).resolve().parent / "ygg_review_actions.py"
 REPORTS = ROOT / "reports"
 URL = os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069")
 TOKEN = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token"

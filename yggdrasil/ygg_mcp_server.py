@@ -17,7 +17,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-YGG = ROOT / "scripts" / "ygg.py"
+YGG = Path(__file__).resolve().parent / "ygg.py"
 
 
 def tool_schema() -> list[dict[str, Any]]:
@@ -112,7 +112,7 @@ def run_ygg(args: list[str]) -> str:
     env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
     env.setdefault("YGG_USER_ID", "demo-user")
     completed = subprocess.run(
-        [str(YGG), *args],
+        [sys.executable, str(YGG), *args],
         cwd=ROOT,
         env=env,
         text=True,

@@ -13,7 +13,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-YGG = ROOT / "scripts" / "ygg.py"
+YGG = Path(__file__).resolve().parent / "ygg.py"
 REPORTS = ROOT / "reports"
 URL = os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069")
 TOKEN = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token"

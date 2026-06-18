@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "yggdrasil-memory": {
-      "command": "/Users/vuflya/Documents/Codex/2026-05-25/obsidian-codex-twitter-obsidian-hermes-agents/yggdrasil-demo/scripts/ygg_mcp_server.py",
+      "command": "/Users/vuflya/Documents/Codex/2026-05-25/obsidian-codex-twitter-obsidian-hermes-agents/yggdrasil-demo/yggdrasil/ygg_mcp_server.py",
       "env": {
         "YGG_MUNINN_URL": "http://127.0.0.1:42069",
         "YGG_MUNINN_TOKEN": "yggdrasil-demo-token",

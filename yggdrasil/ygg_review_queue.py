@@ -13,7 +13,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ygg_core import MuninnBackend, metadata_of, record_is_archived
+try:
+    from .ygg_core import MuninnBackend, metadata_of, record_is_archived
+except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
+    from ygg_core import MuninnBackend, metadata_of, record_is_archived
 
 
 ROOT = Path(__file__).resolve().parents[1]

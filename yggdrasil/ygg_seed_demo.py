@@ -18,7 +18,10 @@ import hashlib
 import json
 import os
 
-from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+try:
+    from .ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
+except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
+    from ygg_core import MuninnBackend, YggConfig, metadata_of, record_is_archived
 
 
 # test-a: a debugging lesson that must be findable by the gate's bootstrap query

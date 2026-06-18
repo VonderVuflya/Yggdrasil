@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "yggdrasil"))
 
 from ygg_memory_server import MemoryStore, tokenize  # noqa: E402
 

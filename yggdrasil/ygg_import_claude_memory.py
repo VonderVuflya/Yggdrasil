@@ -26,7 +26,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-YGG = ROOT / "scripts" / "ygg.py"
+YGG = Path(__file__).resolve().parent / "ygg.py"
 
 # Claude auto-memory `metadata.type` -> Yggdrasil memory type.
 TYPE_MAP = {

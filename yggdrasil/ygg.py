@@ -17,7 +17,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from ygg_core import MuninnBackend, YggConfig, YggError, record_is_archived
+try:
+    from .ygg_core import MuninnBackend, YggConfig, YggError, record_is_archived
+except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
+    from ygg_core import MuninnBackend, YggConfig, YggError, record_is_archived
 
 
 DEFAULT_URL = "http://127.0.0.1:42069"

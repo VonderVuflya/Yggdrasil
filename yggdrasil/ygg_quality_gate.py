@@ -15,8 +15,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-YGG = ROOT / "scripts" / "ygg.py"
-YGG_MCP = ROOT / "scripts" / "ygg_mcp_server.py"
+YGG = Path(__file__).resolve().parent / "ygg.py"
+YGG_MCP = Path(__file__).resolve().parent / "ygg_mcp_server.py"
 REPORTS = ROOT / "reports"
 DEFAULT_URL = os.environ.get("YGG_MUNINN_URL", "http://127.0.0.1:42069")
 DEFAULT_TOKEN = os.environ.get("YGG_MUNINN_TOKEN") or os.environ.get("MUNINN_AUTH_TOKEN") or "yggdrasil-demo-token"
