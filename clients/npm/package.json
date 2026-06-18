@@ -1,0 +1,35 @@
+{
+  "name": "yggdrasil-memory",
+  "version": "0.1.0",
+  "description": "Installer/launcher for Yggdrasil — one shared, durable memory for your AI coding agents (MCP, local-first). Bootstraps the Python core via uv, so `npx yggdrasil-memory` works even without a preinstalled Python.",
+  "bin": {
+    "ygg": "bin/ygg.js"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "ai-agents",
+    "claude",
+    "codex",
+    "local-first",
+    "obsidian",
+    "yggdrasil"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/VonderVuflya/yggdrasil#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VonderVuflya/yggdrasil.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VonderVuflya/yggdrasil/issues"
+  }
+}

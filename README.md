@@ -68,18 +68,20 @@ No "let me remind you what we did yesterday." It's just there.
 
 ## 🚀 Quickstart
 
-> **Requirements:** macOS, Python 3.10+. Optional (for semantic search): [Ollama](https://ollama.com).
+> **Requirements:** macOS, Python 3.10+ *(or let `uv`/`npx` fetch Python for you)*. Optional (for semantic search): [Ollama](https://ollama.com).
 
-```bash
-# one line, no clone — installs the `ygg` command and runs guided setup (via uv):
-uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install
-```
+Install with whatever you already use — **every channel installs the same engine:**
 
-…or with [pipx](https://pipx.pypa.io):
+| Tool | Command |
+| --- | --- |
+| **uv** _(recommended)_ | `uvx --from yggdrasil-memory ygg install` |
+| **npm / npx** | `npx yggdrasil-memory install` |
+| **pipx** | `pipx install yggdrasil-memory && ygg install` |
+| **pip** | `pip install yggdrasil-memory && ygg install` |
+| **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **from source** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-```bash
-pipx install git+https://github.com/VonderVuflya/yggdrasil.git && ygg install
-```
+> Registry channels go live as each is published (see [RELEASING.md](./RELEASING.md)); the **from source** line works against this repo today. `npx` and `uvx` can fetch Python for you.
 
 That's it. `ygg install`:
 1. 🔍 detects your CPU/RAM/GPU and **recommends models that fit your machine** (or choose `none` for a zero-config, lexical-only setup),

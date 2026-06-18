@@ -33,6 +33,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# npm launcher bundles LICENSE only at publish time (copied from repo root)
+clients/npm/LICENSE
+clients/npm/*.tgz
+node_modules/
 .venv/
 venv/
 node_modules/
