@@ -211,6 +211,18 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(stored["access_count"], 0)
         self.assertIsNone(stored["last_accessed_at"])
 
+    def test_pinned_memory_ranks_above_equal_unpinned(self) -> None:
+        a = self.add_memory("alpha beta gamma delta")
+        b = self.add_memory("alpha epsilon zeta eta")
+        self.store.update(b["id"], data=None, metadata_patch={"pinned": True}, archived=None)
+
+        results = self.store.search(
+            query="alpha", user_id="user-1", limit=5, filters={}, namespaces=None
+        )
+        self.assertEqual({r["id"] for r in results}, {a["id"], b["id"]})
+        self.assertEqual(results[0]["id"], b["id"])
+        self.assertTrue(results[0]["pinned"])
+
     def test_tokenize_lowercases_and_drops_stopwords_and_one_char_tokens(self) -> None:
         self.assertEqual(tokenize("The A QUICK x fox"), ["quick", "fox"])
 

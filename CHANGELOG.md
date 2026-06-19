@@ -13,6 +13,12 @@ All notable changes to this project are documented here. Format loosely follows
   itself stays side-effect-free, so the eval harness stays deterministic —
   recall@k is unchanged on cold data (verified: lexical recall@1 = 0.625,
   keyword/identifier 1.0, matching baseline).
+- **Pinned memories** — `ygg pin <id>` / `ygg unpin <id>` mark a memory as
+  important; it gets a strong fixed ranking boost (`YGG_W_PIN`, default 0.5) so
+  it reliably surfaces. Stored in metadata (no schema change).
+- **Provenance in recall output** — `search` / `recall` now show each hit's
+  source, confidence, usage count and a 📌 for pinned memories, so you can see
+  where a memory came from and how trusted it is at a glance.
 
 ## [0.2.1] — 2026-06-19
 

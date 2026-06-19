@@ -57,7 +57,7 @@ SERVICE_CMDS = {
     "status", "start", "stop", "restart", "logs", "token",
     "uninstall", "hooks", "unhooks", "consolidate", "unconsolidate",
 }
-MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize"}
+MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize", "pin", "unpin"}
 
 
 def _port() -> int:

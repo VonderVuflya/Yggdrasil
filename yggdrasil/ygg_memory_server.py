@@ -72,6 +72,10 @@ FUSION_W_VEC = float(os.environ.get("YGG_FUSION_W_VEC", "1.0"))
 W_USAGE = float(os.environ.get("YGG_W_USAGE", "0.3"))
 USAGE_SCALE = float(os.environ.get("YGG_USAGE_SCALE", "5"))
 
+# Pinned memories ("always remember this") get a strong fixed boost so they
+# reliably surface near the top of relevant results.
+W_PIN = float(os.environ.get("YGG_W_PIN", "0.5"))
+
 # Small stopword set so natural-language paraphrase queries still match on the
 # content words rather than being diluted by glue words.
 STOPWORDS = {
@@ -190,6 +194,7 @@ class MemoryStore:
             "created_at": row["created_at"],
             "access_count": row["access_count"],
             "last_accessed_at": row["last_accessed_at"] if "last_accessed_at" in row.keys() else None,
+            "pinned": bool(metadata.get("pinned")),
             "archived": bool(row["archived"]),
             "metadata": metadata,
         }
@@ -374,7 +379,8 @@ class MemoryStore:
             recency = 0.5 * (0.5 ** (age_days / 30.0))  # 30-day half-life, max 0.5
             access = float(record.get("access_count") or 0.0)
             usage = W_USAGE * (access / (access + USAGE_SCALE)) if access > 0 else 0.0
-            record["lexical_score"] = round(relevance + 0.25 * importance + recency + usage, 6)
+            pin = W_PIN if (record.get("metadata") or {}).get("pinned") else 0.0
+            record["lexical_score"] = round(relevance + 0.25 * importance + recency + usage + pin, 6)
             records[record["id"]] = record
             lex_scored.append(record)
         lex_scored.sort(key=lambda r: r["lexical_score"], reverse=True)

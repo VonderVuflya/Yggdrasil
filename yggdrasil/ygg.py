@@ -211,10 +211,23 @@ def search(args: argparse.Namespace) -> None:
         print(json.dumps(result["data"], indent=2, sort_keys=True))
         return
     for item in result["data"]:
-        metadata = item.get("metadata") or {}
-        preview = " ".join((item.get("memory") or "").split())[:160]
-        print(f"{item.get('id')}  score={item.get('score'):.4f}  project={metadata.get('project')}  type={metadata.get('type')}")
-        print(textwrap.indent(preview, "  "))
+        _print_hit(item)
+
+
+def _print_hit(item: dict[str, Any]) -> None:
+    """Render one search/recall hit with provenance (source, confidence, usage, pin)."""
+    md = item.get("metadata") or {}
+    pin = " 📌" if (item.get("pinned") or md.get("pinned")) else ""
+    src = md.get("source") or item.get("source") or "?"
+    conf = item.get("confidence")
+    conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "?"
+    used = item.get("access_count") or 0
+    score = item.get("score")
+    score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
+    preview = " ".join((item.get("memory") or "").split())[:160]
+    print(f"{item.get('id')}  score={score_s}{pin}  project={md.get('project')}  type={md.get('type')}")
+    print(f"  src={src}  conf={conf_s}  used={used}x")
+    print(textwrap.indent(preview, "  "))
 
 
 def recall(args: argparse.Namespace) -> None:
@@ -236,10 +249,7 @@ def recall(args: argparse.Namespace) -> None:
         print(json.dumps(result["data"], indent=2, sort_keys=True))
         return
     for item in result["data"]:
-        metadata = item.get("metadata") or {}
-        preview = " ".join((item.get("memory") or "").split())[:160]
-        print(f"{item.get('id')}  score={item.get('score'):.4f}  project={metadata.get('project')}  type={metadata.get('type')}")
-        print(textwrap.indent(preview, "  "))
+        _print_hit(item)
 
 
 def yaml_scalar(value: Any) -> str:
@@ -311,6 +321,17 @@ def bootstrap(args: argparse.Namespace) -> None:
     search(args)
 
 
+def pin(args: argparse.Namespace) -> None:
+    """Pin a memory: mark it important so it reliably surfaces near the top."""
+    backend().update_memory(args.id, metadata_patch={"pinned": True})
+    print(f"pinned {args.id}")
+
+
+def unpin(args: argparse.Namespace) -> None:
+    backend().update_memory(args.id, metadata_patch={"pinned": False})
+    print(f"unpinned {args.id}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Yggdrasil MVP CLI over the engine.s REST API")
     parser.set_defaults(func=None)
@@ -366,6 +387,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=1000)
     p.add_argument("--output-dir", default="vault/04-learnings")
     p.set_defaults(func=materialize)
+
+    p = sub.add_parser("pin", parents=[common])
+    p.add_argument("--id", required=True)
+    p.set_defaults(func=pin)
+
+    p = sub.add_parser("unpin", parents=[common])
+    p.add_argument("--id", required=True)
+    p.set_defaults(func=unpin)
+
     return parser
 
 
