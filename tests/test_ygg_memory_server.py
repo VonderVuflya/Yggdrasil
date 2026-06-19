@@ -223,6 +223,21 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(results[0]["id"], b["id"])
         self.assertTrue(results[0]["pinned"])
 
+    def test_search_filters_by_tag(self) -> None:
+        self.add_memory("alpha tagged memory", metadata={"tags": ["urgent", "db"]})
+        self.add_memory("alpha untagged memory")
+
+        tagged = self.store.search(
+            query="alpha", user_id="user-1", limit=5, filters={"tag": "urgent"}, namespaces=None
+        )
+        self.assertEqual(len(tagged), 1)
+        self.assertIn("urgent", tagged[0]["metadata"].get("tags", []))
+
+        none = self.store.search(
+            query="alpha", user_id="user-1", limit=5, filters={"tag": "missing"}, namespaces=None
+        )
+        self.assertEqual(none, [])
+
     def test_tokenize_lowercases_and_drops_stopwords_and_one_char_tokens(self) -> None:
         self.assertEqual(tokenize("The A QUICK x fox"), ["quick", "fox"])
 

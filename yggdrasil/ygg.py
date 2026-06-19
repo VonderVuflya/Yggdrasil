@@ -205,6 +205,8 @@ def remember(args: argparse.Namespace) -> None:
         metadata["confidence"] = args.confidence
     elif "confidence" in file_metadata:
         metadata["confidence"] = file_metadata["confidence"]
+    if getattr(args, "tag", None):
+        metadata["tags"] = list(dict.fromkeys(args.tag))  # de-dup, preserve order
     digest = content_hash(content)
     metadata["content_hash"] = digest
     require_safe_memory(content, metadata)
@@ -232,6 +234,8 @@ def search(args: argparse.Namespace) -> None:
         filters["project"] = args.project
     if args.type:
         filters["type"] = args.type
+    if getattr(args, "tag", None):
+        filters["tag"] = args.tag
     payload = {
         "query": args.query,
         "user_id": args.user_id,
@@ -260,8 +264,10 @@ def _print_hit(item: dict[str, Any]) -> None:
     score = item.get("score")
     score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
     preview = " ".join((item.get("memory") or "").split())[:160]
+    tags = md.get("tags") or []
+    tag_s = f"  tags={','.join(map(str, tags))}" if tags else ""
     print(f"{item.get('id')}  score={score_s}{pin}  project={md.get('project')}  type={md.get('type')}")
-    print(f"  src={src}  conf={conf_s}  used={used}x")
+    print(f"  src={src}  conf={conf_s}  used={used}x{tag_s}")
     print(textwrap.indent(preview, "  "))
 
 
@@ -388,6 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--file")
     p.add_argument("--json-file")
     p.add_argument("--extract", action="store_true", help="Allow server-side extraction. Default skips extraction for deterministic agent writeback.")
+    p.add_argument("--tag", action="append", help="tag(s) to attach (repeatable)")
     p.set_defaults(func=remember)
 
     p = sub.add_parser("search", parents=[common])
@@ -399,6 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rerank", action="store_true")
     p.add_argument("--explain", action="store_true")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--tag", help="only memories with this tag")
     p.set_defaults(func=search)
 
     p = sub.add_parser("recall", parents=[common])

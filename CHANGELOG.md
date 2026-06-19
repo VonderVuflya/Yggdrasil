@@ -23,6 +23,9 @@ All notable changes to this project are documented here. Format loosely follows
   existing memories of the same project+type (to stderr, so agents see it
   through the MCP facade), so duplicates/contradictions show up in the moment;
   `ygg supersede --id <id>` non-destructively archives the outdated one.
+- **Tags** — `ygg remember --tag x --tag y` attaches tags; `ygg search --tag x`
+  filters to memories carrying that tag (SQLite `json_each`); tags show in the
+  recall output.
 
 ## [0.2.1] — 2026-06-19
 

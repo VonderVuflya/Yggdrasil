@@ -336,6 +336,12 @@ class MemoryStore:
         if filters.get("type"):
             where.append("m.type=?")
             params.append(filters["type"])
+        if filters.get("tag"):
+            where.append(
+                "m.metadata_json IS NOT NULL AND EXISTS "
+                "(SELECT 1 FROM json_each(m.metadata_json, '$.tags') WHERE json_each.value = ?)"
+            )
+            params.append(str(filters["tag"]))
         if namespaces:
             placeholders = ",".join("?" for _ in namespaces)
             where.append(f"m.namespace IN ({placeholders})")
