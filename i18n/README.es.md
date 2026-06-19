@@ -179,9 +179,9 @@ Dale una personalidad — edita `~/.yggdrasil/identity.json`:
 
 | Modo | recall@1 | paráfrasis | interlingüística (EN→RU) |
 | --- | --- | --- | --- |
-| léxica (predeterminada) | 0.63 | 0.00 | 0.00 |
-| densa · `all-minilm` (45 MB, EN) | 0.75 | 0.67 | 0.00 |
-| densa · `paraphrase-multilingual` (~560 MB) | **0.94** | 0.67 | **1.00** |
+| léxica (predeterminada) | 0.77 | 0.63 | 0.00 |
+| densa · `all-minilm` (45 MB, EN) | 0.83 | 0.88 | 0.00 |
+| densa · `paraphrase-multilingual` (~560 MB) | **0.94** | 0.88 | **0.80** |
 
 Las consultas de tipo `keyword` e `identifier` son 1.0 en todos los modos. Pruébalo tú mismo: `python3 eval/ygg_eval.py`.
 

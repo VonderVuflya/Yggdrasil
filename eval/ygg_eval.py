@@ -2,17 +2,24 @@
 """Retrieval-quality eval for the Yggdrasil engine (NOT a code unit test).
 
 Measures how good the memory ENGINE is at retrieving the right memory for a
-query — the behavioural metric we optimise. Seeds a fixed, realistic corpus
-into an in-process MemoryStore (temp DB, deterministic, no network) and scores
-a labelled set of queries with recall@1, recall@3 and MRR, broken down by
-query class:
+query — the behavioural metric we optimise. Seeds a fixed, realistic corpus into
+an in-process MemoryStore (temp DB, deterministic, no network) and scores a
+labelled set of queries with recall@1, recall@3 and MRR, broken down by query
+class:
 
   - keyword     : query shares words with the target (lexical should handle)
   - identifier  : target uses code identifiers (scrollWidth, useEffect) the
                   query spells as separate words (motivates identifier split)
   - paraphrase  : query shares MEANING but few/no words (motivates dense search)
+  - crosslingual: English query, Russian-content target (needs a multilingual model)
 
-Run:  python3 eval/ygg_eval.py
+Every case carries a **split**: "dev" (used to tune ranking params) or "holdout"
+(kept untouched for final, unbiased validation). Pass `splits={"dev"}` to
+`evaluate()` to score only the tuning set; the self-tuning loop optimises on dev
+and reports on holdout so it cannot overfit the metric.
+
+Run:  python3 eval/ygg_eval.py            # all splits
+      YGG_EMBED_MODEL=paraphrase-multilingual python3 eval/ygg_eval.py   # dense
 Exit code is 0 always; this is a measurement, not a pass/fail gate.
 """
 
@@ -44,12 +51,27 @@ CORPUS = [
      "so it only runs on the client."),
     ("W4", "webapp", "decision",
      "Largest Contentful Paint was slow; preload the hero image and set fetchPriority high to speed first paint."),
+    ("W5", "webapp", "debugging_lesson",
+     "getBoundingClientRect returns zero height inside a display none parent; measure after the element is visible."),
+    ("W6", "webapp", "debugging_lesson",
+     "querySelectorAll returns a static NodeList, not an array; convert with Array.from before calling map."),
+    ("W7", "webapp", "debugging_lesson",
+     "Stale closure inside setInterval captures the initial value; read from a ref or use the functional "
+     "updater form of setState instead."),
+    ("W8", "webapp", "decision",
+     "Initial bundle was huge; adopt code-splitting with React.lazy and Suspense to load routes on demand."),
+    ("W9", "webapp", "debugging_lesson",
+     "useMemo recomputes every render because the dependency object is recreated; memoize the dependency too."),
     ("P1", "payments", "debugging_lesson",
      "Recurring subscription charge fails with an insufficient-funds decline code; retry after three days per the dunning schedule."),
     ("P2", "payments", "debugging_lesson",
      "Payment webhook returns 401 because the signing secret was rotated; update the environment variable and redeploy."),
     ("P3", "payments", "decision",
      "Refund idempotency: always pass an idempotency key, otherwise a retried request issues duplicate refunds."),
+    ("P4", "payments", "debugging_lesson",
+     "Stripe webhook events arrive out of order; treat handlers as idempotent and reconcile by the event created timestamp."),
+    ("P5", "payments", "decision",
+     "Store monetary amounts in integer minor units (cents); floating point causes rounding drift when summing totals."),
     ("O1", "ops", "debugging_lesson",
      "GPU pod venv corruption after a docker base image upgrade breaks numpy and transformers; "
      "reinstall packages in the persistent venv using the fix script."),
@@ -60,8 +82,26 @@ CORPUS = [
      "copy the lockfile first, install, then copy the rest."),
     ("O4", "ops", "command",
      "To tail service logs use journalctl with the unit name and the follow flag; filter by priority for errors."),
-    ("W5", "webapp", "debugging_lesson",
-     "getBoundingClientRect returns zero height inside a display none parent; measure after the element is visible."),
+    ("O5", "ops", "debugging_lesson",
+     "Kubernetes pod was OOMKilled because the container memory limit sat below the JVM heap; set -Xmx under the limit."),
+    ("O6", "ops", "debugging_lesson",
+     "TLS handshake fails after certificate renewal because the intermediate chain was missing; bundle the full chain in the pem."),
+    ("O7", "ops", "command",
+     "Mirror a directory with rsync using --archive and --delete, and preview first with --dry-run."),
+    ("A1", "auth", "debugging_lesson",
+     "JWT validation fails intermittently due to clock skew between services; allow a small leeway when checking the exp claim."),
+    ("A2", "auth", "debugging_lesson",
+     "OAuth redirect loop because the registered callback URL had a trailing-slash mismatch; register the exact redirect URI."),
+    ("A3", "auth", "decision",
+     "Rotate refresh tokens on every use and revoke the whole family on reuse detection to limit token-theft blast radius."),
+    ("D1", "data", "debugging_lesson",
+     "Pandas merge silently drops rows because the join keys had mismatched dtypes; cast both columns to the same type first."),
+    ("D2", "data", "debugging_lesson",
+     "Slow query from a missing index on the foreign key; add a composite index matching the WHERE and ORDER BY clauses."),
+    ("M1", "mobile", "debugging_lesson",
+     "iOS keyboard covers the text input because the view does not inset for the safe area; observe the keyboard frame and pad the bottom."),
+    ("M2", "mobile", "debugging_lesson",
+     "Android release build crashes because ProGuard stripped a reflection-only class; add a keep rule for it."),
     # Russian-language memories (synthetic): real memory is often bilingual.
     ("RU1", "ru", "debugging_lesson",
      "Локальный сервер разработки случайно подключается к боевой базе данных вместо тестовой; "
@@ -72,38 +112,63 @@ CORPUS = [
     ("RU3", "ru", "debugging_lesson",
      "Сборка докер-образа каждый раз пересобирается с нуля, потому что зависимости копируются после исходников; "
      "сначала копируйте файл блокировки зависимостей."),
-    # English lexical distractor in the same project: shares keywords with the
-    # RU1 crosslingual query ("production database connection") but is a
-    # different topic — exposes RRF's lexical dominance over a better vector hit.
+    ("RU4", "ru", "debugging_lesson",
+     "Утечка памяти из-за незакрытых соединений с базой данных; используйте контекстный менеджер или пул с авто-возвратом соединений."),
+    ("RU5", "ru", "decision",
+     "Храните денежные суммы в целых копейках; числа с плавающей точкой дают ошибки округления при суммировании."),
+    # English lexical distractors: share keywords with a crosslingual query's
+    # words but are a different topic — expose lexical dominance over a better
+    # vector hit.
     ("RUD", "ru", "note",
      "Set the production build flag to minify and fingerprint assets before the release."),
+    ("DD1", "data", "note",
+     "Document the database backup retention policy and the restore runbook for the on-call rotation."),
 ]
 
-# --- labelled queries: (query, expected_label, project, klass) ------------
+# --- labelled queries: (query, expected_label, project, klass, split) -----
 # identifier/paraphrase queries are deliberately ISOLATED: their only signal is
 # the camelCase identifier (spelled as words) or the meaning — they share no
 # other content words with the target, so they expose the real weakness.
 CASES = [
     # keyword — lexical should already handle these
-    ("recurring charge insufficient funds retry", "P1", "payments", "keyword"),
-    ("gpu pod venv numpy broken after base image upgrade", "O1", "ops", "keyword"),
-    ("docker build cache miss copy lockfile first", "O3", "ops", "keyword"),
-    ("webhook 401 signing secret rotated redeploy", "P2", "payments", "keyword"),
-    ("preload hero image fetchpriority", "W4", "webapp", "keyword"),
-    ("postgres connection pool exhausted pgbouncer", "O2", "ops", "keyword"),
+    ("recurring charge insufficient funds retry", "P1", "payments", "keyword", "dev"),
+    ("gpu pod venv numpy broken after base image upgrade", "O1", "ops", "keyword", "dev"),
+    ("docker build cache miss copy lockfile first", "O3", "ops", "keyword", "holdout"),
+    ("webhook 401 signing secret rotated redeploy", "P2", "payments", "keyword", "dev"),
+    ("preload hero image fetchpriority", "W4", "webapp", "keyword", "holdout"),
+    ("postgres connection pool exhausted pgbouncer", "O2", "ops", "keyword", "dev"),
+    ("kubernetes pod oomkilled memory limit jvm heap", "O5", "ops", "keyword", "dev"),
+    ("tls handshake fails intermediate chain certificate", "O6", "ops", "keyword", "holdout"),
+    ("jwt validation clock skew leeway exp claim", "A1", "auth", "keyword", "dev"),
+    ("oauth redirect loop callback url trailing slash", "A2", "auth", "keyword", "holdout"),
+    ("pandas merge drops rows mismatched dtypes", "D1", "data", "keyword", "dev"),
+    ("stripe webhook events out of order idempotent", "P4", "payments", "keyword", "holdout"),
+    ("ios keyboard covers text input safe area", "M1", "mobile", "keyword", "dev"),
+    ("android release proguard stripped reflection keep rule", "M2", "mobile", "keyword", "holdout"),
+    ("missing index foreign key slow query composite", "D2", "data", "keyword", "dev"),
     # identifier — ONLY the camelCase identifier (as words) overlaps the target
-    ("scroll width and client width", "W1", "webapp", "identifier"),
-    ("use effect and use callback", "W2", "webapp", "identifier"),
-    ("get bounding client rect", "W5", "webapp", "identifier"),
-    ("fetch priority", "W4", "webapp", "identifier"),
+    ("scroll width and client width", "W1", "webapp", "identifier", "dev"),
+    ("use effect and use callback", "W2", "webapp", "identifier", "holdout"),
+    ("get bounding client rect", "W5", "webapp", "identifier", "dev"),
+    ("fetch priority", "W4", "webapp", "identifier", "holdout"),
+    ("query selector all", "W6", "webapp", "identifier", "dev"),
+    ("set interval and set state", "W7", "webapp", "identifier", "holdout"),
+    ("use memo", "W9", "webapp", "identifier", "dev"),
     # paraphrase — shares meaning, not words (the dense ceiling)
-    ("the page is too wide on small phones", "W1", "webapp", "paraphrase"),
-    ("client got billed two times on a repeated call", "P3", "payments", "paraphrase"),
-    ("too many open database links during traffic spikes", "O2", "ops", "paraphrase"),
+    ("the page is too wide on small phones", "W1", "webapp", "paraphrase", "dev"),
+    ("client got billed two times on a repeated call", "P3", "payments", "paraphrase", "holdout"),
+    ("too many open database links during traffic spikes", "O2", "ops", "paraphrase", "dev"),
+    ("a service keeps getting killed for using too much memory", "O5", "ops", "paraphrase", "holdout"),
+    ("logins are randomly rejected when server clocks disagree", "A1", "auth", "paraphrase", "dev"),
+    ("totals are slightly off because of decimal rounding", "P5", "payments", "paraphrase", "holdout"),
+    ("rows disappear after combining two datasets", "D1", "data", "paraphrase", "dev"),
+    ("the first download is huge so split it into pieces", "W8", "webapp", "paraphrase", "holdout"),
     # crosslingual — English query, Russian-content target (needs a multilingual model)
-    ("dev server accidentally connects to the production database", "RU1", "ru", "crosslingual"),
-    ("subscription payment was declined due to insufficient funds", "RU2", "ru", "crosslingual"),
-    ("docker image rebuilds from scratch every time", "RU3", "ru", "crosslingual"),
+    ("dev server accidentally connects to the production database", "RU1", "ru", "crosslingual", "dev"),
+    ("subscription payment was declined due to insufficient funds", "RU2", "ru", "crosslingual", "holdout"),
+    ("docker image rebuilds from scratch every time", "RU3", "ru", "crosslingual", "dev"),
+    ("memory leak from database connections that are never closed", "RU4", "ru", "crosslingual", "holdout"),
+    ("store money as whole cents to avoid rounding errors", "RU5", "ru", "crosslingual", "dev"),
 ]
 
 
@@ -115,6 +180,8 @@ CROSS_PROJECT_CASES = [
     ("retry a declined recurring subscription charge", "P1"),
     ("docker layer cache keeps invalidating on every build", "O3"),
     ("dev environment pointing at the production database", "RU1"),
+    ("container killed for exceeding its memory limit", "O5"),
+    ("token check fails when clocks are out of sync", "A1"),
 ]
 
 
@@ -129,17 +196,19 @@ def seed(store: MemoryStore) -> dict[str, str]:
     return label_to_id
 
 
-def evaluate() -> dict:
+def evaluate(splits: set[str] | None = None) -> dict:
     fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
     os.close(fd)
     try:
         store = MemoryStore(db_path, embedder=get_embedder())
         label_to_id = seed(store)
+        cases = [c for c in CASES if splits is None or c[4] in splits]
         per_class: dict[str, dict] = {}
+        per_split: dict[str, dict] = {}
         details = []
         rr_sum = 0.0
         r1 = r3 = 0
-        for query, label, project, klass in CASES:
+        for query, label, project, klass, split in cases:
             expected = label_to_id[label]
             results = store.search(query=query, user_id=USER, limit=5,
                                    filters={"project": project, "scope": "project"}, namespaces=[NS])
@@ -149,9 +218,10 @@ def evaluate() -> dict:
             hit3 = 1 if 0 < rank <= 3 else 0
             rr = 1.0 / rank if rank else 0.0
             r1 += hit1; r3 += hit3; rr_sum += rr
-            pc = per_class.setdefault(klass, {"n": 0, "r1": 0, "r3": 0, "rr": 0.0})
-            pc["n"] += 1; pc["r1"] += hit1; pc["r3"] += hit3; pc["rr"] += rr
-            details.append({"query": query, "expected": label, "class": klass, "rank": rank})
+            for bucket, key in ((per_class, klass), (per_split, split)):
+                pc = bucket.setdefault(key, {"n": 0, "r1": 0, "r3": 0, "rr": 0.0})
+                pc["n"] += 1; pc["r1"] += hit1; pc["r3"] += hit3; pc["rr"] += rr
+            details.append({"query": query, "expected": label, "class": klass, "split": split, "rank": rank})
         # cross-project recall@3 over the full corpus (no project filter)
         cp_hits = 0
         for query, label in CROSS_PROJECT_CASES:
@@ -160,21 +230,26 @@ def evaluate() -> dict:
                 cp_hits += 1
         cross_project = round(cp_hits / len(CROSS_PROJECT_CASES), 4) if CROSS_PROJECT_CASES else None
 
-        n = len(CASES)
-        metrics = {
-            "cross_project_recall@3": cross_project,
-            "n_cases": n,
-            "recall@1": round(r1 / n, 4),
-            "recall@3": round(r3 / n, 4),
-            "mrr": round(rr_sum / n, 4),
-            "by_class": {
+        n = len(cases)
+
+        def _summ(bucket: dict[str, dict]) -> dict:
+            return {
                 k: {"n": v["n"], "recall@1": round(v["r1"] / v["n"], 4),
                     "recall@3": round(v["r3"] / v["n"], 4), "mrr": round(v["rr"] / v["n"], 4)}
-                for k, v in sorted(per_class.items())
-            },
+                for k, v in sorted(bucket.items())
+            }
+
+        return {
+            "cross_project_recall@3": cross_project,
+            "n_cases": n,
+            "splits": sorted(splits) if splits else "all",
+            "recall@1": round(r1 / n, 4) if n else 0.0,
+            "recall@3": round(r3 / n, 4) if n else 0.0,
+            "mrr": round(rr_sum / n, 4) if n else 0.0,
+            "by_class": _summ(per_class),
+            "by_split": _summ(per_split),
             "misses": [d for d in details if d["rank"] != 1],
         }
-        return metrics
     finally:
         for suffix in ("", "-wal", "-shm"):
             try:

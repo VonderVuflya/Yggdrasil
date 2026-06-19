@@ -179,9 +179,9 @@ Donnez-lui une personnalité — modifiez `~/.yggdrasil/identity.json` :
 
 | Mode | recall@1 | paraphrase | translingue (EN→RU) |
 | --- | --- | --- | --- |
-| lexical (par défaut) | 0.63 | 0.00 | 0.00 |
-| dense · `all-minilm` (45 Mo, EN) | 0.75 | 0.67 | 0.00 |
-| dense · `paraphrase-multilingual` (~560 Mo) | **0.94** | 0.67 | **1.00** |
+| lexical (par défaut) | 0.77 | 0.63 | 0.00 |
+| dense · `all-minilm` (45 Mo, EN) | 0.83 | 0.88 | 0.00 |
+| dense · `paraphrase-multilingual` (~560 Mo) | **0.94** | 0.88 | **0.80** |
 
 Les requêtes `keyword` et `identifier` atteignent 1.0 dans tous les modes. Essayez par vous-même : `python3 eval/ygg_eval.py`.
 

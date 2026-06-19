@@ -182,11 +182,11 @@ Give it a personality — edit `~/.yggdrasil/identity.json`:
 
 | Mode | recall@1 | paraphrase | crosslingual (EN→RU) |
 | --- | --- | --- | --- |
-| lexical (default) | 0.63 | 0.00 | 0.00 |
-| dense · `all-minilm` (45 MB, EN) | 0.75 | 0.67 | 0.00 |
-| dense · `paraphrase-multilingual` (~560 MB) | **0.94** | 0.67 | **1.00** |
+| lexical (default) | 0.77 | 0.63 | 0.00 |
+| dense · `all-minilm` (45 MB, EN) | 0.83 | 0.88 | 0.00 |
+| dense · `paraphrase-multilingual` (~560 MB) | **0.94** | 0.88 | **0.80** |
 
-`keyword` and `identifier` queries are 1.0 in every mode. Run it yourself: `python3 eval/ygg_eval.py`.
+`keyword` and `identifier` queries are 1.0 in every mode; with the multilingual model **recall@3 = 1.0** (every target in the top 3). 35 labelled cases across a dev/holdout split. Run it yourself: `python3 eval/ygg_eval.py`.
 
 ## ❓ FAQ
 

@@ -181,9 +181,9 @@ Yggdrasil 提供的是**记忆 + 工具**——*智能*来自你的 LLM。它只
 
 | 模式 | recall@1 | 同义改写 | 跨语言(EN→RU) |
 | --- | --- | --- | --- |
-| lexical(默认) | 0.63 | 0.00 | 0.00 |
-| dense · `all-minilm`(45 MB,EN) | 0.75 | 0.67 | 0.00 |
-| dense · `paraphrase-multilingual`(约 560 MB) | **0.94** | 0.67 | **1.00** |
+| lexical(默认) | 0.77 | 0.63 | 0.00 |
+| dense · `all-minilm`(45 MB,EN) | 0.83 | 0.88 | 0.00 |
+| dense · `paraphrase-multilingual`(约 560 MB) | **0.94** | 0.88 | **0.80** |
 
 `keyword` 与 `identifier` 类查询在所有模式下都是 1.0。自己跑一下:`python3 eval/ygg_eval.py`。
 

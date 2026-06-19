@@ -26,6 +26,10 @@ All notable changes to this project are documented here. Format loosely follows
 - **Tags** — `ygg remember --tag x --tag y` attaches tags; `ygg search --tag x`
   filters to memories carrying that tag (SQLite `json_each`); tags show in the
   recall output.
+- **Eval harness expanded** to 35 labelled cases (keyword / identifier /
+  paraphrase / crosslingual) across a **dev/holdout split** — the foundation for
+  retrieval self-tuning. Measured on the new set: lexical recall@1 0.77, dense
+  `paraphrase-multilingual` recall@1 0.94 / recall@3 1.0.
 
 ## [0.2.1] — 2026-06-19
 
