@@ -196,11 +196,15 @@ def seed(store: MemoryStore) -> dict[str, str]:
     return label_to_id
 
 
-def evaluate(splits: set[str] | None = None) -> dict:
+_UNSET = object()
+
+
+def evaluate(splits: set[str] | None = None, embedder=_UNSET) -> dict:
     fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
     os.close(fd)
     try:
-        store = MemoryStore(db_path, embedder=get_embedder())
+        emb = get_embedder() if embedder is _UNSET else embedder
+        store = MemoryStore(db_path, embedder=emb)
         label_to_id = seed(store)
         cases = [c for c in CASES if splits is None or c[4] in splits]
         per_class: dict[str, dict] = {}

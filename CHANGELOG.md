@@ -30,6 +30,11 @@ All notable changes to this project are documented here. Format loosely follows
   paraphrase / crosslingual) across a **dev/holdout split** — the foundation for
   retrieval self-tuning. Measured on the new set: lexical recall@1 0.77, dense
   `paraphrase-multilingual` recall@1 0.94 / recall@3 1.0.
+- **Retrieval self-tuning** (`eval/ygg_tune.py`) — an autoresearch-style loop:
+  sweep fusion weights on the eval **dev** split, validate the winner on
+  **holdout**, then *propose* `YGG_FUSION_*` settings (never auto-applies;
+  propose-safe). Embeddings are cached across configs. First run confirmed the
+  current defaults are already optimal (dev recall@1 0.95) — no overfit.
 
 ## [0.2.1] — 2026-06-19
 
