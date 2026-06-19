@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.2.1] — 2026-06-19
+
+Maintenance release: republish so the PyPI package README carries the correctly
+cased `mcp-name: io.github.VonderVuflya/yggdrasil` marker required by the MCP
+Registry for PyPI ownership validation. No functional changes vs 0.2.0.
+
 ## [0.2.0] — 2026-06-19
 
 ### Changed
