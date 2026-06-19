@@ -114,7 +114,7 @@ Chacun de ces outils occupe une **couche différente** de la pile de contexte IA
 | **[autoresearch](https://github.com/karpathy/autoresearch)** | une **boucle d'expérimentation** autonome (éditer → exécuter → mesurer → garder/revenir en arrière). | la boucle se réveille à froid à chaque fois ; Yggdrasil lui donne une mémoire à long terme de ce qu'elle a déjà essayé → [intégration](../integrations/autoresearch/). |
 | **« mémoire » d'un simple LLM** | un brouillon par session, un seul outil à la fois. | Yggdrasil est durable, inter-projets, inter-agents, gouverné et local. |
 
-**En bref :** les autres outils récupèrent de la doc, lancent des expériences ou compriment une session. **Yggdrasil est la mémoire durable de _votre propre_ travail qui leur manquait à tous — utilisez-le à leurs côtés et vous n'y gagnez que.**
+**En bref :** les autres outils récupèrent de la doc, lancent des expériences ou compriment une session. **Yggdrasil est la mémoire durable de _votre propre_ travail qui leur manquait à tous — utilisez-le à leurs côtés : vous ne pouvez qu'y gagner.**
 
 ## 🧰 Commandes
 
