@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.vondervuflya/yggdrasil -->
 <h1 align="center">🌳 Yggdrasil</h1>
 
 <p align="center"><b>One shared, durable memory for all your AI coding agents.</b><br/>
