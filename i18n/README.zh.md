@@ -91,25 +91,11 @@ uvx --from yggdrasil-memory ygg install      # recommended
 
 Yggdrasil 提供的是**记忆 + 工具**——*智能*来自你的 LLM。它只负责确保在恰当的时刻，把恰当的记忆送到恰当的助手面前。
 
-```text
-   Claude Code / Codex / any MCP host
-                 │   (MCP tools: ygg_search, ygg_recall, ygg_remember … )
-                 ▼
-        ┌─────────────────────┐      SessionStart hook injects
-        │  Yggdrasil engine    │◀──── identity + project memory + open follow-ups
-        │  (always-on daemon)  │
-        │  SQLite + FTS5       │      background local model (optional)
-        │  + optional vectors  │────▶ dedupes / links / consolidates memory
-        └─────────────────────┘
-                 │ materializes to
-                 ▼
-          📓 Obsidian vault (human-readable, editable)
-```
-
-- **引擎**——一个仅依赖标准库、运行在 SQLite + FTS5 之上的 HTTP 服务器。零依赖，约 21 MB 内存。
-- **检索**——默认采用词法检索；加上一个本地嵌入模型即可实现语义检索与跨语言搜索。被频繁回忆和置顶的记忆排名更靠前。
-- **治理**——重复 / 冲突的记忆会被挑出来供你审查；所有改动都是非破坏性的（归档，绝不删除）。
-- **Obsidian**——每一条记忆同时也是一份可读、可编辑的 Markdown 笔记。
+- 🛎️ **常驻守护进程**——一个微小的本地服务（约 21 MB 内存），你的助手通过 MCP 工具（`ygg_search`、`ygg_recall`、`ygg_remember` …）访问它。
+- 🪝 **会话开始**——一个钩子自动注入身份、项目状态和待办的后续事项。
+- 📌 **排名**——被频繁回忆和置顶的记忆排名更靠前（存储与层级见下 ↓）。
+- 🧹 **治理**——重复 / 冲突的记忆会被挑出来供你审查；所有改动都是非破坏性的（归档，绝不删除）。
+- 📓 **Obsidian**——每一条记忆同时也是一份可读、可编辑的 Markdown 笔记。
 
 ## 🎛️ 记忆层级——默认零配置
 

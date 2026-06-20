@@ -83,25 +83,11 @@ uvx --from yggdrasil-memory ygg install      # recommended
 
 Yggdrasil es **memoria + herramientas** — la *inteligencia* es tu LLM. Solo se asegura de que la memoria correcta esté delante del agente correcto en el momento correcto.
 
-```text
-   Claude Code / Codex / any MCP host
-                 │   (MCP tools: ygg_search, ygg_recall, ygg_remember … )
-                 ▼
-        ┌─────────────────────┐      SessionStart hook injects
-        │  Yggdrasil engine    │◀──── identity + project memory + open follow-ups
-        │  (always-on daemon)  │
-        │  SQLite + FTS5       │      background local model (optional)
-        │  + optional vectors  │────▶ dedupes / links / consolidates memory
-        └─────────────────────┘
-                 │ materializes to
-                 ▼
-          📓 Obsidian vault (human-readable, editable)
-```
-
-- **Motor** — un servidor HTTP solo con stdlib sobre SQLite + FTS5. Cero dependencias, ~21 MB de RAM.
-- **Recuperación** — léxica por defecto; añade un modelo de embeddings local para búsqueda semántica + multilingüe. Las memorias recordadas con frecuencia y las fijadas tienen mayor prioridad.
-- **Gobernanza** — los duplicados / conflictos se exponen para su revisión; los cambios son no destructivos (archivar, nunca borrar).
-- **Obsidian** — cada memoria es también una nota en Markdown que puedes leer y editar.
+- 🛎️ **Daemon siempre activo** — un pequeño servicio local (~21 MB de RAM) al que tus agentes acceden mediante herramientas MCP (`ygg_search`, `ygg_recall`, `ygg_remember` …).
+- 🪝 **Inicio de sesión** — un hook inyecta automáticamente la identidad, el estado del proyecto y los seguimientos pendientes.
+- 📌 **Ranking** — las memorias recordadas con frecuencia y las fijadas tienen mayor prioridad (almacenamiento y niveles abajo ↓).
+- 🧹 **Gobernanza** — los duplicados / conflictos se exponen para su revisión; los cambios son no destructivos (archivar, nunca borrar).
+- 📓 **Obsidian** — cada memoria es también una nota en Markdown que puedes leer y editar.
 
 ## 🎛️ Niveles de memoria — sin configuración por defecto
 

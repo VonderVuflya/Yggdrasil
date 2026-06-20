@@ -83,25 +83,11 @@ Vous voulez juste essayer sans installer de service ? `uvx --from yggdrasil-memo
 
 Yggdrasil, c'est **mémoire + outils** — l'*intelligence*, c'est votre LLM. Il veille simplement à ce que la bonne mémoire soit devant le bon agent au bon moment.
 
-```text
-   Claude Code / Codex / any MCP host
-                 │   (MCP tools: ygg_search, ygg_recall, ygg_remember … )
-                 ▼
-        ┌─────────────────────┐      SessionStart hook injects
-        │  Yggdrasil engine    │◀──── identity + project memory + open follow-ups
-        │  (always-on daemon)  │
-        │  SQLite + FTS5       │      background local model (optional)
-        │  + optional vectors  │────▶ dedupes / links / consolidates memory
-        └─────────────────────┘
-                 │ materializes to
-                 ▼
-          📓 Obsidian vault (human-readable, editable)
-```
-
-- **Moteur** — un serveur HTTP reposant uniquement sur la stdlib, au-dessus de SQLite + FTS5. Zéro dépendance, ~21 Mo de RAM.
-- **Récupération** — lexicale par défaut ; ajoutez un modèle d'embedding local pour une recherche sémantique et translingue. Les mémoires fréquemment rappelées et épinglées sont mieux classées.
-- **Gouvernance** — doublons / conflits sont signalés pour relecture ; les modifications sont non destructives (archivage, jamais de suppression).
-- **Obsidian** — chaque mémoire est aussi une note Markdown que vous pouvez lire et éditer.
+- 🛎️ **Daemon toujours actif** — un petit service local (~21 Mo de RAM) que vos agents atteignent via les outils MCP (`ygg_search`, `ygg_recall`, `ygg_remember` …).
+- 🪝 **Démarrage de session** — un hook injecte automatiquement l'identité, l'état du projet et les suivis en cours.
+- 📌 **Classement** — les mémoires fréquemment rappelées et épinglées sont mieux classées (stockage et niveaux ci-dessous ↓).
+- 🧹 **Gouvernance** — doublons / conflits sont signalés pour relecture ; les modifications sont non destructives (archivage, jamais de suppression).
+- 📓 **Obsidian** — chaque mémoire est aussi une note Markdown que vous pouvez lire et éditer.
 
 ## 🎛️ Niveaux de mémoire — sans configuration par défaut
 

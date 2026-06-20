@@ -92,25 +92,11 @@ Just want to kick the tyres without installing a service? `uvx --from yggdrasil-
 
 Yggdrasil is **memory + tools** — the *intelligence* is your LLM. It just makes sure the right memory is in front of the right agent at the right moment.
 
-```text
-   Claude Code / Codex / any MCP host
-                 │   (MCP tools: ygg_search, ygg_recall, ygg_remember … )
-                 ▼
-        ┌─────────────────────┐      SessionStart hook injects
-        │  Yggdrasil engine    │◀──── identity + project memory + open follow-ups
-        │  (always-on daemon)  │
-        │  SQLite + FTS5       │      background local model (optional)
-        │  + optional vectors  │────▶ dedupes / links / consolidates memory
-        └─────────────────────┘
-                 │ materializes to
-                 ▼
-          📓 Obsidian vault (human-readable, editable)
-```
-
-- **Engine** — a stdlib-only HTTP server over SQLite + FTS5. Zero dependencies, ~21 MB RAM.
-- **Retrieval** — lexical by default; add a local embedding model for semantic + cross-lingual search. Frequently-recalled and pinned memories rank higher.
-- **Governance** — duplicates / conflicts are surfaced for review; changes are non-destructive (archive, never delete).
-- **Obsidian** — every memory is also a Markdown note you can read and edit.
+- 🛎️ **Always-on daemon** — a tiny local service (~21 MB RAM) your agents reach over MCP tools (`ygg_search`, `ygg_recall`, `ygg_remember` …).
+- 🪝 **Session start** — a hook auto-injects identity, project status, and open follow-ups.
+- 📌 **Ranking** — frequently-recalled and pinned memories surface higher (storage & tiers below ↓).
+- 🧹 **Governance** — duplicates / conflicts are surfaced for review; changes are non-destructive (archive, never delete).
+- 📓 **Obsidian** — every memory is also a Markdown note you can read and edit.
 
 ## 🎛️ Memory tiers — zero-config by default
 
