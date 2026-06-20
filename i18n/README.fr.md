@@ -109,8 +109,25 @@ Dès le départ, Yggdrasil fonctionne sur **SQLite + FTS5 sans aucune dépendanc
 
 Vous voulez qu'il fasse correspondre par **sens** et entre les langues ? Si votre matériel le permet, `ygg install` peut récupérer des **modèles locaux optionnels via [Ollama](https://ollama.com)** — il détecte votre CPU/RAM/GPU et recommande un modèle adapté (ou choisissez `none` pour rester sans configuration). Deux niveaux optionnels et indépendants :
 
-- **🔎 Embeddings** → recherche sémantique + translingue. Le modèle transforme le texte en vecteurs ; ils sont stockés dans la *même base SQLite* et fusionnés avec BM25. (par ex. `all-minilm` 45 Mo EN · `paraphrase-multilingual` ~560 Mo multilingue)
-- **🌱 Consolidation** → un petit LLM d'arrière-plan qui déduplique/fusionne la mémoire en arrière-plan, en mode proposition seule. (par ex. `qwen2.5:1.5b` ~1 Go)
+```text
+   your agents ─► ygg_search / ygg_recall / ygg_remember
+                             │
+                 ┌───────────▼───────────┐
+                 │   SQLite  (storage)    │
+                 │   ├─ FTS5 / BM25  ─────┼─►  keyword search   (always · zero-dep)
+                 │   └─ embedding column ─┼─►  vector search    (optional)
+                 └───────────▲───────────┘
+                             │ vectors in
+       optional · local:  Ollama models ── only COMPUTE vectors / run consolidation
+```
+
+| Niveau | Ce que vous ajoutez | Ce que vous gagnez |
+| --- | --- | --- |
+| **0 · par défaut** | rien — SQLite + FTS5 | recherche par mots-clés, zéro dépendance, instantanée — recall@1 ≈ **0.77** |
+| **1 · sémantique** | un modèle d'**embedding** via Ollama (par ex. `all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | recherche par **sens** + translingue — recall@1 ≈ **0.94** |
+| **2 · auto-apprenant** | un petit LLM de **consolidation** via Ollama (par ex. `qwen2.5:1.5b` ~1 GB) | dédup/fusion de la mémoire en arrière-plan (mode proposition seule) |
+
+Ollama se contente de **calculer** les vecteurs / d'exécuter le modèle d'arrière-plan — les vecteurs et toutes les mémoires vivent toujours dans la **même base SQLite**. Les niveaux sont indépendants et opt-in.
 
 <details>
 <summary>Menu complet des modèles (ou lancez <code>ygg recommend</code>)</summary>
@@ -134,7 +151,7 @@ Vous voulez qu'il fasse correspondre par **sens** et entre les langues ? Si votr
 
 </details>
 
-**Le bonus :** la récupération passe de mots-clés uniquement à **hybride (BM25 + dense, fusionnés)** — elle trouve les paraphrases et les correspondances translingues, pas seulement les mots exacts. recall@1 bondit de **0.77 → 0.94** (recall@3 → 1.0 avec le modèle multilingue). Le modèle d'arrière-plan garde la mémoire propre. Tout reste **100 % local — zéro jeton d'API, pas de cloud.**
+Tout reste **100 % local — zéro jeton d'API, pas de cloud.** L'installateur recommande des modèles adaptés à votre matériel (ou choisissez `none` pour rester sans configuration).
 
 > Le moteur lui-même est interchangeable — n'importe quel service respectant le contrat `MemoryBackend` se branche directement (pointez `YGG_ENGINE_URL` dessus) ; SQLite est le choix par défaut sans dépendance. Voir [docs/backend-boundary.md](../docs/backend-boundary.md).
 

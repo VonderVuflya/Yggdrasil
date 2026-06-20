@@ -117,8 +117,25 @@ Yggdrasil 提供的是**记忆 + 工具**——*智能*来自你的 LLM。它只
 
 想让它按**含义**并跨语言匹配？只要你的硬件允许，`ygg install` 就能拉取可选的**本地模型，通过 [Ollama](https://ollama.com)**——它会检测你的 CPU/RAM/GPU 并推荐一个合适的（或者选择 `none` 以保持零配置）。两个可选、相互独立的层级：
 
-- **🔎 嵌入（Embeddings）** → 语义 + 跨语言搜索。模型把文本转成向量；它们存储在*同一个 SQLite* 里，并与 BM25 融合。（例如 `all-minilm` 45 MB EN · `paraphrase-multilingual` ~560 MB 多语言）
-- **🌱 整合（Consolidation）** → 一个小型后台 LLM，在后台对记忆去重/合并，提议安全。（例如 `qwen2.5:1.5b` ~1 GB）
+```text
+   your agents ─► ygg_search / ygg_recall / ygg_remember
+                             │
+                 ┌───────────▼───────────┐
+                 │   SQLite  (storage)    │
+                 │   ├─ FTS5 / BM25  ─────┼─►  keyword search   (always · zero-dep)
+                 │   └─ embedding column ─┼─►  vector search    (optional)
+                 └───────────▲───────────┘
+                             │ vectors in
+       optional · local:  Ollama models ── only COMPUTE vectors / run consolidation
+```
+
+| 层级 | 你添加 | 你获得 |
+| --- | --- | --- |
+| **0 · 默认** | 无——SQLite + FTS5 | 关键词搜索，零依赖，即时——recall@1 ≈ **0.77** |
+| **1 · 语义** | 一个通过 Ollama 的**嵌入**模型（例如 `all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB） | 按**含义**搜索 + 跨语言——recall@1 ≈ **0.94** |
+| **2 · 自学习** | 一个通过 Ollama 的小型**整合** LLM（例如 `qwen2.5:1.5b` ~1 GB） | 后台对记忆去重/合并（提议安全） |
+
+Ollama 只**计算**向量／运行后台模型——向量和所有记忆仍然存放在**同一个 SQLite** 里。各层级相互独立、按需启用。
 
 <details>
 <summary>完整模型菜单（或运行 <code>ygg recommend</code>）</summary>
@@ -142,7 +159,7 @@ Yggdrasil 提供的是**记忆 + 工具**——*智能*来自你的 LLM。它只
 
 </details>
 
-**附加好处：** 检索从仅关键词升级为**混合（BM25 + 稠密向量，融合）**——它能找到同义改写和跨语言匹配，而不只是精确词。recall@1 从 **0.77 跃升至 0.94**（使用多语言模型时 recall@3 → 1.0）。后台模型让记忆保持整洁。一切都保持 **100% 本地——零 API token，无云端。**
+一切都保持 **100% 本地——零 API token，无云端。** 安装程序会推荐适合你硬件的模型（或者选择 `none` 以保持零配置）。
 
 > 引擎本身是可替换的——任何满足 `MemoryBackend` 契约的服务都能直接接入（把 `YGG_ENGINE_URL` 指向它）；SQLite 是零依赖的默认项。参见 [docs/backend-boundary.md](../docs/backend-boundary.md)。
 

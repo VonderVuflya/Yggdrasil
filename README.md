@@ -118,8 +118,25 @@ Out of the box, Yggdrasil runs on **SQLite + FTS5 with zero dependencies** — i
 
 Want it to match by **meaning** and across languages? If your hardware allows, `ygg install` can pull optional **local models via [Ollama](https://ollama.com)** — it detects your CPU/RAM/GPU and recommends a fit (or choose `none` to stay zero-config). Two optional, independent tiers:
 
-- **🔎 Embeddings** → semantic + cross-lingual search. The model turns text into vectors; they're stored in the *same SQLite* and fused with BM25. (e.g. `all-minilm` 45 MB EN · `paraphrase-multilingual` ~560 MB multilingual)
-- **🌱 Consolidation** → a small background LLM that dedupes/merges memory in the background, propose-safe. (e.g. `qwen2.5:1.5b` ~1 GB)
+```text
+   your agents ─► ygg_search / ygg_recall / ygg_remember
+                             │
+                 ┌───────────▼───────────┐
+                 │   SQLite  (storage)    │
+                 │   ├─ FTS5 / BM25  ─────┼─►  keyword search   (always · zero-dep)
+                 │   └─ embedding column ─┼─►  vector search    (optional)
+                 └───────────▲───────────┘
+                             │ vectors in
+       optional · local:  Ollama models ── only COMPUTE vectors / run consolidation
+```
+
+| Tier | You add | You gain |
+| --- | --- | --- |
+| **0 · default** | nothing — SQLite + FTS5 | keyword search, zero deps, instant — recall@1 ≈ **0.77** |
+| **1 · semantic** | an **embedding** model via Ollama (e.g. `all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | search by **meaning** + cross-lingual — recall@1 ≈ **0.94** |
+| **2 · self-learning** | a small **consolidation** LLM via Ollama (e.g. `qwen2.5:1.5b` ~1 GB) | background dedupe/merge of memory (propose-safe) |
+
+Ollama only **computes** the vectors / runs the background model — the vectors and all memories still live in the **same SQLite**. Tiers are independent and opt-in.
 
 <details>
 <summary>Full model menu (or run <code>ygg recommend</code>)</summary>
@@ -143,7 +160,7 @@ Want it to match by **meaning** and across languages? If your hardware allows, `
 
 </details>
 
-**The bonus:** retrieval goes from keyword-only to **hybrid (BM25 + dense, fused)** — it finds paraphrases and cross-lingual matches, not just exact words. recall@1 jumps **0.77 → 0.94** (recall@3 → 1.0 with the multilingual model). The background model keeps memory tidy. Everything stays **100% local — zero API tokens, no cloud.**
+Everything stays **100% local — zero API tokens, no cloud.** The installer recommends models that fit your hardware (or pick `none` to stay zero-config).
 
 > The engine itself is swappable — any service meeting the `MemoryBackend` contract is a drop-in (point `YGG_ENGINE_URL` at it); SQLite is the zero-dep default. See [docs/backend-boundary.md](./docs/backend-boundary.md).
 

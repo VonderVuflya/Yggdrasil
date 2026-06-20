@@ -109,8 +109,25 @@ De fábrica, Yggdrasil funciona con **SQLite + FTS5 sin dependencias** — búsq
 
 ¿Quieres que coincida por **significado** y entre idiomas? Si tu hardware lo permite, `ygg install` puede descargar **modelos locales opcionales vía [Ollama](https://ollama.com)** — detecta tu CPU/RAM/GPU y recomienda uno que encaje (o elige `none` para quedarte sin configuración). Dos niveles opcionales e independientes:
 
-- **🔎 Embeddings** → búsqueda semántica + translingüe. El modelo convierte el texto en vectores; se almacenan en la *misma SQLite* y se fusionan con BM25. (p. ej. `all-minilm` 45 MB EN · `paraphrase-multilingual` ~560 MB multilingüe)
-- **🌱 Consolidación** → un pequeño LLM en segundo plano que deduplica/fusiona la memoria en segundo plano, con seguridad de propuesta. (p. ej. `qwen2.5:1.5b` ~1 GB)
+```text
+   your agents ─► ygg_search / ygg_recall / ygg_remember
+                             │
+                 ┌───────────▼───────────┐
+                 │   SQLite  (storage)    │
+                 │   ├─ FTS5 / BM25  ─────┼─►  keyword search   (always · zero-dep)
+                 │   └─ embedding column ─┼─►  vector search    (optional)
+                 └───────────▲───────────┘
+                             │ vectors in
+       optional · local:  Ollama models ── only COMPUTE vectors / run consolidation
+```
+
+| Nivel | Lo que añades | Lo que ganas |
+| --- | --- | --- |
+| **0 · por defecto** | nada — SQLite + FTS5 | búsqueda por palabras clave, cero dependencias, instantánea — recall@1 ≈ **0.77** |
+| **1 · semántico** | un modelo de **embeddings** vía Ollama (p. ej. `all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | búsqueda por **significado** + translingüe — recall@1 ≈ **0.94** |
+| **2 · autoaprendizaje** | un pequeño LLM de **consolidación** vía Ollama (p. ej. `qwen2.5:1.5b` ~1 GB) | deduplicación/fusión de memoria en segundo plano (con seguridad de propuesta) |
+
+Ollama solo **calcula** los vectores / ejecuta el modelo en segundo plano — los vectores y todas las memorias siguen viviendo en la **misma SQLite**. Los niveles son independientes y opcionales.
 
 <details>
 <summary>Menú completo de modelos (o ejecuta <code>ygg recommend</code>)</summary>
@@ -134,7 +151,7 @@ De fábrica, Yggdrasil funciona con **SQLite + FTS5 sin dependencias** — búsq
 
 </details>
 
-**El extra:** la recuperación pasa de solo palabras clave a **híbrida (BM25 + densa, fusionadas)** — encuentra paráfrasis y coincidencias translingües, no solo palabras exactas. recall@1 salta de **0.77 → 0.94** (recall@3 → 1.0 con el modelo multilingüe). El modelo en segundo plano mantiene la memoria ordenada. Todo permanece **100 % local — cero tokens de API, sin nube.**
+Todo permanece **100 % local — cero tokens de API, sin nube.** El instalador recomienda modelos que encajen con tu hardware (o elige `none` para quedarte sin configuración).
 
 > El motor en sí es intercambiable — cualquier servicio que cumpla el contrato `MemoryBackend` es un reemplazo directo (apunta `YGG_ENGINE_URL` a él); SQLite es el valor por defecto sin dependencias. Consulta [docs/backend-boundary.md](../docs/backend-boundary.md).
 
