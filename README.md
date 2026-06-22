@@ -5,10 +5,12 @@
 Claude Code, Codex, and any MCP host remember your decisions, lessons, and project status — across sessions, tools, and projects.</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="Elastic License 2.0">
+  <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
+  <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="Elastic License 2.0"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/deps-zero%20(stdlib)-brightgreen" alt="zero deps">
-  <img src="https://img.shields.io/badge/MCP-Claude%20·%20Codex%20·%20any%20host-purple" alt="MCP">
+  <img src="https://img.shields.io/badge/MCP-Claude%20·%20Codex%20·%20Desktop-purple" alt="MCP">
   <img src="https://img.shields.io/badge/local--first-100%25%20private-success" alt="local-first">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -87,6 +89,15 @@ uvx --from yggdrasil-memory ygg install      # recommended
 `ygg install` is a one-time guided setup: it detects your hardware and **recommends a local model that fits** (or pick `none` for a zero-config, lexical-only setup), generates a private auth token, installs an **always-on background service**, and **registers the tools with Claude Code and Codex**. Check it any time with `ygg doctor`; upgrade with `ygg update`.
 
 Just want to kick the tyres without installing a service? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
+
+## 🔌 Connect your agents
+
+`ygg install` already registers the tools with **Claude Code** and **Codex**. Two more ways to plug in:
+
+- 🖥️ **Claude Desktop (app)** — install the MCP extension: grab `yggdrasil-<version>.mcpb` from the [latest release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) (or `packaging/mcpb/`), drag it onto **Settings → Extensions**, and paste your token (`ygg token`). The desktop app now shares the **same memory** as your CLI agents. → [setup guide](./packaging/mcpb/README.md)
+- 🧠 **Skill (any Claude)** — the [`yggdrasil-memory` skill](./skills/) teaches the agent the workflow: recall before work, remember after. Upload `yggdrasil-memory.zip` via **Settings → Skills → Create skill → Upload a skill**.
+
+> **MCP vs Skill:** MCP connects the *tools* (how to reach memory); the Skill teaches *when to use them*. Use both for the best behavior.
 
 ## 🧠 How it works
 

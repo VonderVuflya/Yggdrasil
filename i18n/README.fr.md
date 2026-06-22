@@ -4,10 +4,12 @@
 Claude Code, Codex et n'importe quel hôte MCP se souviennent de vos décisions, de vos leçons et de l'état de vos projets — d'une session, d'un outil et d'un projet à l'autre.</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="Elastic License 2.0">
+  <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
+  <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="Elastic License 2.0"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/deps-zero%20(stdlib)-brightgreen" alt="zero deps">
-  <img src="https://img.shields.io/badge/MCP-Claude%20·%20Codex%20·%20any%20host-purple" alt="MCP">
+  <img src="https://img.shields.io/badge/MCP-Claude%20·%20Codex%20·%20Desktop-purple" alt="MCP">
   <img src="https://img.shields.io/badge/local--first-100%25%20private-success" alt="local-first">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -78,6 +80,15 @@ uvx --from yggdrasil-memory ygg install      # recommended
 `ygg install` est une configuration guidée à effectuer une seule fois : il détecte votre matériel et **recommande un modèle local adapté** (ou choisissez `none` pour une configuration purement lexicale, sans réglage), génère un jeton d'authentification privé, installe un **service d'arrière-plan toujours actif** et **enregistre les outils auprès de Claude Code et Codex**. Vérifiez-le à tout moment avec `ygg doctor` ; mettez à jour avec `ygg update`.
 
 Vous voulez juste essayer sans installer de service ? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
+
+## 🔌 Connecter vos agents
+
+`ygg install` enregistre déjà les outils auprès de **Claude Code** et **Codex**. Deux autres façons de vous brancher :
+
+- 🖥️ **Claude Desktop (application)** — installez l'extension MCP : récupérez `yggdrasil-<version>.mcpb` depuis la [dernière release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) (ou dans `packaging/mcpb/`), glissez-le dans **Settings → Extensions**, puis collez votre jeton (`ygg token`). L'application de bureau partage désormais la **même mémoire** que vos agents CLI. → [guide d'installation](../packaging/mcpb/README.md)
+- 🧠 **Skill (n'importe quel Claude)** — la [skill `yggdrasil-memory`](../skills/) apprend à l'agent le flux de travail : se souvenir avant de travailler, mémoriser après. Téléversez `yggdrasil-memory.zip` via **Settings → Skills → Create skill → Upload a skill**.
+
+> **MCP vs Skill :** MCP connecte les *outils* (comment atteindre la mémoire) ; la Skill apprend *quand les utiliser*. Utilisez les deux pour un comportement optimal.
 
 ## 🧠 Comment ça marche
 

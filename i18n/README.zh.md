@@ -4,10 +4,12 @@
 让 Claude Code、Codex 以及任何 MCP 宿主，跨越会话、工具和项目，都记得你的决策、教训和项目进度。</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="Elastic License 2.0">
+  <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
+  <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/badge/License-Elastic%202.0-blue.svg" alt="Elastic License 2.0"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/deps-zero%20(stdlib)-brightgreen" alt="zero deps">
-  <img src="https://img.shields.io/badge/MCP-Claude%20·%20Codex%20·%20any%20host-purple" alt="MCP">
+  <img src="https://img.shields.io/badge/MCP-Claude%20·%20Codex%20·%20Desktop-purple" alt="MCP">
   <img src="https://img.shields.io/badge/local--first-100%25%20private-success" alt="local-first">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -86,6 +88,15 @@ uvx --from yggdrasil-memory ygg install      # recommended
 `ygg install` 是一次性的引导式设置：它会检测你的硬件并**推荐一个适合的本地模型**（或选择 `none` 进行零配置、仅词法的安装），生成一个私有的鉴权 token，安装一个**常驻的后台服务**，并**把工具注册到 Claude Code 和 Codex**。随时用 `ygg doctor` 检查它；用 `ygg update` 升级。
 
 只想先试试引擎，不安装服务？`uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`。
+
+## 🔌 连接你的智能体
+
+`ygg install` 已经把工具注册到 **Claude Code** 和 **Codex**。还有两种接入方式：
+
+- 🖥️ **Claude Desktop（桌面应用）** — 安装 MCP 扩展：从[最新发布](https://github.com/VonderVuflya/Yggdrasil/releases/latest)（或 `packaging/mcpb/`）获取 `yggdrasil-<版本>.mcpb`，把它拖到 **Settings → Extensions**，并粘贴你的令牌（`ygg token`）。桌面应用现在与你的 CLI 智能体共享**同一份记忆**。→ [安装指南](../packaging/mcpb/README.md)
+- 🧠 **Skill（任意 Claude）** — [`yggdrasil-memory` 技能](../skills/)教会智能体工作流程：工作前回忆，工作后记录。通过 **Settings → Skills → Create skill → Upload a skill** 上传 `yggdrasil-memory.zip`。
+
+> **MCP 与 Skill 的区别：** MCP 连接*工具*（如何访问记忆），Skill 教会*何时使用*它们。两者并用效果最佳。
 
 ## 🧠 工作原理
 
