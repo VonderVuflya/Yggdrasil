@@ -29,6 +29,8 @@ Claude Code, Codex, and any MCP host remember your decisions, lessons, and proje
   <a href="./i18n/README.zh.md"><img src="https://img.shields.io/badge/docs-简体中文-red" alt="简体中文"></a>
   <a href="./i18n/README.es.md"><img src="https://img.shields.io/badge/docs-Español-orange" alt="Español"></a>
   <a href="./i18n/README.fr.md"><img src="https://img.shields.io/badge/docs-Français-blue" alt="Français"></a>
+  <a href="./i18n/README.ja.md"><img src="https://img.shields.io/badge/docs-日本語-red" alt="日本語"></a>
+  <a href="./i18n/README.de.md"><img src="https://img.shields.io/badge/docs-Deutsch-yellow" alt="Deutsch"></a>
 </p>
 
 ---
