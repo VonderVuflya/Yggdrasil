@@ -41,7 +41,8 @@ Setup & service:
 
 Run components directly:
   ygg serve [...]        Run the memory engine (HTTP, SQLite + FTS5)
-  ygg mcp                Run the stdio MCP facade
+  ygg mcp                Run the stdio MCP facade (local CLI hosts)
+  ygg mcp-http           Run the Streamable-HTTP MCP facade (remote / cross-surface)
 
 Cold start (seed memory from your existing work):
   ygg stats              Overview of what's in memory (project × type × scope)
@@ -215,6 +216,11 @@ def main() -> int:
         service.ensure_running()  # lazy-spawn the engine on first MCP connection
         from . import ygg_mcp_server as m
         sys.argv = ["ygg mcp", *rest]
+        return m.main()
+    if cmd == "mcp-http":
+        from . import service
+        service.ensure_running()
+        from . import ygg_http_mcp as m
         return m.main()
     if cmd in ("setup", "wizard"):
         from . import ygg_setup as m
