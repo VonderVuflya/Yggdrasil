@@ -165,24 +165,27 @@ Everything stays **100% local — zero API tokens, no cloud.** The installer rec
 
 ## 🆚 Yggdrasil vs the rest
 
-context-mode and Context7 own **different layers** (your live context window; fresh library docs). **mem0** is the closest — it's also a memory layer, but a different *kind*: an SDK/platform for **AI apps to remember their users**. Yggdrasil is **install-and-go, local-first memory of _your own_ work for the coding agents you already use** — no code, no cloud, no API key.
+The closest tool is **claude-mem** — also durable memory for coding agents, but a *heavier, capture-everything* system: it auto-records every session and AI-compresses it (needs Node + Bun + a vector DB). **mem0** is a memory *SDK* for apps to remember their users. context-mode and Context7 own **different layers** (your live context window; fresh library docs). Yggdrasil is **install-and-go, zero-dependency, local-first memory of _your own_ work** — curated, not a firehose, stored as plain Markdown you can edit.
 
-| | **Yggdrasil** | [mem0](https://github.com/mem0ai/mem0) | [context-mode](https://github.com/mksglu/context-mode) | [Context7](https://github.com/upstash/context7) |
-| --- | --- | --- | --- | --- |
-| Durable memory of **your own work** (decisions, lessons, status) | ✅ | ✅ | ⚠️ in-session | ❌ |
-| **Drop-in** for your agents, *no code* (install + MCP) | ✅ | ⚠️ *SDK / integration* | ✅ | ✅ |
-| Works with **no LLM & no API key** (zero-dep, lexical default) | ✅ | ❌ *needs an LLM* | ✅ | ❌ |
-| **100% local & private** (no cloud by default) | ✅ | ⚠️ *cloud default* | ✅ | ☁️ hosted |
-| Cross-**project** recall ("solved this in project B") | ✅ | ⚠️ | ❌ | — |
-| One memory shared **across tools** (Claude Code · Codex · any MCP host) | ✅ | ⚠️ *per-app* | ✅ | ✅ |
-| Keeps the **live context window** lean | — | — | ✅ | ❌ |
-| Up-to-date public **library docs** | ❌ *(use Context7)* | ❌ | ❌ | ✅ |
+| | **Yggdrasil** | [claude-mem](https://github.com/thedotmack/claude-mem) | [mem0](https://github.com/mem0ai/mem0) | [context-mode](https://github.com/mksglu/context-mode) | [Context7](https://github.com/upstash/context7) |
+| --- | --- | --- | --- | --- | --- |
+| Durable memory of **your own work** (decisions, lessons, status) | ✅ | ✅ | ✅ | ⚠️ in-session | ❌ |
+| **Drop-in** for your agents, *no code* (install + MCP) | ✅ | ✅ | ⚠️ *SDK* | ✅ | ✅ |
+| **Zero dependencies** (stdlib + SQLite; no Node/Bun/vector DB) | ✅ | ❌ | ❌ | ❌ | — |
+| Works with **no LLM & no API key** (lexical default) | ✅ | ❌ *AI-compresses* | ❌ *needs an LLM* | ✅ | ❌ |
+| **Curated** & editable as plain Markdown (not capture-everything) | ✅ | ❌ *auto-captures all* | ⚠️ | ❌ | — |
+| **100% local & private** (no cloud by default) | ✅ | ⚠️ | ⚠️ *cloud default* | ✅ | ☁️ hosted |
+| Cross-**project** recall ("solved this in project B") | ✅ | ⚠️ | ⚠️ | ❌ | — |
+| One memory shared **across tools** (Claude Code · Codex · any MCP host) | ✅ | ✅ | ⚠️ *per-app* | ✅ | ✅ |
+| Up-to-date public **library docs** | ❌ *(use Context7)* | ❌ | ❌ | ❌ | ✅ |
+
+> **claude-mem vs Yggdrasil, in one line:** claude-mem auto-captures *everything* and AI-compresses it (Node + Bun + a vector DB; ~84k★, ships a crypto token). Yggdrasil keeps the *few things that matter* — curated, deduped, zero-dependency, stored as Markdown you own — no AI required, no token. Different philosophy; you can run both.
 
 > **mem0 vs Yggdrasil, in one line:** mem0 is a memory **SDK/platform for building apps that remember their users** (you write code; it usually calls an LLM, cloud by default). Yggdrasil is **drop-in, local-first memory of _your own_ work for the agents you already code with.** Different job — pick by who you are.
 
 > Also pairs well with [**autoresearch**](https://github.com/karpathy/autoresearch) — an autonomous experiment loop (not a memory tool); Yggdrasil gives it long-term memory of what it already tried → [integration](./integrations/autoresearch/).
 
-**TL;DR:** building an AI *product* that must remember its users at scale → **mem0**. You're the *developer* and want Claude Code / Codex to remember *your* decisions across projects, installed in one line, fully local → **Yggdrasil**.
+**TL;DR:** want automatic capture-everything across many IDEs and don't mind a heavier stack → **claude-mem**. Building an AI *product* that must remember its users at scale → **mem0**. Want a tiny, local, *curated* memory you own — zero deps, no AI required — for the coding agents you already use → **Yggdrasil**.
 
 ## 🧰 Commands
 

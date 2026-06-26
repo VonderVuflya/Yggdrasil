@@ -164,24 +164,27 @@ Ollama 只**计算**向量／运行后台模型——向量和所有记忆仍然
 
 ## 🆚 Yggdrasil 与同类方案对比
 
-context-mode 和 Context7 占据着**不同的层**（你的实时上下文窗口；最新的库文档）。**mem0** 是最接近的——它也是一个记忆层，但属于不同的*种类*：一个让 **AI 应用记住它们的用户**的 SDK/平台。Yggdrasil 是**装好即用、本地优先的、对_你自己_工作的记忆，服务于你已经在用的编程助手**——无需写代码，无需云端，无需 API key。
+最接近的工具是 **claude-mem**——它同样是为编程助手提供的持久记忆，但属于*更重、捕获一切*的系统：它会自动记录每一次会话并用 AI 压缩（需要 Node + Bun + 一个向量数据库）。**mem0** 是一个记忆 *SDK*，用于让应用记住它们的用户。context-mode 和 Context7 占据着**不同的层**（你的实时上下文窗口；最新的库文档）。Yggdrasil 是**装好即用、零依赖、本地优先的、对_你自己_工作的记忆**——经过精选，而非照单全收，以你可编辑的纯 Markdown 存储。
 
-| | **Yggdrasil** | [mem0](https://github.com/mem0ai/mem0) | [context-mode](https://github.com/mksglu/context-mode) | [Context7](https://github.com/upstash/context7) |
-| --- | --- | --- | --- | --- |
-| 对**你自己工作**的持久记忆（决策、教训、进度） | ✅ | ✅ | ⚠️ 会话内 | ❌ |
-| 为你的助手**即插即用**，*无需代码*（安装 + MCP） | ✅ | ⚠️ *SDK / 集成* | ✅ | ✅ |
-| **无需 LLM 与 API key** 也能用（零依赖，默认词法） | ✅ | ❌ *需要 LLM* | ✅ | ❌ |
-| **100% 本地且私密**（默认无云端） | ✅ | ⚠️ *默认云端* | ✅ | ☁️ 托管 |
-| 跨**项目**回忆（“这个在项目 B 里解决过”） | ✅ | ⚠️ | ❌ | — |
-| 一份记忆**跨工具**共享（Claude Code · Codex · 任何 MCP 宿主） | ✅ | ⚠️ *按应用* | ✅ | ✅ |
-| 让**实时上下文窗口**保持精简 | — | — | ✅ | ❌ |
-| 最新的公开**库文档** | ❌ *用 Context7* | ❌ | ❌ | ✅ |
+| | **Yggdrasil** | [claude-mem](https://github.com/thedotmack/claude-mem) | [mem0](https://github.com/mem0ai/mem0) | [context-mode](https://github.com/mksglu/context-mode) | [Context7](https://github.com/upstash/context7) |
+| --- | --- | --- | --- | --- | --- |
+| 对**你自己工作**的持久记忆（决策、教训、进度） | ✅ | ✅ | ✅ | ⚠️ 会话内 | ❌ |
+| 为你的助手**即插即用**，*无需代码*（安装 + MCP） | ✅ | ✅ | ⚠️ *SDK* | ✅ | ✅ |
+| **零依赖**（标准库 + SQLite；无需 Node/Bun/向量数据库） | ✅ | ❌ | ❌ | ❌ | — |
+| **无需 LLM 与 API key** 也能用（默认词法） | ✅ | ❌ *AI 压缩* | ❌ *需要 LLM* | ✅ | ❌ |
+| **精选**且可作为纯 Markdown 编辑（而非捕获一切） | ✅ | ❌ *自动捕获一切* | ⚠️ | ❌ | — |
+| **100% 本地且私密**（默认无云端） | ✅ | ⚠️ | ⚠️ *默认云端* | ✅ | ☁️ 托管 |
+| 跨**项目**回忆（“在项目 B 里解决过这个”） | ✅ | ⚠️ | ⚠️ | ❌ | — |
+| 一份记忆**跨工具**共享（Claude Code · Codex · 任何 MCP 宿主） | ✅ | ✅ | ⚠️ *按应用* | ✅ | ✅ |
+| 最新的公开**库文档** | ❌ *（用 Context7）* | ❌ | ❌ | ❌ | ✅ |
+
+> **claude-mem vs Yggdrasil，一句话讲清：** claude-mem 自动捕获*一切*并用 AI 压缩（Node + Bun + 一个向量数据库；~84k★，自带一个加密 token）。Yggdrasil 只保留*少数真正重要的东西*——经过精选、去重、零依赖，以你自己拥有的 Markdown 存储——无需 AI，无需 token。理念不同；两者可以并用。
 
 > **mem0 vs Yggdrasil，一句话讲清：** mem0 是一个记忆 **SDK/平台，用于构建能记住其用户的应用**（你来写代码；它通常会调用一个 LLM，默认云端）。Yggdrasil 是**装好即用、本地优先的、对_你自己_工作的记忆，服务于你已经在用来写代码的助手。** 职责不同——按你的身份来选。
 
 > 也能与 [**autoresearch**](https://github.com/karpathy/autoresearch) 很好地搭配——一个自主的实验循环（不是记忆工具）；Yggdrasil 为它提供它已经试过什么的长期记忆 → [集成](../integrations/autoresearch/)。
 
-**一句话总结：** 要构建一款必须在大规模下记住其用户的 AI *产品* → **mem0**。你是*开发者*，想让 Claude Code / Codex 跨项目记住*你的*决策，一行命令装好，完全本地 → **Yggdrasil**。
+**一句话总结：** 想要跨多个 IDE 自动捕获一切，又不介意更重的技术栈 → **claude-mem**。要构建一款必须在大规模下记住其用户的 AI *产品* → **mem0**。想要一份小巧、本地、*精选*、由你自己拥有的记忆——零依赖、无需 AI——服务于你已经在用的编程助手 → **Yggdrasil**。
 
 ## 🧰 命令
 

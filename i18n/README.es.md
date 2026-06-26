@@ -156,24 +156,27 @@ Todo permanece **100 % local — cero tokens de API, sin nube.** El instalador r
 
 ## 🆚 Yggdrasil frente al resto
 
-context-mode y Context7 poseen **capas diferentes** (tu ventana de contexto en vivo; documentación de bibliotecas actualizada). **mem0** es la más cercana — también es una capa de memoria, pero de un *tipo* distinto: un SDK/plataforma para que las **aplicaciones de IA recuerden a sus usuarios**. Yggdrasil es **memoria que instalas y ya está, local-first, de _tu propio_ trabajo para los agentes de programación que ya usas** — sin código, sin nube, sin clave de API.
+La herramienta más cercana es **claude-mem** — también memoria duradera para agentes de programación, pero un sistema *más pesado, que captura todo*: registra automáticamente cada sesión y la comprime con IA (necesita Node + Bun + una base de datos vectorial). **mem0** es un *SDK* de memoria para que las aplicaciones recuerden a sus usuarios. context-mode y Context7 poseen **capas diferentes** (tu ventana de contexto en vivo; documentación de bibliotecas actualizada). Yggdrasil es **memoria que instalas y ya está, sin dependencias, local-first, de _tu propio_ trabajo** — curada, no una manguera de datos, almacenada como Markdown plano que puedes editar.
 
-| | **Yggdrasil** | [mem0](https://github.com/mem0ai/mem0) | [context-mode](https://github.com/mksglu/context-mode) | [Context7](https://github.com/upstash/context7) |
-| --- | --- | --- | --- | --- |
-| Memoria duradera de **tu propio trabajo** (decisiones, lecciones, estado) | ✅ | ✅ | ⚠️ en sesión | ❌ |
-| **Listo para usar** con tus agentes, *sin código* (instalar + MCP) | ✅ | ⚠️ *SDK / integración* | ✅ | ✅ |
-| Funciona **sin LLM ni clave de API** (cero dependencias, léxico por defecto) | ✅ | ❌ *necesita un LLM* | ✅ | ❌ |
-| **100 % local y privado** (sin nube por defecto) | ✅ | ⚠️ *nube por defecto* | ✅ | ☁️ alojado |
-| Recuerdo entre **proyectos** ("esto lo resolví en el proyecto B") | ✅ | ⚠️ | ❌ | — |
-| Una memoria compartida **entre herramientas** (Claude Code · Codex · cualquier host MCP) | ✅ | ⚠️ *por app* | ✅ | ✅ |
-| Mantiene ligera la **ventana de contexto en vivo** | — | — | ✅ | ❌ |
-| **Documentación pública de bibliotecas** actualizada | ❌ *usa Context7* | ❌ | ❌ | ✅ |
+| | **Yggdrasil** | [claude-mem](https://github.com/thedotmack/claude-mem) | [mem0](https://github.com/mem0ai/mem0) | [context-mode](https://github.com/mksglu/context-mode) | [Context7](https://github.com/upstash/context7) |
+| --- | --- | --- | --- | --- | --- |
+| Memoria duradera de **tu propio trabajo** (decisiones, lecciones, estado) | ✅ | ✅ | ✅ | ⚠️ en sesión | ❌ |
+| **Listo para usar** con tus agentes, *sin código* (instalar + MCP) | ✅ | ✅ | ⚠️ *SDK* | ✅ | ✅ |
+| **Cero dependencias** (stdlib + SQLite; sin Node/Bun/base de datos vectorial) | ✅ | ❌ | ❌ | ❌ | — |
+| Funciona **sin LLM ni clave de API** (léxico por defecto) | ✅ | ❌ *comprime con IA* | ❌ *necesita un LLM* | ✅ | ❌ |
+| **Curada** y editable como Markdown plano (no captura todo) | ✅ | ❌ *captura todo automáticamente* | ⚠️ | ❌ | — |
+| **100 % local y privado** (sin nube por defecto) | ✅ | ⚠️ | ⚠️ *nube por defecto* | ✅ | ☁️ alojado |
+| Recuerdo entre **proyectos** ("esto lo resolví en el proyecto B") | ✅ | ⚠️ | ⚠️ | ❌ | — |
+| Una memoria compartida **entre herramientas** (Claude Code · Codex · cualquier host MCP) | ✅ | ✅ | ⚠️ *por app* | ✅ | ✅ |
+| **Documentación pública de bibliotecas** actualizada | ❌ *(usa Context7)* | ❌ | ❌ | ❌ | ✅ |
+
+> **claude-mem frente a Yggdrasil, en una línea:** claude-mem captura automáticamente *todo* y lo comprime con IA (Node + Bun + una base de datos vectorial; ~84k★, incluye un token cripto). Yggdrasil conserva las *pocas cosas que importan* — curadas, deduplicadas, sin dependencias, almacenadas como Markdown que te pertenece — sin IA, sin token. Filosofía distinta; puedes usar ambas.
 
 > **mem0 frente a Yggdrasil, en una línea:** mem0 es un **SDK/plataforma de memoria para construir aplicaciones que recuerdan a sus usuarios** (tú escribes código; normalmente llama a un LLM, con nube por defecto). Yggdrasil es **memoria lista para usar, local-first, de _tu propio_ trabajo para los agentes con los que ya programas.** Trabajo distinto — elige según quién seas.
 
 > También combina bien con [**autoresearch**](https://github.com/karpathy/autoresearch) — un bucle de experimentación autónomo (no es una herramienta de memoria); Yggdrasil le da memoria a largo plazo de lo que ya intentó → [integración](../integrations/autoresearch/).
 
-**En resumen:** construyes un *producto* de IA que debe recordar a sus usuarios a escala → **mem0**. Eres el *desarrollador* y quieres que Claude Code / Codex recuerden *tus* decisiones entre proyectos, instalado en una línea, totalmente local → **Yggdrasil**.
+**En resumen:** quieres captura automática de todo en muchos IDEs y no te importa una pila más pesada → **claude-mem**. Construyes un *producto* de IA que debe recordar a sus usuarios a escala → **mem0**. Quieres una memoria diminuta, local y *curada* que te pertenece — cero dependencias, sin IA — para los agentes de programación que ya usas → **Yggdrasil**.
 
 ## 🧰 Comandos
 
