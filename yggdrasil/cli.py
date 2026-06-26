@@ -86,8 +86,12 @@ def _install(rest: list[str]) -> int:
     if interactive:
         from . import ygg_setup
         sys.argv = ["ygg", "wizard"]
-        return ygg_setup.main()  # wizard collects models, then calls service.install
-    return service.install(embed, bg)
+        rc = ygg_setup.main()  # wizard collects models, then calls service.install
+    else:
+        rc = service.install(embed, bg)
+    print("\n--- ygg doctor ---")
+    _doctor()  # always end install with the diagnostic checklist
+    return rc
 
 
 def _service(cmd: str, rest: list[str]) -> int:

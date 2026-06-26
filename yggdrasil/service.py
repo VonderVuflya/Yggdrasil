@@ -235,6 +235,46 @@ def _win_pythonw(py: str) -> str:
 # MCP registration (shared, OS-agnostic — uses the agent CLIs if present)
 # --------------------------------------------------------------------------- #
 
+def claude_json_entry() -> dict:
+    """The MCP server entry as it should appear in ~/.claude.json."""
+    return {
+        "type": "stdio",
+        "command": _python(),
+        "args": [str(_mcp_py())],
+        "env": {"YGG_ENGINE_URL": URL, "YGG_ENGINE_TOKEN": token()},
+    }
+
+
+def _register_claude_json() -> bool:
+    """Write the MCP server straight into ~/.claude.json.
+
+    Covers Claude Code running as a **VSCode/Cursor extension**, where there is
+    no ``claude`` binary on PATH for ``claude mcp add`` to use. Merges into the
+    existing config (with a ``.ygg.bak`` backup) so other settings are preserved.
+    Returns False when there's no sign Claude Code is installed.
+    """
+    path = Path.home() / ".claude.json"
+    if not path.exists() and not (Path.home() / ".claude").is_dir():
+        return False
+    try:
+        cfg = json.loads(path.read_text()) if path.exists() else {}
+    except ValueError:
+        return False
+    if not isinstance(cfg, dict):
+        return False
+    if path.exists():
+        try:
+            shutil.copy2(path, str(path) + ".ygg.bak")
+        except OSError:
+            pass
+    cfg.setdefault("mcpServers", {})["yggdrasil"] = claude_json_entry()
+    try:
+        path.write_text(json.dumps(cfg, indent=2))
+    except OSError:
+        return False
+    return True
+
+
 def register_mcp() -> list[str]:
     tok = token()
     mcp = str(_mcp_py())
@@ -250,6 +290,9 @@ def register_mcp() -> list[str]:
             capture_output=True, text=True)
         if r.returncode == 0:
             done.append("Claude Code")
+    # Binary-less Claude Code (VSCode/Cursor extension): write ~/.claude.json directly.
+    if not any(d.startswith("Claude Code") for d in done) and _register_claude_json():
+        done.append("Claude Code (~/.claude.json)")
     if shutil.which("codex"):
         subprocess.run(["codex", "mcp", "remove", "yggdrasil"], capture_output=True)
         r = subprocess.run(
@@ -267,6 +310,16 @@ def unregister_mcp() -> None:
         subprocess.run(["claude", "mcp", "remove", "yggdrasil", "-s", "user"], capture_output=True)
     if shutil.which("codex"):
         subprocess.run(["codex", "mcp", "remove", "yggdrasil"], capture_output=True)
+    # Drop the direct ~/.claude.json entry if we wrote one.
+    path = Path.home() / ".claude.json"
+    if path.exists():
+        try:
+            cfg = json.loads(path.read_text())
+            if isinstance(cfg, dict) and "yggdrasil" in cfg.get("mcpServers", {}):
+                del cfg["mcpServers"]["yggdrasil"]
+                path.write_text(json.dumps(cfg, indent=2))
+        except (OSError, ValueError):
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -339,14 +392,32 @@ def install(embed_model: str = "", bg_model: str = "", enable_hooks: bool = Fals
     print(f"==> installing into {YGG_HOME} ({current_os()})")
     deploy_files()
     tok = ensure_token()
-    (YGG_HOME / "config.json").write_text(
-        json.dumps({"embed_model": embed_model, "bg_model": bg_model}, indent=2))
+    # Merge (don't clobber) — preserves the wizard's `features` block etc.
+    cfg_path = YGG_HOME / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text())
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except (OSError, ValueError):
+        cfg = {}
+    cfg.update({"embed_model": embed_model, "bg_model": bg_model})
+    cfg_path.write_text(json.dumps(cfg, indent=2))
 
-    if shutil.which("ollama"):
-        for m in (embed_model, bg_model):
-            if m:
-                print(f"    pulling model: {m}")
-                subprocess.run(["ollama", "pull", m], capture_output=True)
+    wanted = [m for m in (embed_model, bg_model) if m]
+    if wanted:
+        if shutil.which("ollama"):
+            for m in wanted:
+                print(f"    pulling model: {m} (this can take a while) ...")
+                if subprocess.run(["ollama", "pull", m]).returncode != 0:
+                    print(f"    WARNING: `ollama pull {m}` failed — semantic search stays "
+                          f"lexical-only until it's pulled. Re-run: ollama pull {m} && ygg restart")
+        else:
+            print("    WARNING: models were selected but `ollama` is not installed,")
+            print("    so they were NOT downloaded — Yggdrasil runs in lexical-only mode.")
+            print("    Install Ollama (https://ollama.com), then:")
+            for m in wanted:
+                print(f"      ollama pull {m}")
+            print("      ygg restart")
 
     argv = engine_argv(tok, embed_model)
     osname = current_os()
@@ -381,6 +452,12 @@ def install(embed_model: str = "", bg_model: str = "", enable_hooks: bool = Fals
     agents = register_mcp()
     if agents:
         print(f"    registered MCP with: {', '.join(agents)}")
+    else:
+        print("    WARNING: no agent host found to register the MCP server with —")
+        print("    the agent has no ygg_* tools yet. If you use Claude Code (incl. the")
+        print("    VSCode/Cursor extension), add this to \"mcpServers\" in ~/.claude.json,")
+        print("    then restart the editor:")
+        print(json.dumps({"yggdrasil": claude_json_entry()}, indent=2))
 
     if enable_hooks:
         enable_session_hook()

@@ -515,11 +515,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/health":
+            embedder = self.store.embedder
+            embed_model = getattr(embedder, "model", None) if embedder is not None else None
             self._send(200, {
                 "status": "ok",
                 "memory_count": self.store.count(),
                 "graph_nodes": 0,
-                "reranker": "inactive",
+                "storage": "sqlite-fts5" if self.store.use_fts else "sqlite-fallback",
+                "dense": (f"active ({embed_model})" if embedder is not None
+                          else "inactive (no embedding model — lexical only)"),
+                "reranker": "disabled (not configured)",
+                # kept for backward compatibility with older clients:
                 "backend": "ygg-sqlite-fts5" if self.store.use_fts else "ygg-sqlite-fallback",
             })
             return

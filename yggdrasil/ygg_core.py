@@ -15,6 +15,22 @@ DEFAULT_ENGINE_URL = "http://127.0.0.1:42069"
 DEFAULT_DEMO_TOKEN = "yggdrasil-demo-token"
 
 
+def _read_token_file() -> str | None:
+    """Read the engine token written by ``ygg install`` (``~/.yggdrasil/token``).
+
+    Lets CLI memory commands authenticate out of the box without the user having
+    to export ``YGG_ENGINE_TOKEN`` by hand — the same file ``ygg doctor`` and the
+    session hook already read. Honors ``YGG_HOME`` like the rest of the CLI.
+    """
+    home = os.environ.get("YGG_HOME")
+    base = home if home else os.path.join(os.path.expanduser("~"), ".yggdrasil")
+    try:
+        with open(os.path.join(base, "token"), "r", encoding="utf-8") as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
 class YggError(RuntimeError):
     """Base Yggdrasil workflow error."""
 
@@ -34,7 +50,12 @@ class YggConfig:
 
     @classmethod
     def from_env(cls) -> "YggConfig":
-        token = os.environ.get("YGG_ENGINE_TOKEN") or DEFAULT_DEMO_TOKEN
+        token = (
+            os.environ.get("YGG_ENGINE_TOKEN")
+            or os.environ.get("YGG_TOKEN")
+            or _read_token_file()
+            or DEFAULT_DEMO_TOKEN
+        )
         return cls(
             url=(os.environ.get("YGG_ENGINE_URL") or DEFAULT_ENGINE_URL).rstrip("/"),
             token=token,
@@ -102,6 +123,12 @@ class RestMemoryBackend:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 401:
+                detail += (
+                    "\nHint: the engine rejected the auth token. The CLI auto-reads "
+                    "~/.yggdrasil/token; if that's stale, run `ygg install`, or set "
+                    "YGG_ENGINE_TOKEN=$(ygg token)."
+                )
             raise YggError(f"{method} {path} failed: HTTP {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise YggError(f"{method} {path} failed: {exc.reason}") from exc

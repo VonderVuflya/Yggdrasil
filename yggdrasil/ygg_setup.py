@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -130,6 +131,10 @@ def wizard() -> int:
     print_catalog(h)
     rec_embed, rec_bg = recommend(h)
     print()
+    if shutil.which("ollama") is None:
+        print("Note: Ollama isn't installed yet — semantic search needs it. You can still pick")
+        print("models now (they'll be pulled once you install Ollama; exact commands are shown")
+        print("at the end), or choose 'none' for zero-config, lexical-only mode.\n")
     embed = _ask("Embedding model (or 'none')", rec_embed)
     bg = _ask("Background model (or 'none')", rec_bg)
     feats = {
