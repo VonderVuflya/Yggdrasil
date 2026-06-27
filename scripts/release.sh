@@ -150,12 +150,28 @@ fi
 
 [ -z "$SKIP_BREW" ] && [ -z "$PYPI_OK" ] && [ -z "$DRY" ] && note "Homebrew: SKIPPED (PyPI not published)"
 
-# 8. npm launcher.
+# 8. npm launcher — auth-aware. In a non-interactive run `npm publish` won't pop
+#    its browser login, it just 401s — so check `npm whoami` and `npm login` first.
 if [ -z "$SKIP_NPM" ]; then
   echo "==> npm"
-  if command -v npm >/dev/null; then
-    if ( cd clients/npm && run npm publish ); then note "npm: published"; else note "npm: FAILED (npm login)"; fi
-  else echo "  ! no npm — skipped"; note "npm: SKIPPED (no npm)"; fi
+  if ! command -v npm >/dev/null; then
+    echo "  ! no npm — skipped"; note "npm: SKIPPED (no npm)"
+  elif [ -n "$DRY" ]; then
+    echo "  [dry-run] (cd clients/npm && npm publish) — runs 'npm login' first if not authed"
+    note "npm: published"
+  else
+    if ! npm whoami >/dev/null 2>&1; then
+      echo "  → not logged in to npm. Running: npm login"
+      npm login || true
+    fi
+    if ( cd clients/npm && npm publish ); then
+      note "npm: published"
+    elif npm login && ( cd clients/npm && npm publish ); then
+      note "npm: published (after re-login)"
+    else
+      note "npm: FAILED (npm login / publish)"
+    fi
+  fi
 fi
 
 # 9. MCP Registry — auth-aware. Unlike npm, mcp-publisher won't log in on its own
