@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.5.1] — 2026-06-27
+
+### Fixed
+- `ygg update` (and the update nudge) could miss a freshly-published release until
+  a **second** run: PyPI's JSON API is CDN-cached and briefly serves the previous
+  version right after a publish. The version check now cache-busts it (a unique
+  query param + `no-cache` headers), so a new release is seen on the first try.
+
+### Changed
+- `release.sh`: the **npm** publish step is now auth-aware — it runs `npm login`
+  when not authenticated instead of failing silently (mirrors the MCP step).
+
 ## [0.5.0] — 2026-06-27
 
 ### Changed
