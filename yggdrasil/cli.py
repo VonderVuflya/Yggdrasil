@@ -35,6 +35,7 @@ Setup & service:
   ygg setup              Re-run the interactive setup wizard
   ygg doctor             Diagnose the installation (engine, models, MCP, hook)
   ygg register           (Re)register the MCP server with Claude Code / Codex
+  ygg reindex            Backfill embeddings for memories missing them (dense recall)
   ygg update             Upgrade to the latest published version, then redeploy
   ygg redeploy           Redeploy the installed code into the daemon (no upgrade)
   ygg status | start | stop | restart | logs | token | uninstall
@@ -160,6 +161,10 @@ def _doctor() -> int:
         print(f"  [ok] engine up on {url} — {h}")
         if h.get("scale_hint"):
             print(f"  [!!] scale: {h['scale_hint']}")
+        if h.get("embeddings_missing"):
+            ok = False
+            print(f"  [!!] {h['embeddings_missing']} memories have no embedding — dense recall misses them")
+            print("       → fix: ygg reindex")
     except Exception as exc:  # noqa: BLE001
         ok = False
         print(f"  [!!] engine not reachable on {url} ({exc})")
@@ -228,6 +233,24 @@ def _register() -> int:
     print("\"mcpServers\" object in ~/.claude.json and restart the editor:")
     print(json.dumps({"yggdrasil": service.claude_json_entry()}, indent=2))
     return 1
+
+
+def _reindex() -> int:
+    """Backfill embeddings for any memories missing one (restores dense recall)."""
+    from . import service
+    tok = os.environ.get("YGG_ENGINE_TOKEN") or service.token()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{_port()}/reindex", data=b"{}", method="POST",
+        headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            healed = (json.load(r).get("data") or {}).get("healed", 0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"reindex failed: {exc} (is the engine up? `ygg start`)", file=sys.stderr)
+        return 1
+    print(f"reindex: backfilled {healed} missing embedding(s).")
+    return 0
 
 
 def _pypi_latest() -> str | None:
@@ -393,6 +416,8 @@ def main() -> int:
         return _doctor()
     if cmd == "register":
         return _register()
+    if cmd == "reindex":
+        return _reindex()
     if cmd == "update":
         return _update()
     if cmd == "redeploy":

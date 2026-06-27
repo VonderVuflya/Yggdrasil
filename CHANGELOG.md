@@ -34,6 +34,15 @@ All notable changes to this project are documented here. Format loosely follows
   commands. New **`ygg register`** (re)registers the MCP server with Claude Code /
   Codex, or prints a ready-to-paste `~/.claude.json` entry for the binary-less
   VSCode/Cursor case.
+- **`ygg reindex`** + a `ygg doctor` check: when dense is on but some memories
+  have no embedding (so dense recall silently misses them), doctor flags the count
+  (`→ fix: ygg reindex`) and `ygg reindex` backfills them. `/health` now reports
+  `embeddings_missing`.
+
+### Security
+- The engine auth token is no longer passed as a command-line argument — it was
+  visible in `ps` output and the launchd plist. The service now points the engine
+  at the 0600 token file via `--token-file`; the secret never leaves the file.
 
 ## [0.4.3] — 2026-06-27
 

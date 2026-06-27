@@ -50,7 +50,6 @@ DEFAULT_PORT = int(os.environ.get("YGG_MEMORY_PORT", "42069"))
 DEFAULT_TOKEN = (
     os.environ.get("YGG_MEMORY_TOKEN")
     or os.environ.get("YGG_ENGINE_TOKEN")
-    or os.environ.get("YGG_ENGINE_TOKEN")
     or "yggdrasil-demo-token"
 )
 DEFAULT_DB = os.environ.get("YGG_MEMORY_DB") or os.path.join(
@@ -373,6 +372,13 @@ class MemoryStore:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
 
+    def missing_embeddings(self) -> int:
+        """Live memories with no stored embedding — invisible to dense recall."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE embedding IS NULL AND archived=0"
+            ).fetchone()[0]
+
     def search(
         self,
         *,
@@ -611,6 +617,12 @@ class Handler(BaseHTTPRequestHandler):
                 # kept for backward compatibility with older clients:
                 "backend": "ygg-sqlite-fts5" if self.store.use_fts else "ygg-sqlite-fallback",
             }
+            # Dense is on but some rows never got embedded -> they can't be found
+            # semantically until reindexed. Surfaced so `ygg doctor` can flag it.
+            if embedder is not None:
+                missing = self.store.missing_embeddings()
+                if missing:
+                    body["embeddings_missing"] = missing
             # Built-in vector search is an in-Python cosine — past this size, a
             # dedicated vector backend keeps recall fast. (Only when dense is on.)
             if embedder is not None and count >= VECTOR_WARN_AT:
@@ -651,6 +663,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         body = self._read_json()
+        if parsed.path == "/reindex":
+            healed = self.store.reindex_embeddings()
+            self._send(200, {"success": True, "data": {"healed": healed}})
+            return
         if parsed.path == "/add":
             content = body.get("content")
             if not content:
@@ -711,6 +727,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--token", default=DEFAULT_TOKEN)
+    parser.add_argument("--token-file", default=os.environ.get("YGG_TOKEN_FILE"),
+                        help="Read the auth token from this file — keeps the secret out of `ps` and the plist.")
     parser.add_argument("--reset", action="store_true", help="Delete the database file before starting (clean run).")
     parser.add_argument("--embed-model", default=os.environ.get("YGG_EMBED_MODEL"),
                         help="Embedding model for dense search (e.g. all-minilm). Default: off (lexical).")
@@ -734,7 +752,16 @@ def main() -> int:
         if healed:
             print(f"ygg-memory: backfilled {healed} missing embeddings", flush=True)
     Handler.store = store
-    Handler.token = args.token
+    tok = args.token
+    if args.token_file:  # a value from the 0600 file beats the visible CLI default
+        try:
+            with open(args.token_file) as fh:
+                file_tok = fh.read().strip()
+            if file_tok:
+                tok = file_tok
+        except OSError:
+            pass
+    Handler.token = tok
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(

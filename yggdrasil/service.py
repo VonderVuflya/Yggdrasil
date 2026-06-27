@@ -103,8 +103,12 @@ def deploy_files() -> None:
             shutil.copy2(p, SCRIPTS / "hooks" / p.name)
 
 
-def engine_argv(tok: str, embed_model: str = "") -> list[str]:
-    argv = [_python(), str(_engine_py()), "--db", str(DB), "--port", str(PORT), "--token", tok]
+def engine_argv(tok: str, embed_model: str = "") -> list[str]:  # noqa: ARG001 — tok kept for API/callers
+    # Pass the token by FILE path, never by value, so the secret never lands in
+    # `ps` output or the launchd plist / systemd unit. The engine reads the 0600
+    # token file itself. (`tok` is accepted for call-site compatibility.)
+    argv = [_python(), str(_engine_py()), "--db", str(DB), "--port", str(PORT),
+            "--token-file", str(TOKEN_FILE)]
     if embed_model:
         argv += ["--embed-model", embed_model]
     return argv

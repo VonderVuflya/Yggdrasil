@@ -41,12 +41,18 @@ class TestServiceGenerators(unittest.TestCase):
         self.assertIn("42069", tr)
 
     def test_engine_argv_embed_optional(self):
-        with_embed = service.engine_argv("tok", "all-minilm")
+        with_embed = service.engine_argv("sekret-tok", "all-minilm")
         self.assertIn("--embed-model", with_embed)
         self.assertIn("all-minilm", with_embed)
-        self.assertIn("--token", with_embed)
-        without = service.engine_argv("tok", "")
+        without = service.engine_argv("sekret-tok", "")
         self.assertNotIn("--embed-model", without)
+
+    def test_engine_argv_token_is_by_file_not_value(self):
+        """The token must travel by file path, never as a value visible in `ps`."""
+        argv = service.engine_argv("sekret-tok", "all-minilm")
+        self.assertIn("--token-file", argv)
+        self.assertNotIn("--token", argv)
+        self.assertNotIn("sekret-tok", argv)
 
 
 if __name__ == "__main__":
