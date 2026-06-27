@@ -162,16 +162,24 @@ def _doctor() -> int:
             print(f"  [!!] scale: {h['scale_hint']}")
     except Exception as exc:  # noqa: BLE001
         ok = False
-        print(f"  [!!] engine not reachable on {url} ({exc}). Try: ygg start")
+        print(f"  [!!] engine not reachable on {url} ({exc})")
+        print("       → fix: ygg start")
 
     tok = YGG_HOME / "token"
-    print(f"  [{'ok' if tok.exists() else '--'}] auth token: "
-          f"{tok if tok.exists() else 'not generated (run: ygg install)'}")
+    if tok.exists():
+        print(f"  [ok] auth token: {tok}")
+    else:
+        print("  [--] auth token: not generated")
+        print("       → fix: ygg install")
 
     cfg = _config()
     embed, bg = cfg.get("embed_model") or "", cfg.get("bg_model") or ""
-    print(f"  [{'ok' if embed else '--'}] embedding model: {embed or 'none (lexical-only mode)'}")
+    print(f"  [{'ok' if embed else '--'}] embedding model: {embed or 'none (lexical-only)'}")
+    if not embed:
+        print("       → enable semantic search: ygg setup")
     print(f"  [{'ok' if bg else '--'}] background model: {bg or 'none (manual write-path)'}")
+    if not bg:
+        print("       → enable background write-path: ygg setup")
 
     if embed or bg:
         if which("ollama"):
@@ -181,21 +189,27 @@ def _doctor() -> int:
                     continue
                 have = any(p.split(":")[0] == m.split(":")[0] for p in pulled)
                 ok = ok and have
-                print(f"  [{'ok' if have else '!!'}] ollama model '{m}': "
-                      f"{'present' if have else 'NOT pulled (run: ollama pull ' + m + ')'}")
+                if have:
+                    print(f"  [ok] ollama model '{m}': present")
+                else:
+                    print(f"  [!!] ollama model '{m}': NOT pulled")
+                    print(f"       → fix: ollama pull {m}")
         else:
             ok = False
-            print("  [!!] a model is configured but `ollama` is missing — see https://ollama.com")
+            print("  [!!] a model is configured but `ollama` is missing")
+            print("       → fix: install Ollama — https://ollama.com")
 
     claude_reg = _mcp_registered("claude")
     codex_reg = _mcp_registered("codex")
-    print(f"  [{'ok' if claude_reg else '--'}] Claude Code MCP registration"
-          + ("" if claude_reg else "   → fix: ygg register"))
-    print(f"  [{'ok' if codex_reg else '--'}] Codex MCP registration"
-          + ("" if codex_reg else "   → fix: ygg register"))
+    print(f"  [{'ok' if claude_reg else '--'}] Claude Code MCP registration")
+    if not claude_reg:
+        print("       → fix: ygg register")
+    print(f"  [{'ok' if codex_reg else '--'}] Codex MCP registration")
+    if not codex_reg:
+        print("       → fix: ygg register")
     if not claude_reg and not codex_reg:
-        print("       (no host has the ygg_* tools yet — run `ygg register`, or install the plugin:")
-        print("        /plugin marketplace add VonderVuflya/Yggdrasil  then  /plugin install yggdrasil)")
+        print("       (or install the plugin: /plugin marketplace add VonderVuflya/Yggdrasil"
+              " then /plugin install yggdrasil)")
 
     print("\n" + ("All good." if ok else "Some checks need attention (see [!!] above)."))
     return 0 if ok else 1
