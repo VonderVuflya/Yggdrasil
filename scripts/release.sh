@@ -131,9 +131,19 @@ PY
     run git add "$TAP_FORMULA"; run git commit -m "brew: yggdrasil $VERSION" || true; run git push origin HEAD || true
     if [ -n "${YGG_TAP_DIR:-}" ] && [ -d "$YGG_TAP_DIR" ]; then
       cp "$TAP_FORMULA" "$YGG_TAP_DIR/Formula/yggdrasil.rb" 2>/dev/null || cp "$TAP_FORMULA" "$YGG_TAP_DIR/yggdrasil.rb"
-      ( cd "$YGG_TAP_DIR" && git add -A && git commit -m "yggdrasil $VERSION" && git push ) && note "Homebrew: tap pushed"
+      ( cd "$YGG_TAP_DIR" && git add -A && git commit -m "yggdrasil $VERSION" && git push ) && note "Homebrew: tap pushed (YGG_TAP_DIR)"
+    elif command -v gh >/dev/null; then
+      # No local tap clone — push the formula straight to the tap repo via the API
+      # (otherwise the tap goes stale and `brew upgrade` never sees the new version).
+      if tsha="$(gh api repos/VonderVuflya/homebrew-tap/contents/Formula/yggdrasil.rb --jq .sha 2>/dev/null)"; then
+        if gh api --method PUT repos/VonderVuflya/homebrew-tap/contents/Formula/yggdrasil.rb \
+             -f message="yggdrasil $VERSION" \
+             -f content="$(base64 < "$TAP_FORMULA" | tr -d '\n')" -f sha="$tsha" >/dev/null 2>&1; then
+          note "Homebrew: tap updated to $VERSION (gh api)"
+        else note "Homebrew: tap push FAILED (gh api) — update VonderVuflya/homebrew-tap by hand"; fi
+      else note "Homebrew: couldn't read the tap via gh — formula updated in repo only"; fi
     else
-      note "Homebrew: formula updated in repo (set YGG_TAP_DIR to auto-push the tap)"
+      note "Homebrew: formula updated in repo only (set YGG_TAP_DIR or install gh to push the tap)"
     fi
   else echo "  [dry-run] would patch $TAP_FORMULA from PyPI"; fi
 fi
