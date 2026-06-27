@@ -222,7 +222,8 @@ class MemoryStore:
 
     # ---- write path --------------------------------------------------------
 
-    def add(self, *, content: str, user_id: str, namespace: str | None, scope: str | None, metadata: dict[str, Any]) -> dict[str, Any]:
+    def add(self, *, content: str, user_id: str, namespace: str | None, scope: str | None,
+            metadata: dict[str, Any], dedupe_threshold: float | None = None) -> dict[str, Any]:
         memory_id = "ygg_" + uuid.uuid4().hex
         created_at = time.time()
         project = metadata.get("project")
@@ -232,6 +233,18 @@ class MemoryStore:
         content_hash = metadata.get("content_hash")
         importance = float(metadata.get("importance", 0.5)) if metadata.get("importance") is not None else 0.5
         embedding_json = self._embed_json(content)  # network call outside the lock
+        # Semantic dedup (only when dense is on): reuse this one embedding to skip
+        # a write that's near-identical to an existing memory in the same scope.
+        if dedupe_threshold is not None and embedding_json:
+            try:
+                vec = json.loads(embedding_json)
+            except (json.JSONDecodeError, TypeError):
+                vec = None
+            existing = self.find_similar(user_id=user_id, project=project, mem_type=mem_type,
+                                         vec=vec, threshold=float(dedupe_threshold)) if vec else None
+            if existing is not None:
+                existing["event"] = "SEMANTIC_DUPLICATE"
+                return existing
         with self._lock:
             cur = self._conn.execute(
                 """
@@ -327,6 +340,34 @@ class MemoryStore:
                 (user_id, project, memory_type, content_hash),
             ).fetchone()
         return self._row_to_record(row) if row else None
+
+    def find_similar(self, *, user_id: str, project: str, mem_type: str,
+                     vec: list[float], threshold: float) -> dict[str, Any] | None:
+        """The most semantically-similar live memory in the same (user, project,
+        type) whose cosine to `vec` is >= threshold, or None. Catches near-dupes
+        that exact content-hash misses (e.g. the LLM re-wording the same lesson)."""
+        if not vec:
+            return None
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM memories WHERE user_id=? AND project=? AND type=? "
+                "AND archived=0 AND embedding IS NOT NULL",
+                (user_id, project, mem_type),
+            ).fetchall()
+        best_row, best = None, float(threshold)
+        for row in rows:
+            try:
+                emb = json.loads(row["embedding"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            sim = cosine(vec, emb)
+            if sim >= best:
+                best, best_row = sim, row
+        if best_row is None:
+            return None
+        rec = self._row_to_record(best_row)
+        rec["similarity"] = round(best, 4)
+        return rec
 
     def count(self) -> int:
         with self._lock:
@@ -602,6 +643,7 @@ class Handler(BaseHTTPRequestHandler):
                 namespace=body.get("namespace"),
                 scope=body.get("scope") or metadata.get("scope"),
                 metadata=metadata,
+                dedupe_threshold=body.get("dedupe_threshold"),
             )
             self._send(200, {"success": True, "data": record})
             return

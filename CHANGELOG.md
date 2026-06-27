@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Semantic dedup** — when dense (an embedding model) is on, a write that is
+  near-identical (cosine ≥ `YGG_SEMDEDUP_AT`, default 0.92) to an existing memory
+  in the same project+type is skipped (`YGG_SEMANTIC_DUPLICATE_SKIP`). Catches
+  near-dupes that exact content-hash misses — e.g. the local model re-wording the
+  same lesson across seed runs. Reuses the single add-time embedding (no extra
+  cost); lexical-only setups are unaffected.
 - `ygg doctor` is now **actionable**: a missing MCP registration prints
   `→ fix: ygg register`, and when no host has the tools it shows the plugin-install
   commands. New **`ygg register`** (re)registers the MCP server with Claude Code /

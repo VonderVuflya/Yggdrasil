@@ -27,6 +27,10 @@ DEFAULT_URL = "http://127.0.0.1:42069"
 DEFAULT_NAMESPACE = "yggdrasil-demo"
 DEFAULT_USER = "demo-user"  # unified identity — same store the MCP agent reads/writes
 
+# Cosine >= this (when dense is on) means a near-duplicate of an existing memory —
+# the write is skipped. High by default so only genuinely-redundant lessons drop.
+SEMDEDUP_THRESHOLD = float(os.environ.get("YGG_SEMDEDUP_AT", "0.92"))
+
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -208,6 +212,7 @@ def write_memory(
     confidence: float | None = None,
     tags: list[str] | None = None,
     extract: bool = False,
+    semantic_dedup: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Core write path — secret-guard + content-hash dedup + add. No printing.
 
@@ -239,8 +244,13 @@ def write_memory(
         "scope": scope,
         "metadata": metadata,
     }
-    result = request_json("POST", "/add", payload)
-    return ("added", result["data"])
+    if semantic_dedup:
+        payload["dedupe_threshold"] = SEMDEDUP_THRESHOLD
+    record = request_json("POST", "/add", payload)["data"]
+    # The engine returns an existing record (not a fresh insert) on a near-dup.
+    if record.get("event") == "SEMANTIC_DUPLICATE":
+        return ("duplicate", record)
+    return ("added", record)
 
 
 def remember(args: argparse.Namespace) -> None:
@@ -263,8 +273,12 @@ def remember(args: argparse.Namespace) -> None:
         extract=args.extract,
     )
     if status == "duplicate":
-        print(json.dumps({"event": "YGG_DUPLICATE_SKIP", "id": record.get("id"),
-                          "content_hash": content_hash(content)}, indent=2, sort_keys=True))
+        if record.get("event") == "SEMANTIC_DUPLICATE":
+            print(json.dumps({"event": "YGG_SEMANTIC_DUPLICATE_SKIP", "id": record.get("id"),
+                              "similarity": record.get("similarity")}, indent=2, sort_keys=True))
+        else:
+            print(json.dumps({"event": "YGG_DUPLICATE_SKIP", "id": record.get("id"),
+                              "content_hash": content_hash(content)}, indent=2, sort_keys=True))
         return
     print(json.dumps(record, indent=2, sort_keys=True))
     _warn_related(args, content, project, memory_type, record.get("id"))
