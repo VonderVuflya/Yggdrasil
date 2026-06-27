@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "yggdrasil": {
-      "command": "uvx",
-      "args": ["--from", "yggdrasil-memory", "ygg", "mcp"]
-    }
-  }
-}

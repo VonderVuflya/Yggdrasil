@@ -16,6 +16,12 @@ All notable changes to this project are documented here. Format loosely follows
   - Slash commands `/ygg-recall`, `/ygg-remember`, `/ygg-health` (`commands/`) for
     explicit, discoverable control.
 
+### Fixed
+- **`ygg seed` no longer crashes** mid-run when the local distill model returns a
+  loose shape. It now accepts `{"lessons":[…]}`, a bare list, a single object, or
+  list items that are plain strings (the crash was `'str' object has no attribute
+  'get'`). One bad item / file / source can no longer abort the whole seed.
+
 ### Changed
 - Plugin manifests use the spec array form `"skills": ["./skills/yggdrasil-memory"]`.
 - The uploadable skill zip is now built at release time (removed from git, gitignored).

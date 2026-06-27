@@ -230,16 +230,34 @@ def distill_text(text: str, *, project: str, source: str, model: str,
     text = text[-MAX_CHARS_PER_FILE:]  # keep the most recent window
     try:
         raw = _ollama_generate(model, DISTILL_PROMPT.replace("{TEXT}", text))
-        lessons = json.loads(raw).get("lessons", [])
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+        parsed = json.loads(raw)
+        # The local model is loose: it may return {"lessons": [...]}, a bare list,
+        # a bare single lesson object, or list items that are dicts OR plain strings.
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("lessons"), list):
+                lessons = parsed["lessons"]
+            elif parsed.get("content") or parsed.get("text"):
+                lessons = [parsed]  # a bare single lesson object
+            else:
+                lessons = []
+        elif isinstance(parsed, list):
+            lessons = parsed
+        else:
+            lessons = []
+    except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
         print(f"    distill failed for {project}: {exc}", file=sys.stderr)
         return {"added": 0, "dup": 0, "errors": 1}
     added = dup = errors = 0
-    for item in lessons if isinstance(lessons, list) else []:
-        content = (item or {}).get("content", "").strip()
+    for item in lessons:
+        if isinstance(item, str):
+            content, mtype = item.strip(), "lesson"
+        elif isinstance(item, dict):
+            content = str(item.get("content") or item.get("text") or "").strip()
+            mtype = str(item.get("type") or "lesson").strip() or "lesson"
+        else:
+            continue
         if not content:
             continue
-        mtype = (item.get("type") or "lesson").strip() or "lesson"
         try:
             status, _ = _ygg.write_memory(
                 content=content, project=project, memory_type=mtype,
@@ -269,8 +287,12 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
     for f in files:
         if not f.exists():
             continue
-        res = distill_text(_extract_text(f), project=project, source=f"seed:{src['kind']}",
-                           model=model, user_id=user_id, namespace=namespace)
+        try:
+            res = distill_text(_extract_text(f), project=project, source=f"seed:{src['kind']}",
+                               model=model, user_id=user_id, namespace=namespace)
+        except Exception as exc:  # noqa: BLE001 — one bad file must never abort the source
+            print(f"    skipped {f.name}: {exc}", file=sys.stderr)
+            res = {"added": 0, "dup": 0, "errors": 1}
         for k in agg:
             agg[k] += res[k]
     print(f"    {project}: +{agg['added']} new, {agg['dup']} dup-skipped, {agg['errors']} error(s)")
@@ -318,7 +340,11 @@ def seed(args: argparse.Namespace) -> int:
 
     total = {"added": 0, "dup": 0, "errors": 0}
     for s in sources:
-        res = distill_source(s, model=model, user_id=args.user_id, namespace=args.namespace)
+        try:
+            res = distill_source(s, model=model, user_id=args.user_id, namespace=args.namespace)
+        except Exception as exc:  # noqa: BLE001 — one bad source must never abort the seed
+            print(f"    skipped {s.get('project')}: {exc}", file=sys.stderr)
+            res = {"added": 0, "dup": 0, "errors": 1}
         for k in total:
             total[k] += res[k]
     print(f"\nDone: +{total['added']} new memories, {total['dup']} dup-skipped, "
