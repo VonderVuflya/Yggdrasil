@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `ygg doctor` is now **actionable**: a missing MCP registration prints
+  `→ fix: ygg register`, and when no host has the tools it shows the plugin-install
+  commands. New **`ygg register`** (re)registers the MCP server with Claude Code /
+  Codex, or prints a ready-to-paste `~/.claude.json` entry for the binary-less
+  VSCode/Cursor case.
+
 ## [0.4.3] — 2026-06-27
 
 ### Added

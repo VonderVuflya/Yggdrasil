@@ -34,6 +34,7 @@ Setup & service:
   ygg recommend          Show the hardware-aware model catalog
   ygg setup              Re-run the interactive setup wizard
   ygg doctor             Diagnose the installation (engine, models, MCP, hook)
+  ygg register           (Re)register the MCP server with Claude Code / Codex
   ygg update             Upgrade to the latest published version, then redeploy
   ygg redeploy           Redeploy the installed code into the daemon (no upgrade)
   ygg status | start | stop | restart | logs | token | uninstall
@@ -186,11 +187,33 @@ def _doctor() -> int:
             ok = False
             print("  [!!] a model is configured but `ollama` is missing — see https://ollama.com")
 
-    print(f"  [{'ok' if _mcp_registered('claude') else '--'}] Claude Code MCP registration")
-    print(f"  [{'ok' if _mcp_registered('codex') else '--'}] Codex MCP registration")
+    claude_reg = _mcp_registered("claude")
+    codex_reg = _mcp_registered("codex")
+    print(f"  [{'ok' if claude_reg else '--'}] Claude Code MCP registration"
+          + ("" if claude_reg else "   → fix: ygg register"))
+    print(f"  [{'ok' if codex_reg else '--'}] Codex MCP registration"
+          + ("" if codex_reg else "   → fix: ygg register"))
+    if not claude_reg and not codex_reg:
+        print("       (no host has the ygg_* tools yet — run `ygg register`, or install the plugin:")
+        print("        /plugin marketplace add VonderVuflya/Yggdrasil  then  /plugin install yggdrasil)")
 
     print("\n" + ("All good." if ok else "Some checks need attention (see [!!] above)."))
     return 0 if ok else 1
+
+
+def _register() -> int:
+    """(Re)register the MCP server with every detected agent host (Claude Code / Codex)."""
+    from . import service
+    service.deploy_files()  # make sure the deployed MCP script exists to point at
+    agents = service.register_mcp()
+    if agents:
+        print(f"registered MCP with: {', '.join(agents)}")
+        return 0
+    print("No agent host detected to register with.")
+    print("If you use Claude Code (incl. the VSCode/Cursor extension), add this to the")
+    print("\"mcpServers\" object in ~/.claude.json and restart the editor:")
+    print(json.dumps({"yggdrasil": service.claude_json_entry()}, indent=2))
+    return 1
 
 
 def _pypi_latest() -> str | None:
@@ -342,6 +365,8 @@ def main() -> int:
         return 0 if service.ensure_running() else 1
     if cmd == "doctor":
         return _doctor()
+    if cmd == "register":
+        return _register()
     if cmd == "update":
         return _update()
     if cmd == "redeploy":
