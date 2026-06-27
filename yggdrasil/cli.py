@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -33,7 +34,8 @@ Setup & service:
   ygg recommend          Show the hardware-aware model catalog
   ygg setup              Re-run the interactive setup wizard
   ygg doctor             Diagnose the installation (engine, models, MCP, hook)
-  ygg update             Redeploy the current code into the running service
+  ygg update             Upgrade to the latest published version, then redeploy
+  ygg redeploy           Redeploy the installed code into the daemon (no upgrade)
   ygg status | start | stop | restart | logs | token | uninstall
   ygg hooks | unhooks    Enable/disable the SessionStart auto-bootstrap hook
   ygg stophooks | unstophooks  Enable/disable the Stop hook (auto-distill sessions → lessons)
@@ -188,34 +190,102 @@ def _doctor() -> int:
     return 0 if ok else 1
 
 
-def _check_newer_on_pypi() -> None:
-    """Best-effort: tell the user if a newer release is on PyPI (we can't
-    self-upgrade a brew/pip-installed package from inside it)."""
+def _pypi_latest() -> str | None:
     try:
-        with urllib.request.urlopen("https://pypi.org/pypi/yggdrasil-memory/json", timeout=3) as r:
-            latest = json.load(r)["info"]["version"]
+        with urllib.request.urlopen("https://pypi.org/pypi/yggdrasil-memory/json", timeout=4) as r:
+            return json.load(r)["info"]["version"]
     except Exception:  # noqa: BLE001
-        return
-    if latest and latest != __version__:
-        print(f"  ⬆ yggdrasil-memory {latest} is on PyPI (you have {__version__}).")
-        print( "    `ygg update` only redeploys the INSTALLED version — upgrade the package first:")
-        print( "      brew upgrade yggdrasil            # Homebrew")
-        print( "      pipx upgrade yggdrasil-memory     # pipx")
-        print( "      pip install -U yggdrasil-memory   # pip")
-        print( "    …then re-run `ygg update`.")
+        return None
+
+
+def _vtuple(v: str) -> tuple:
+    return tuple(int("".join(c for c in p if c.isdigit()) or 0) for p in v.split("."))
+
+
+def _deployed_version() -> str:
+    try:
+        txt = (YGG_HOME / "scripts" / "__init__.py").read_text()
+        m = re.search(r'__version__\s*=\s*"([^"]+)"', txt)
+        return m.group(1) if m else "?"
+    except OSError:
+        return "(none)"
+
+
+def _install_method() -> str:
+    p = str(HERE).lower()
+    if "pipx" in p:
+        return "pipx"
+    if "/cellar/" in p or "/homebrew/" in p:
+        return "brew"
+    if "/uv/" in p or "/.cache/uv" in p or "/archive-v" in p:
+        return "uvx"
+    return "pip"
+
+
+def _upgrade_argv(method: str) -> list[str] | None:
+    return {
+        "pipx": ["pipx", "upgrade", "yggdrasil-memory"],
+        "pip": [sys.executable, "-m", "pip", "install", "-U", "yggdrasil-memory"],
+        "brew": ["brew", "upgrade", "yggdrasil"],
+    }.get(method)
+
+
+def _redeploy() -> int:
+    """Redeploy the INSTALLED engine code into ~/.yggdrasil and restart the daemon.
+    The plumbing step `update` calls after a package upgrade."""
+    from . import service
+    cfg = _config()
+    print(f"redeploying yggdrasil {__version__} into {YGG_HOME} ...")
+    return service.install(cfg.get("embed_model", ""), cfg.get("bg_model", ""))
+
+
+def _redeploy_if_stale() -> int:
+    dep = _deployed_version()
+    if dep != __version__:
+        print(f"  the daemon was running {dep}; redeploying {__version__} ...")
+        return _redeploy()
+    print(f"  daemon already running {__version__}. Nothing to do.")
+    return 0
 
 
 def _update() -> int:
-    """Redeploy the INSTALLED package code into ~/.yggdrasil and restart.
+    """Upgrade Yggdrasil to the latest published version, then redeploy.
 
-    This deploys whatever version of ``yggdrasil-memory`` is installed — it does
-    NOT fetch a new release. Upgrade the package via your installer first.
+    `update` means what you'd expect (like apt/npm): fetch the newest release and
+    install it. It upgrades the installed `yggdrasil-memory` package via whatever
+    installer you used, then redeploys the new engine into the daemon. If you're
+    already on the latest, it says so.
     """
-    from . import service
-    cfg = _config()
-    print(f"redeploying installed yggdrasil {__version__} into ~/.yggdrasil ...")
-    _check_newer_on_pypi()
-    return service.install(cfg.get("embed_model", ""), cfg.get("bg_model", ""))
+    latest = _pypi_latest()
+    if latest is None:
+        print(f"Yggdrasil {__version__} — couldn't reach PyPI to check for updates.")
+        return _redeploy_if_stale()
+    if _vtuple(latest) <= _vtuple(__version__):
+        print(f"✓ Yggdrasil {__version__} is already the latest.")
+        return _redeploy_if_stale()
+
+    method = _install_method()
+    print(f"upgrading yggdrasil-memory {__version__} → {latest} (installed via {method}) ...")
+    if method == "uvx":
+        print("  uvx fetches the latest on every run — just re-run your "
+              "`uvx --from yggdrasil-memory ygg ...` command (it's already on a fresh env).")
+        return 0
+    argv = _upgrade_argv(method)
+    if not argv or which(argv[0]) is None:
+        print(f"  can't auto-upgrade a {method} install. Run this, then `ygg update` again:")
+        print(f"    {' '.join(argv) if argv else 'pip install -U yggdrasil-memory'}")
+        return 1
+    rc = subprocess.call(argv)
+    if rc != 0:
+        print(f"  upgrade failed (exit {rc}). Run manually: {' '.join(argv)}")
+        return rc
+    # This process is still the OLD code; invoke the freshly-installed `ygg` to
+    # redeploy the new engine into the daemon.
+    ygg_bin = which("ygg")
+    if ygg_bin:
+        return subprocess.call([ygg_bin, "redeploy"])
+    print(f"  upgraded to {latest}. Now run:  ygg redeploy")
+    return 0
 
 
 def main() -> int:
@@ -270,6 +340,8 @@ def main() -> int:
         return _doctor()
     if cmd == "update":
         return _update()
+    if cmd == "redeploy":
+        return _redeploy()
     if cmd in SERVICE_CMDS:
         return _service(cmd, rest)
 
