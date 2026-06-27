@@ -70,30 +70,50 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 > **环境要求：** macOS（Linux/Windows 即将支持）、Python 3.10+——或者让 `uv`/`npx` 替你获取 Python。语义搜索是可选的，使用一个本地 [Ollama](https://ollama.com) 模型。
 
+**方案 A — 作为插件安装**（一步搞定，就在你的助手内部——零配置）。在 **Claude Code** 中：
+
+```text
+/plugin marketplace add VonderVuflya/Yggdrasil
+/plugin install yggdrasil
+```
+
+引擎会在首次使用时惰性启动，并生成它自己的本地 token——**无需 API key，无需云端，无需任何配置。**（Codex 和 Cursor 使用同样的流程。）
+
+**方案 B — 安装完整服务**（常驻守护进程 + 会话开始时自动注入 + 可选的本地模型）：
+
 ```bash
-uvx --from yggdrasil-memory ygg install      # recommended
+uvx --from yggdrasil-memory ygg install      # one-time guided setup
 ```
 
 <details>
-<summary>更想用 npm、pipx、pip、Homebrew 或源码？（同一个引擎）</summary>
+<summary>每一个安装渠道（同一个引擎）</summary>
 
-| 工具 | 命令 |
+| 宿主 / 工具 | 命令 |
 | --- | --- |
+| **Claude Code · Codex · Cursor**（插件） | `/plugin marketplace add VonderVuflya/Yggdrasil` → `/plugin install yggdrasil` |
+| **uvx** _(推荐 CLI)_ | `uvx --from yggdrasil-memory ygg install` |
 | **npm / npx** | `npx yggdrasil-memory install` |
 | **pipx** | `pipx install yggdrasil-memory && ygg install` |
 | **pip** | `pip install yggdrasil-memory && ygg install` |
 | **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **Claude Desktop** _(应用)_ | 把 `.mcpb` 从[最新发布](https://github.com/VonderVuflya/Yggdrasil/releases/latest)拖到 Settings → Extensions（[指南](../packaging/mcpb/README.md)） |
 | **从源码** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
 </details>
 
-`ygg install` 是一次性的引导式设置：它会检测你的硬件并**推荐一个适合的本地模型**（或选择 `none` 进行零配置、仅词法的安装），生成一个私有的鉴权 token，安装一个**常驻的后台服务**，并**把工具注册到 Claude Code 和 Codex**。随时用 `ygg doctor` 检查它；用 `ygg update` 升级。
+`ygg install` 是一次性的引导式设置：它会检测你的硬件并**推荐一个适合的本地模型**（或选择 `none` 进行零配置、仅词法的安装），生成一个私有的鉴权 token，安装一个**常驻的后台服务**，并**把工具注册到 Claude Code 和 Codex**。
+
+**验证并使用：**
+```bash
+ygg doctor       # engine · models · MCP registration · hook — all green?
+```
+然后就开始干活吧。让你的助手*“回忆一下我们对这个项目定过什么”*，或者告诉它*“记住这个决策”*——到下一个会话时它就已经在那儿了。
 
 只想先试试引擎，不安装服务？`uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`。
 
-## 🔌 连接你的智能体
+## 🔌 更多连接方式
 
-`ygg install` 已经把工具注册到 **Claude Code** 和 **Codex**。还有两种接入方式：
+除了上面的插件和 `ygg install` 之外：
 
 - 🖥️ **Claude Desktop（桌面应用）** — 安装 MCP 扩展：从[最新发布](https://github.com/VonderVuflya/Yggdrasil/releases/latest)（或 `packaging/mcpb/`）获取 `yggdrasil-<版本>.mcpb`，把它拖到 **Settings → Extensions**，并粘贴你的令牌（`ygg token`）。桌面应用现在与你的 CLI 智能体共享**同一份记忆**。→ [安装指南](../packaging/mcpb/README.md)
 - 🧠 **Skill（任意 Claude）** — [`yggdrasil-memory` 技能](../skills/)教会智能体工作流程：工作前回忆，工作后记录。通过 **Settings → Skills → Create skill → Upload a skill** 上传 `yggdrasil-memory.zip`。

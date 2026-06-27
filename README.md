@@ -16,7 +16,7 @@ Claude Code, Codex, and any MCP host remember your decisions, lessons, and proje
 </p>
 
 <p align="center">
-  <a href="#-install">Install</a> ·
+  <a href="#-quick-start">Quick Start</a> ·
   <a href="#-how-it-works">How it works</a> ·
   <a href="#-yggdrasil-vs-the-rest">Compare</a> ·
   <a href="#-commands">Commands</a> ·
@@ -67,34 +67,54 @@ No "let me remind you what we did yesterday." It's just there.
 - 🪪 **A soul** — give it a name and personality; it shows up the same in every tool.
 - 🔒 **100% local & private** — your memory lives on your machine. No cloud, no account.
 
-## 🚀 Install
+## 🚀 Quick Start
 
 > **Requirements:** macOS (Linux/Windows soon), Python 3.10+ — or let `uv`/`npx` fetch Python for you. Semantic search is optional and uses a local [Ollama](https://ollama.com) model.
 
+**Option A — install as a plugin** (one step, right inside your agent — zero-config). In **Claude Code**:
+
+```text
+/plugin marketplace add VonderVuflya/Yggdrasil
+/plugin install yggdrasil
+```
+
+The engine lazy-starts on first use and generates its own local token — **no API key, no cloud, nothing to configure.** (Codex and Cursor use the same flow.)
+
+**Option B — install the full service** (always-on daemon + auto-inject at session start + optional local models):
+
 ```bash
-uvx --from yggdrasil-memory ygg install      # recommended
+uvx --from yggdrasil-memory ygg install      # one-time guided setup
 ```
 
 <details>
-<summary>Prefer npm, pipx, pip, Homebrew, or source? (same engine)</summary>
+<summary>Every install channel (same engine)</summary>
 
-| Tool | Command |
+| Host / tool | Command |
 | --- | --- |
+| **Claude Code · Codex · Cursor** (plugin) | `/plugin marketplace add VonderVuflya/Yggdrasil` → `/plugin install yggdrasil` |
+| **uvx** _(recommended CLI)_ | `uvx --from yggdrasil-memory ygg install` |
 | **npm / npx** | `npx yggdrasil-memory install` |
 | **pipx** | `pipx install yggdrasil-memory && ygg install` |
 | **pip** | `pip install yggdrasil-memory && ygg install` |
 | **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **Claude Desktop** _(app)_ | drag the `.mcpb` from the [latest release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) onto Settings → Extensions ([guide](./packaging/mcpb/README.md)) |
 | **from source** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
 </details>
 
-`ygg install` is a one-time guided setup: it detects your hardware and **recommends a local model that fits** (or pick `none` for a zero-config, lexical-only setup), generates a private auth token, installs an **always-on background service**, and **registers the tools with Claude Code and Codex**. Check it any time with `ygg doctor`; upgrade with `ygg update`.
+`ygg install` is a one-time guided setup: it detects your hardware and **recommends a local model that fits** (or pick `none` for a zero-config, lexical-only setup), generates a private auth token, installs an **always-on background service**, and **registers the tools with Claude Code and Codex**.
 
-Just want to kick the tyres without installing a service? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
+**Verify & use:**
+```bash
+ygg doctor       # engine · models · MCP registration · hook — all green?
+```
+Then just work. Ask your agent *"recall what we decided about this project"*, or tell it *"remember this decision"* — and in the next session it's already there.
 
-## 🔌 Connect your agents
+Just kicking the tyres? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
 
-`ygg install` already registers the tools with **Claude Code** and **Codex**. Two more ways to plug in:
+## 🔌 More ways to connect
+
+Beyond the plugin and `ygg install` above:
 
 - 🖥️ **Claude Desktop (app)** — install the MCP extension: grab `yggdrasil-<version>.mcpb` from the [latest release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) (or `packaging/mcpb/`), drag it onto **Settings → Extensions**, and paste your token (`ygg token`). The desktop app now shares the **same memory** as your CLI agents. → [setup guide](./packaging/mcpb/README.md)
 - 🧠 **Skill (any Claude)** — the [`yggdrasil-memory` skill](./skills/) teaches the agent the workflow: recall before work, remember after. Upload `yggdrasil-memory.zip` via **Settings → Skills → Create skill → Upload a skill**.

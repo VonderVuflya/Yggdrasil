@@ -58,34 +58,54 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 - 🪪 **Душа** — дайте ему имя и характер; он одинаково проявляется в каждом инструменте.
 - 🔒 **100% локально и приватно** — ваша память живёт на вашей машине. Ни облака, ни аккаунта.
 
-## 🚀 Установка
+## 🚀 Быстрый старт
 
 > **Требования:** macOS (Linux/Windows скоро), Python 3.10+ — или позвольте `uv`/`npx` подтянуть Python за вас. Семантический поиск опционален и использует локальную модель [Ollama](https://ollama.com).
 
+**Вариант A — установить как плагин** (один шаг, прямо внутри вашего агента — без настройки). В **Claude Code**:
+
+```text
+/plugin marketplace add VonderVuflya/Yggdrasil
+/plugin install yggdrasil
+```
+
+Движок лениво запускается при первом использовании и генерирует собственный локальный токен — **ни API-ключа, ни облака, ничего настраивать не нужно.** (Codex и Cursor используют тот же процесс.)
+
+**Вариант B — установить полный сервис** (всегда работающий демон + авто-впрыск при старте сессии + опциональные локальные модели):
+
 ```bash
-uvx --from yggdrasil-memory ygg install      # recommended
+uvx --from yggdrasil-memory ygg install      # one-time guided setup
 ```
 
 <details>
-<summary>Предпочитаете npm, pipx, pip, Homebrew или из исходников? (тот же движок)</summary>
+<summary>Все каналы установки (тот же движок)</summary>
 
-| Инструмент | Команда |
+| Хост / инструмент | Команда |
 | --- | --- |
+| **Claude Code · Codex · Cursor** (плагин) | `/plugin marketplace add VonderVuflya/Yggdrasil` → `/plugin install yggdrasil` |
+| **uvx** _(рекомендуемый CLI)_ | `uvx --from yggdrasil-memory ygg install` |
 | **npm / npx** | `npx yggdrasil-memory install` |
 | **pipx** | `pipx install yggdrasil-memory && ygg install` |
 | **pip** | `pip install yggdrasil-memory && ygg install` |
 | **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **Claude Desktop** _(приложение)_ | перетащите `.mcpb` из [последнего релиза](https://github.com/VonderVuflya/Yggdrasil/releases/latest) в Settings → Extensions ([инструкция](../packaging/mcpb/README.md)) |
 | **из исходников** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
 </details>
 
-`ygg install` — это одноразовая управляемая настройка: она определяет ваше железо и **рекомендует подходящую локальную модель** (или выберите `none` для конфигурации без настроек, только лексической), генерирует приватный токен авторизации, устанавливает **всегда работающий фоновый сервис** и **регистрирует инструменты в Claude Code и Codex**. Проверяйте состояние в любой момент через `ygg doctor`; обновляйтесь через `ygg update`.
+`ygg install` — это одноразовая управляемая настройка: она определяет ваше железо и **рекомендует подходящую локальную модель** (или выберите `none` для конфигурации без настроек, только лексической), генерирует приватный токен авторизации, устанавливает **всегда работающий фоновый сервис** и **регистрирует инструменты в Claude Code и Codex**.
 
-Просто хотите попробовать без установки сервиса? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
+**Проверка и использование:**
+```bash
+ygg doctor       # engine · models · MCP registration · hook — all green?
+```
+Затем просто работайте. Попросите агента *«вспомни, что мы решили по этому проекту»* или скажите ему *«запомни это решение»* — и в следующей сессии оно уже там.
 
-## 🔌 Подключение агентов
+Просто хотите попробовать? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
 
-`ygg install` уже регистрирует инструменты в **Claude Code** и **Codex**. Ещё два способа подключиться:
+## 🔌 Больше способов подключения
+
+Помимо плагина и `ygg install` выше:
 
 - 🖥️ **Claude Desktop (приложение)** — установите MCP-расширение: возьмите `yggdrasil-<версия>.mcpb` из [последнего релиза](https://github.com/VonderVuflya/Yggdrasil/releases/latest) (или из `packaging/mcpb/`), перетащите его в **Settings → Extensions** и вставьте свой токен (`ygg token`). Теперь приложение делит **ту же память**, что и ваши CLI-агенты. → [инструкция](../packaging/mcpb/README.md)
 - 🧠 **Skill (любой Claude)** — [скилл `yggdrasil-memory`](../skills/) учит агента рабочему процессу: вспоминать перед работой, сохранять после. Загрузите `yggdrasil-memory.zip` через **Settings → Skills → Create skill → Upload a skill**.

@@ -58,34 +58,54 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 - 🪪 **魂を持つ** — 名前と人格を与えれば、どのツールでも同じ姿で現れます。
 - 🔒 **100% ローカル & プライベート** — あなたのメモリはあなたのマシンに置かれます。クラウドもアカウントも不要。
 
-## 🚀 インストール
+## 🚀 クイックスタート
 
 > **必要条件:** macOS（Linux/Windows は近日対応）、Python 3.10+ — もしくは `uv`/`npx` に Python を取得させても構いません。セマンティック検索はオプションで、ローカルの [Ollama](https://ollama.com) モデルを使用します。
 
+**オプション A — プラグインとしてインストール**（ワンステップ、エージェントの中で完結 — 設定不要)。**Claude Code** では:
+
+```text
+/plugin marketplace add VonderVuflya/Yggdrasil
+/plugin install yggdrasil
+```
+
+エンジンは初回利用時に遅延起動し、独自のローカルトークンを生成します — **API キー不要、クラウド不要、設定するものは何もありません。**（Codex と Cursor も同じ流れです)
+
+**オプション B — フルサービスをインストール**（常時稼働のデーモン + セッション開始時の自動注入 + オプションのローカルモデル):
+
 ```bash
-uvx --from yggdrasil-memory ygg install      # recommended
+uvx --from yggdrasil-memory ygg install      # one-time guided setup
 ```
 
 <details>
-<summary>npm、pipx、pip、Homebrew、ソースからのインストールがお好みですか?（エンジンは同じです)</summary>
+<summary>すべてのインストール経路（エンジンは同じです)</summary>
 
-| ツール | コマンド |
+| ホスト / ツール | コマンド |
 | --- | --- |
+| **Claude Code · Codex · Cursor**（プラグイン) | `/plugin marketplace add VonderVuflya/Yggdrasil` → `/plugin install yggdrasil` |
+| **uvx** _(推奨 CLI)_ | `uvx --from yggdrasil-memory ygg install` |
 | **npm / npx** | `npx yggdrasil-memory install` |
 | **pipx** | `pipx install yggdrasil-memory && ygg install` |
 | **pip** | `pip install yggdrasil-memory && ygg install` |
 | **Homebrew** _(macOS)_ | `brew install VonderVuflya/tap/yggdrasil && ygg install` |
+| **Claude Desktop** _(アプリ)_ | [最新リリース](https://github.com/VonderVuflya/Yggdrasil/releases/latest) から `.mcpb` を Settings → Extensions にドラッグ（[ガイド](../packaging/mcpb/README.md)) |
 | **ソースから** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
 </details>
 
-`ygg install` は一度きりのガイド付きセットアップです。ハードウェアを検出して**適合するローカルモデルを推奨し**（または `none` を選べば設定不要・字句検索のみの構成になります）、プライベートな認証トークンを生成し、**常時稼働のバックグラウンドサービス**をインストールし、**Claude Code と Codex にツールを登録**します。状態はいつでも `ygg doctor` で確認でき、`ygg update` で更新できます。
+`ygg install` は一度きりのガイド付きセットアップです。ハードウェアを検出して**適合するローカルモデルを推奨し**（または `none` を選べば設定不要・字句検索のみの構成になります）、プライベートな認証トークンを生成し、**常時稼働のバックグラウンドサービス**をインストールし、**Claude Code と Codex にツールを登録**します。
+
+**確認して使う:**
+```bash
+ygg doctor       # engine · models · MCP registration · hook — all green?
+```
+あとは作業するだけです。エージェントに *「このプロジェクトについて決めたことを思い出して」* と尋ねたり、*「この決定を記憶して」* と伝えたりすれば — 次のセッションではもうそこにあります。
 
 サービスをインストールせずに気軽に試したいだけですか? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`。
 
-## 🔌 エージェントを接続する
+## 🔌 さらに接続する方法
 
-`ygg install` はすでに **Claude Code** と **Codex** にツールを登録しています。さらに 2 つの接続方法があります:
+上記のプラグインと `ygg install` に加えて:
 
 - 🖥️ **Claude Desktop（アプリ)** — MCP 拡張機能をインストールします。[最新リリース](https://github.com/VonderVuflya/Yggdrasil/releases/latest)（または `packaging/mcpb/`）から `yggdrasil-<version>.mcpb` を取得し、**Settings → Extensions** にドラッグして、トークン（`ygg token`）を貼り付けます。これでデスクトップアプリは CLI エージェントと**同じメモリ**を共有します。→ [セットアップガイド](../packaging/mcpb/README.md)
 - 🧠 **Skill（あらゆる Claude)** — [`yggdrasil-memory` skill](../skills/) は、作業前に想起し、作業後に記憶するというワークフローをエージェントに教えます。`yggdrasil-memory.zip` を **Settings → Skills → Create skill → Upload a skill** からアップロードしてください。
