@@ -12,8 +12,8 @@ class Yggdrasil < Formula
 
   desc "One shared, durable memory for your AI coding agents (MCP, local-first)"
   homepage "https://github.com/VonderVuflya/yggdrasil"
-  url "https://files.pythonhosted.org/packages/53/98/41947d23e35f38f2413365503cd1d4dd7b5d37a585bf00c554827d4b0936/yggdrasil_memory-0.4.0.tar.gz"
-  sha256 "ebb19f8733220a02c08f65227dca861dd498d0d8892da691a5e74a16a479fcaa"
+  url "https://files.pythonhosted.org/packages/09/46/2799c33b3129b325c63fda50bbf00bb6673d06a7660e3673b436d8004c23/yggdrasil_memory-0.4.2.tar.gz"
+  sha256 "57f38b5028ed51cb999b642eeedb73650ac18eae61d5b5845e816da54ec09cca"
   license :cannot_represent # Elastic License 2.0 (source-available, not an OSI/SPDX license)
   head "https://github.com/VonderVuflya/yggdrasil.git", branch: "main"
 
