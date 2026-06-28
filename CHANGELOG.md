@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Per-prompt auto-recall hook** (`UserPromptSubmit`) — the fix for "the agent
+  forgets to use the memory". On every request it runs a cross-project recall and
+  injects the top genuinely-relevant matches (raw-cosine gate, so off-topic
+  prompts inject nothing), and asks the agent to cite what it reused inline as
+  `🌳 recalled: …` — the visible breadcrumb that makes the tool's work trustworthy.
+  `ygg hooks` now installs both retrieval hooks (SessionStart bootstrap + this).
+
 ## [0.5.2] — 2026-06-28
 
 ### Added

@@ -9,6 +9,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_user_prompt.py\""
+          }
+        ]
+      }
     ]
   }
 }

@@ -569,6 +569,15 @@ def _hook_command() -> str:
     return f"{_python()} {SCRIPTS / 'hooks' / 'ygg_session_start.py'}"
 
 
+# The two retrieval hooks installed by `ygg hooks`: SessionStart injects this
+# project's memory at the top of a session; UserPromptSubmit auto-recalls
+# relevant memory for EVERY request (so the agent can't forget to look it up).
+_RETRIEVAL_HOOKS = [
+    ("SessionStart", "ygg_session_start.py"),
+    ("UserPromptSubmit", "ygg_user_prompt.py"),
+]
+
+
 def enable_session_hook() -> int:
     path = Path.home() / ".claude" / "settings.json"
     cfg = {}
@@ -578,15 +587,18 @@ def enable_session_hook() -> int:
         except ValueError:
             cfg = {}
         shutil.copy2(path, str(path) + ".ygg.bak")
-    cmd = _hook_command()
-    ss = cfg.setdefault("hooks", {}).setdefault("SessionStart", [])
-    if any(h.get("command") == cmd for g in ss for h in g.get("hooks", [])):
-        print("SessionStart hook already enabled")
-        return 0
-    ss.append({"hooks": [{"type": "command", "command": cmd}]})
+    added = []
+    for event, script in _RETRIEVAL_HOOKS:
+        cmd = f"{_python()} {SCRIPTS / 'hooks' / script}"
+        groups = cfg.setdefault("hooks", {}).setdefault(event, [])
+        if any(h.get("command") == cmd for g in groups for h in g.get("hooks", [])):
+            continue
+        groups.append({"hooks": [{"type": "command", "command": cmd}]})
+        added.append(event)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2))
-    print("enabled Yggdrasil SessionStart hook")
+    print(f"enabled Yggdrasil hooks: {', '.join(added)}" if added
+          else "Yggdrasil hooks already enabled")
     return 0
 
 
@@ -599,13 +611,14 @@ def disable_session_hook() -> int:
         cfg = json.loads(path.read_text())
     except ValueError:
         return 0
-    marker = str(SCRIPTS / "hooks" / "ygg_session_start.py")
-    ss = cfg.get("hooks", {}).get("SessionStart", [])
-    cfg.setdefault("hooks", {})["SessionStart"] = [
-        g for g in ss if not any(marker in h.get("command", "") for h in g.get("hooks", []))
-    ]
+    for event, script in _RETRIEVAL_HOOKS:
+        marker = str(SCRIPTS / "hooks" / script)
+        groups = cfg.get("hooks", {}).get(event, [])
+        cfg.setdefault("hooks", {})[event] = [
+            g for g in groups if not any(marker in h.get("command", "") for h in g.get("hooks", []))
+        ]
     path.write_text(json.dumps(cfg, indent=2))
-    print("removed Yggdrasil SessionStart hook")
+    print("removed Yggdrasil hooks (SessionStart + UserPromptSubmit)")
     return 0
 
 

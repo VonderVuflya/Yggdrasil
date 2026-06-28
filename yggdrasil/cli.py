@@ -40,7 +40,7 @@ Setup & service:
   ygg update             Upgrade to the latest published version, then redeploy
   ygg redeploy           Redeploy the installed code into the daemon (no upgrade)
   ygg status | start | stop | restart | logs | token | uninstall
-  ygg hooks | unhooks    Enable/disable the SessionStart auto-bootstrap hook
+  ygg hooks | unhooks    Enable/disable the retrieval hooks (SessionStart bootstrap + per-prompt auto-recall)
   ygg stophooks | unstophooks  Enable/disable the Stop hook (auto-distill sessions → lessons)
   ygg consolidate | unconsolidate
 
