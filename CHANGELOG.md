@@ -5,6 +5,12 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **Richer MCP tool definitions** — every tool now documents what it does, when to
+  use it vs. its siblings, what it returns, and an example, and **every parameter
+  has a description** with constraints/examples. Raises tool-definition quality for
+  hosts (and directory scorers like Glama) so an LLM can pick the right tool unaided.
+
 ### Fixed
 - **MCP `serverInfo`** reported a stale dev identity (`yggdrasil-mvp` / hardcoded
   `0.1.0`) to every host — now reports `yggdrasil` and the real installed version
