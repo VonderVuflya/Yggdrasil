@@ -1,0 +1,9 @@
+.git
+**/__pycache__
+*.pyc
+*.sqlite
+.venv
+dist
+build
+i18n
+packaging/mcpb/*.mcpb

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Dockerfile** — lets Glama and any container host build, start and introspect the
+  MCP server (the stdio facade answers `initialize`/`tools/list` cold, no engine
+  needed), so directory listings that gate on a Glama check pass.
 - **Per-prompt auto-recall hook** (`UserPromptSubmit`) — the fix for "the agent
   forgets to use the memory". On every request it runs a cross-project recall and
   injects the top genuinely-relevant matches (raw-cosine gate, so off-topic
