@@ -3,7 +3,11 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.5.3] — 2026-06-28
+
+> 🎉 **Yggdrasil is now listed on [glama.ai](https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil)!**
+> The MCP server is indexed, builds and passes introspection, and scores **tier A** on
+> Glama's Tool Definition Quality Score. Most of this release is the work that got us there.
 
 ### Changed
 - **MCP tool definitions tuned to the TDQS rubric** (Glama's Tool Definition Quality
@@ -25,6 +29,9 @@ All notable changes to this project are documented here. Format loosely follows
 - **Dockerfile** — lets Glama and any container host build, start and introspect the
   MCP server (the stdio facade answers `initialize`/`tools/list` cold, no engine
   needed), so directory listings that gate on a Glama check pass.
+- **`glama.json`** + full canonical **Elastic-2.0 LICENSE text** (was a one-line
+  pointer GitHub read as `NOASSERTION`) so the license is detected and the server
+  is installable from directory listings.
 - **Per-prompt auto-recall hook** (`UserPromptSubmit`) — the fix for "the agent
   forgets to use the memory". On every request it runs a cross-project recall and
   injects the top genuinely-relevant matches (raw-cosine gate, so off-topic

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "yggdrasil",
   "display_name": "Yggdrasil Memory",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "One shared, durable memory for your AI agents — local-first, zero-dependency. Connects Claude Desktop to your running Yggdrasil engine.",
   "long_description": "Yggdrasil gives your AI agents a durable, cross-session, cross-tool memory of your own work. This extension exposes the Yggdrasil memory tools (recall / remember / search / bootstrap) to Claude Desktop over stdio. It is a thin facade: it talks to the local Yggdrasil engine you already run (default http://127.0.0.1:42069), so Claude Desktop shares the exact same memory as Claude Code and Codex. Zero Python dependencies — runs on your system python3.",
   "author": {
