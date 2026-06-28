@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.5.2] — 2026-06-28
 
 ### Added
 - **Proper settings: `--flags` + `ygg config` (no more `VAR=… ygg seed`).** Every
