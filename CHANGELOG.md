@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Distill timeout is configurable + self-explaining.** The per-file limit is now
+  `YGG_DISTILL_TIMEOUT` (default 120s). When files time out, `ygg seed` explains
+  they're *large, not stuck*, and prints a copy-paste re-run command with a higher
+  limit (preserving the `YGG_EMBED_URL`/`--model` you used). Timed-out files are no
+  longer marked done, so a plain re-run retries **only** them — while deterministic
+  errors (bad model output) still get marked done so they don't loop forever.
 - **`ygg seed` now also distills Codex CLI sessions** (`~/.codex/sessions/rollout-*.jsonl`),
   not just Claude Code transcripts. Sessions are grouped by their working directory
   so Codex lessons merge into the same per-project buckets as Claude's. The Codex

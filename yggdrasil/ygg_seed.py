@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -39,6 +40,10 @@ HOME = Path.home()
 YGG_HOME = Path(os.environ.get("YGG_HOME", str(HOME / ".yggdrasil")))
 OLLAMA_URL = os.environ.get("YGG_EMBED_URL", "http://127.0.0.1:11434")
 MAX_CHARS_PER_FILE = 14000  # window we feed the local model per source file
+# Per-file distill timeout (seconds). Big sessions on a heavier model can need
+# more than the default — raise via YGG_DISTILL_TIMEOUT. Timed-out files are NOT
+# marked done, so a plain re-run retries just them.
+DISTILL_TIMEOUT = int(os.environ.get("YGG_DISTILL_TIMEOUT", "120"))
 
 
 # --------------------------------------------------------------------------- #
@@ -239,12 +244,23 @@ Work log follows:
 Return only the JSON object."""
 
 
-def _ollama_generate(model: str, prompt: str, timeout: int = 120) -> str:
+def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str:
     body = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json"}).encode()
     req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout or DISTILL_TIMEOUT) as r:
         return json.loads(r.read().decode("utf-8")).get("response", "")
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """True if this distill failure was a timeout (file too big for the limit),
+    not a hang — so we can advise raising YGG_DISTILL_TIMEOUT and retry the file."""
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return True
+    if isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError)):
+        return True
+    s = str(exc).lower()
+    return "timed out" in s or "errno 60" in s
 
 
 # User text items Codex injects as context, not real dialogue — skipped at extract.
@@ -324,7 +340,7 @@ def distill_text(text: str, *, project: str, source: str, model: str,
                  user_id: str, namespace: str) -> dict[str, int]:
     text = text.strip()
     if not text:
-        return {"added": 0, "dup": 0, "errors": 0}
+        return {"added": 0, "dup": 0, "errors": 0, "timed_out": False}
     text = text[-MAX_CHARS_PER_FILE:]  # keep the most recent window
     try:
         raw = _ollama_generate(model, DISTILL_PROMPT.replace("{TEXT}", text))
@@ -343,8 +359,10 @@ def distill_text(text: str, *, project: str, source: str, model: str,
         else:
             lessons = []
     except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
-        print(f"    distill failed for {project}: {exc}", file=sys.stderr)
-        return {"added": 0, "dup": 0, "errors": 1}
+        timed_out = _is_timeout(exc)
+        why = "timed out (file too big for the limit)" if timed_out else str(exc)
+        print(f"    distill failed for {project}: {why}", file=sys.stderr)
+        return {"added": 0, "dup": 0, "errors": 1, "timed_out": timed_out}
     added = dup = errors = 0
     for item in lessons:
         if isinstance(item, str):
@@ -366,7 +384,7 @@ def distill_text(text: str, *, project: str, source: str, model: str,
             dup += status == "duplicate"
         except _ygg.YggError:
             errors += 1
-    return {"added": added, "dup": dup, "errors": errors}
+    return {"added": added, "dup": dup, "errors": errors, "timed_out": False}
 
 
 # --------------------------------------------------------------------------- #
@@ -456,7 +474,7 @@ class _Progress:
     def __init__(self, total: int, *, db_path: str | None = None):
         self.total = max(0, total)
         self.done = 0
-        self.added = self.dup = self.errors = 0
+        self.added = self.dup = self.errors = self.timed_out = 0
         self.start = time.time()
         self.label = "starting…"
         self.db_path = db_path
@@ -516,6 +534,7 @@ class _Progress:
             self.added += res.get("added", 0)
             self.dup += res.get("dup", 0)
             self.errors += res.get("errors", 0)
+            self.timed_out += 1 if res.get("timed_out") else 0
             self._draw()
 
     def log(self, msg: str) -> None:
@@ -559,7 +578,7 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
                    force: bool = False, progress: "_Progress | None" = None) -> dict[str, int]:
     project = project_override or src["project"]
     files = [f for f in _source_files(src) if f.exists()]
-    agg = {"added": 0, "dup": 0, "errors": 0, "skipped": 0}
+    agg = {"added": 0, "dup": 0, "errors": 0, "skipped": 0, "timed_out": 0}
     if state is not None and not force:
         todo = []
         for f in files:
@@ -580,12 +599,15 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
                                model=model, user_id=user_id, namespace=namespace)
         except Exception as exc:  # noqa: BLE001 — one bad file must never abort the source
             (progress.log if progress else lambda m: print(m, file=sys.stderr))(f"    skipped {f.name}: {exc}")
-            res = {"added": 0, "dup": 0, "errors": 1}
+            res = {"added": 0, "dup": 0, "errors": 1, "timed_out": _is_timeout(exc)}
         for k in ("added", "dup", "errors"):
             agg[k] += res[k]
+        agg["timed_out"] += 1 if res.get("timed_out") else 0
         if progress is not None:
             progress.file_done(res)
-        if state is not None:  # record processed at the file's current mtime + size
+        # Record state so the next run skips this file — UNLESS it timed out, so a
+        # plain re-run (with a higher YGG_DISTILL_TIMEOUT) retries just the big ones.
+        if state is not None and not res.get("timed_out"):
             try:
                 st = f.stat()
                 state[str(f)] = {"mtime": st.st_mtime, "size": st.st_size, "distilled_at": time.time()}
@@ -676,6 +698,19 @@ def seed(args: argparse.Namespace) -> int:
         interrupted = True
         _save_seed_state(state)
     progress.summary(interrupted=interrupted)
+    if progress.timed_out:
+        n = progress.timed_out
+        higher = max(180, DISTILL_TIMEOUT * 2)
+        # Rebuild the env the user ran with, so the suggested command is copy-paste ready.
+        prefix = f"YGG_DISTILL_TIMEOUT={higher} "
+        if OLLAMA_URL not in ("http://127.0.0.1:11434", "http://localhost:11434"):
+            prefix = f"YGG_EMBED_URL={OLLAMA_URL} " + prefix
+        suffix = f" --model {args.model}" if getattr(args, "model", None) else ""
+        print(f"\n⏱ {n} file(s) timed out at {DISTILL_TIMEOUT}s — they're large, not stuck "
+              "(the local model just needs longer on big sessions).")
+        print("  They were NOT marked done, so a re-run retries only them. Raise the limit:")
+        print(f"    {prefix}ygg seed{suffix}")
+        print(f"  (current {DISTILL_TIMEOUT}s; try {higher} or 300 for the biggest sessions.)")
     print("Check it:  ygg stats   ·   retrieve:  ygg recall --query \"…\"")
     hint = _scale_hint()
     if hint:

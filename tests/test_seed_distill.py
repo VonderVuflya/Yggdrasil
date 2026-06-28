@@ -46,7 +46,9 @@ class DistillRobustnessTest(unittest.TestCase):
         self.assertEqual(self._distill("{not valid")["errors"], 1)
 
     def test_empty(self):
-        self.assertEqual(self._distill(json.dumps({"lessons": []})), {"added": 0, "dup": 0, "errors": 0})
+        r = self._distill(json.dumps({"lessons": []}))
+        self.assertEqual({"added": r["added"], "dup": r["dup"], "errors": r["errors"]},
+                         {"added": 0, "dup": 0, "errors": 0})
 
 
 class IncrementalSeedTest(unittest.TestCase):
