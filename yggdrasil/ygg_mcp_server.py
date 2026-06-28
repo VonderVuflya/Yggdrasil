@@ -37,41 +37,86 @@ def _server_version() -> str:
     return "0"
 
 
+#: Canonical memory categories (enum for `type`). The engine accepts any string,
+#: but constraining the schema steers agents to the clean set — better recall
+#: filtering and less type drift (e.g. "CONVENTION" / "key_decision" duplicates).
+_MEMORY_TYPES = ["decision", "lesson", "convention", "fix", "project_status", "follow_up", "reference"]
+
+#: MCP annotation presets. Declaring these lowers the disclosure burden on the
+#: description (TDQS Behavioral Transparency) and tells hosts how each tool behaves.
+_READ_HINTS = {"readOnlyHint": True, "idempotentHint": True, "destructiveHint": False, "openWorldHint": False}
+
+
 def tool_schema() -> list[dict[str, Any]]:
-    # Rich, self-contained tool definitions: each description says what the tool
-    # does, WHEN to use it (and when to prefer a sibling), what it returns, and an
-    # example; every parameter is documented with constraints and examples. This
-    # is what lets a host's LLM pick the right tool unaided.
-    _TYPES = "'decision', 'lesson', 'convention', 'fix', 'project_status', 'follow_up', 'reference'"
+    # Definitions are tuned to the six TDQS dimensions: a tight, front-loaded
+    # description (purpose + scope + sibling differentiation + when/when-not),
+    # MCP annotations carrying the behavioral profile, a meaningful title, and
+    # all parameter meaning pushed into the schema (per-property descriptions +
+    # an enum on `type`) so the prose stays concise while coverage stays 100%.
     return [
         {
             "name": "ygg_health",
+            "title": "Check memory engine health",
             "description": (
-                "Health check for the local Yggdrasil memory engine. Returns the engine "
-                "status, the total number of stored memories, and whether optional "
-                "dense-vector embeddings are available (semantic search). Call this first "
-                "if any memory operation fails unexpectedly, to confirm the local engine "
-                "is running before retrying. Takes no arguments; read-only.\n\n"
-                "Returns: a JSON status object, e.g. {\"ok\": true, \"count\": 873, "
-                "\"embeddings_missing\": 0}."
+                "Report the local Yggdrasil memory engine's health: running status, total "
+                "stored-memory count, and whether semantic (dense-vector) search is "
+                "available. Call this first when any other ygg_* tool fails unexpectedly, to "
+                "confirm the engine is up before retrying. Returns a small JSON status object."
             ),
+            "annotations": {"title": "Check memory engine health", **_READ_HINTS},
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
-            "name": "ygg_bootstrap",
+            "name": "ygg_recall",
+            "title": "Recall prior work across all projects",
             "description": (
-                "Load the durable memory for ONE project at the start of work on it — the "
-                "project-scoped counterpart to ygg_recall. Call this before any non-trivial "
-                "task in a known project to surface prior decisions, conventions, lessons, "
-                "and open status, so you don't repeat past work or contradict earlier "
-                "choices. Read-only.\n\n"
-                "When to use: you know which project you're working in and want its context. "
-                "Prefer ygg_recall when you need cross-project matches ('have I solved this "
-                "anywhere?'), and ygg_search for a targeted query within one project.\n\n"
-                "Returns: the top-ranked memories scoped to the project (most-used and "
-                "pinned first).\n"
-                "Example: ygg_bootstrap(project=\"checkout-api\", query=\"webhook signing\")."
+                "Search durable memory ACROSS ALL projects for prior solutions, decisions, "
+                "and lessons to reuse. Use BEFORE solving any non-trivial problem (\"have I "
+                "handled this before?\"); for one known project use ygg_bootstrap to load its "
+                "context or ygg_search for a targeted query instead. Ranks by relevance and "
+                "past usage — lexical by default, semantic when embeddings are enabled."
             ),
+            "annotations": {"title": "Recall prior work across all projects", **_READ_HINTS},
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language description of the problem or topic to find prior work for, e.g. \"token refresh before opening socket\".",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": _MEMORY_TYPES,
+                        "description": "Optional filter to one memory category. Omit to recall across all types.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 50,
+                        "description": "Maximum number of memories to return (default 5).",
+                    },
+                    "json": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Return raw JSON instead of formatted text (default false). Set true to parse fields programmatically.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "ygg_bootstrap",
+            "title": "Load one project's memory",
+            "description": (
+                "Load the top durable memories for ONE project — decisions, conventions, "
+                "lessons, and open status — to prime work at the start of a task. Use when "
+                "you already know the project; for cross-project discovery use ygg_recall, "
+                "for a targeted in-project query use ygg_search. Results are project-scoped "
+                "and ranked, most-used and pinned first."
+            ),
+            "annotations": {"title": "Load one project's memory", **_READ_HINTS},
             "inputSchema": {
                 "type": "object",
                 "required": ["project"],
@@ -83,12 +128,13 @@ def tool_schema() -> list[dict[str, Any]]:
                     "query": {
                         "type": "string",
                         "default": "",
-                        "description": "Optional focus to rank within the project, e.g. \"payment retries\". Leave empty to get the project's most relevant memories overall.",
+                        "description": "Optional focus to rank within the project, e.g. \"payment retries\". Leave empty for the project's most relevant memories overall.",
                     },
                     "limit": {
                         "type": "integer",
                         "default": 5,
                         "minimum": 1,
+                        "maximum": 50,
                         "description": "Maximum number of memories to return (default 5). Raise for a fuller picture; lower to keep context small.",
                     },
                 },
@@ -97,18 +143,15 @@ def tool_schema() -> list[dict[str, Any]]:
         },
         {
             "name": "ygg_search",
+            "title": "Search one project's memory",
             "description": (
-                "Search durable memory within a SINGLE project, with an optional type filter "
-                "— the precise, project-scoped query tool. Use when you know which project a "
-                "fact lives in and want targeted results (e.g. every 'decision' in "
-                "'webdesk'). Read-only.\n\n"
-                "When to use: a focused lookup inside one known project. Prefer ygg_recall "
-                "for cross-project discovery, or ygg_bootstrap to load a project's overall "
-                "context at once.\n\n"
-                "Returns: ranked memories matching the query (lexical BM25, plus semantic "
-                "when embeddings are enabled).\n"
-                "Example: ygg_search(project=\"webdesk\", query=\"SSR hydration\", type=\"lesson\")."
+                "Search ONE project's durable memory with a free-text query and optional "
+                "type filter — the precise, in-project lookup. Use when you know the project "
+                "and want specific matches (e.g. every 'fix' about auth); for cross-project "
+                "discovery use ygg_recall, to load a project's whole context use "
+                "ygg_bootstrap. Lexical BM25 plus semantic ranking when embeddings are enabled."
             ),
+            "annotations": {"title": "Search one project's memory", **_READ_HINTS},
             "inputSchema": {
                 "type": "object",
                 "required": ["project", "query"],
@@ -123,12 +166,14 @@ def tool_schema() -> list[dict[str, Any]]:
                     },
                     "type": {
                         "type": "string",
-                        "description": f"Optional filter by memory type, one of: {_TYPES}. Omit to search all types.",
+                        "enum": _MEMORY_TYPES,
+                        "description": "Optional filter to one memory category. Omit to search all types.",
                     },
                     "limit": {
                         "type": "integer",
                         "default": 5,
                         "minimum": 1,
+                        "maximum": 50,
                         "description": "Maximum results to return (default 5).",
                     },
                     "json": {
@@ -141,65 +186,21 @@ def tool_schema() -> list[dict[str, Any]]:
             },
         },
         {
-            "name": "ygg_recall",
-            "description": (
-                "Search durable memory ACROSS ALL projects for prior solutions, lessons, and "
-                "decisions — the cross-project discovery tool. Call this BEFORE solving any "
-                "non-trivial problem to find similar past work to reuse (e.g. \"have I fixed "
-                "a flaky websocket reconnect before?\"). It is the single highest-value "
-                "habit: it surfaces hard-won fixes from other projects you would otherwise "
-                "repeat. Read-only.\n\n"
-                "When to use: any time the current problem might resemble past work, "
-                "regardless of project. To stay within one project, use ygg_search or "
-                "ygg_bootstrap instead.\n\n"
-                "Returns: the top matching memories ranked by relevance and usage, each "
-                "tagged with its source project and type.\n"
-                "Example: ygg_recall(query=\"rate limit retry with backoff\")."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural-language description of the problem or topic to find prior work for, e.g. \"token refresh before opening socket\".",
-                    },
-                    "type": {
-                        "type": "string",
-                        "description": f"Optional filter by memory type, one of: {_TYPES}. Omit to recall across all types.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 5,
-                        "minimum": 1,
-                        "description": "Maximum number of memories to return (default 5).",
-                    },
-                    "json": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Return raw JSON instead of formatted text (default false).",
-                    },
-                },
-                "additionalProperties": False,
-            },
-        },
-        {
             "name": "ygg_remember",
+            "title": "Save a durable memory",
             "description": (
-                "Save ONE durable, reusable fact to memory, scoped to a project — the write "
-                "half of the loop. Call this whenever you make a decision, learn a lesson, "
-                "fix a non-obvious bug, or hit a gotcha worth keeping for future sessions. "
-                "Store one atomic fact per call (not a whole transcript), written to be "
-                "useful out of context months later.\n\n"
-                "Side effects: persists the memory locally (SQLite + Markdown). Semantic "
-                "de-duplication merges near-identical memories automatically, and common "
-                "secret patterns (API keys, tokens) are refused so credentials never land "
-                "in memory.\n\n"
-                "Returns: the saved memory id, or a notice if it merged into an existing "
-                "duplicate.\n"
-                "Example: ygg_remember(project=\"checkout-api\", type=\"lesson\", "
-                "content=\"Webhook 401s were a rotated signing secret — update env + redeploy\")."
+                "Persist ONE atomic, reusable fact (a decision, lesson, fix, convention, or "
+                "status) to a project's durable memory for future sessions. Call right after "
+                "you decide something, learn a lesson, or fix a non-obvious bug; store one "
+                "idea per call, phrased to stand alone. Near-duplicates are merged "
+                "automatically and obvious secrets (API keys, tokens) are refused. Returns "
+                "the saved memory id."
             ),
+            "annotations": {
+                "title": "Save a durable memory",
+                "readOnlyHint": False, "destructiveHint": False,
+                "idempotentHint": False, "openWorldHint": False,
+            },
             "inputSchema": {
                 "type": "object",
                 "required": ["project", "type", "content"],
@@ -210,11 +211,12 @@ def tool_schema() -> list[dict[str, Any]]:
                     },
                     "type": {
                         "type": "string",
-                        "description": f"Memory category, one of: {_TYPES}.",
+                        "enum": _MEMORY_TYPES,
+                        "description": "Memory category that best fits the fact.",
                     },
                     "content": {
                         "type": "string",
-                        "description": "The single durable fact to remember — one atomic idea, phrased so it's still useful with no surrounding context.",
+                        "description": "The single durable fact — one atomic idea, phrased so it stays useful with no surrounding context.",
                     },
                     "source": {
                         "type": "string",
@@ -225,7 +227,7 @@ def tool_schema() -> list[dict[str, Any]]:
                         "type": "number",
                         "minimum": 0.0,
                         "maximum": 1.0,
-                        "description": "Optional confidence 0.0–1.0 in this fact; higher ranks it more strongly in recall. Defaults to the engine's standard for tool writes.",
+                        "description": "Optional confidence 0.0–1.0; higher ranks the memory more strongly in recall. Defaults to the engine's standard for tool writes.",
                     },
                 },
                 "additionalProperties": False,
@@ -233,23 +235,26 @@ def tool_schema() -> list[dict[str, Any]]:
         },
         {
             "name": "ygg_materialize",
+            "title": "Export a memory to Markdown",
             "description": (
-                "Export one stored memory to a human-readable Markdown note "
-                "(Obsidian-compatible) on disk. Use when the user wants to read, edit, or "
-                "archive a specific memory as a file rather than query it. This is an "
-                "export/read operation — it does not modify the stored memory.\n\n"
-                "Requires the memory's id (from a prior ygg_search / ygg_recall / "
-                "ygg_bootstrap result) and its project.\n\n"
-                "Returns: the path of the written Markdown note.\n"
-                "Example: ygg_materialize(id=\"ygg_4a5c82...\", project=\"content-factory\")."
+                "Write ONE stored memory to a human-readable Markdown note "
+                "(Obsidian-compatible) on disk; the stored memory itself is unchanged. Use "
+                "when the user wants to read, edit, or archive a specific memory as a file. "
+                "Needs the memory id from a prior ygg_recall / ygg_search / ygg_bootstrap "
+                "result plus its project; returns the written file path."
             ),
+            "annotations": {
+                "title": "Export a memory to Markdown",
+                "readOnlyHint": False, "destructiveHint": False,
+                "idempotentHint": True, "openWorldHint": False,
+            },
             "inputSchema": {
                 "type": "object",
                 "required": ["id", "project"],
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "The memory id to export, as returned by a prior search/recall/bootstrap, e.g. \"ygg_4a5c82a...\".",
+                        "description": "The memory id to export, as returned by a prior recall/search/bootstrap, e.g. \"ygg_4a5c82a...\".",
                     },
                     "project": {
                         "type": "string",

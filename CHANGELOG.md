@@ -6,10 +6,15 @@ All notable changes to this project are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Changed
-- **Richer MCP tool definitions** — every tool now documents what it does, when to
-  use it vs. its siblings, what it returns, and an example, and **every parameter
-  has a description** with constraints/examples. Raises tool-definition quality for
-  hosts (and directory scorers like Glama) so an LLM can pick the right tool unaided.
+- **MCP tool definitions tuned to the TDQS rubric** (Glama's Tool Definition Quality
+  Score) — every tool now has: a tight, front-loaded description that states purpose +
+  scope and **names its sibling tools** for disambiguation (recall = all projects,
+  bootstrap = load one project, search = query one project); explicit when/when-not
+  guidance; **MCP annotations** (`readOnlyHint`/`destructiveHint`/`idempotentHint`/
+  `openWorldHint`) carrying the behavioral profile; a meaningful `title`; 100%
+  per-parameter description coverage; and an **enum on `type`** (the canonical memory
+  categories — also curbs type drift). Estimated per-tool TDQS ~4.3–4.5 (tier A),
+  up from C.
 
 ### Fixed
 - **MCP `serverInfo`** reported a stale dev identity (`yggdrasil-mvp` / hardcoded
