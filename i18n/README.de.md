@@ -40,6 +40,10 @@ Claude Code, Codex und jeder MCP-Host erinnern sich an deine Entscheidungen, Erk
 
 ---
 
+<p align="center">
+  <img src="../docs/demo.gif" alt="Yggdrasil — a brand-new session already knows your project, and recalls a fix from another project" width="880">
+</p>
+
 Bei jedem neuen Chat vergisst deine KI alles. Du erklärst das Projekt, die Entscheidungen, die Stolperfallen erneut — jedes Mal, in jedem Tool. **Yggdrasil ist ein kleines, immer aktives Gedächtnis-Gehirn, an das sich jeder Agent anschließt.** Öffne eine neue Session, in einem beliebigen Projekt, mit einer beliebigen KI, und sie weiß bereits, was du entschieden hast, was kaputtgegangen ist und was noch offen ist — und sie lernt im Hintergrund ständig weiter.
 
 ```text

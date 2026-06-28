@@ -40,6 +40,10 @@
 
 ---
 
+<p align="center">
+  <img src="../docs/demo.gif" alt="Yggdrasil — a brand-new session already knows your project, and recalls a fix from another project" width="880">
+</p>
+
 每开一个新对话，你的 AI 都会忘得一干二净。于是你只能一遍又一遍地重新解释项目、决策、那些坑——每次都讲，每个工具里都讲。**Yggdrasil 是一个小巧、常驻的记忆大脑，任何助手都能接入它。** 在任何项目里、用任何 AI 开一个新会话，它都已经知道你定过什么、出过什么问题、还有什么没解决——而且它会在后台持续学习。
 
 ```text

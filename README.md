@@ -40,6 +40,10 @@ Claude Code, Codex, and any MCP host remember your decisions, lessons, and proje
 
 ---
 
+<p align="center">
+  <img src="docs/demo.gif" alt="Yggdrasil — a brand-new session already knows your project, and recalls a fix from another project" width="880">
+</p>
+
 Every new chat, your AI forgets. You re-explain the project, the decisions, the gotchas — every time, in every tool. **Yggdrasil is a tiny always-on memory brain that any agent plugs into.** Open a new session, in any project, with any AI, and it already knows what you decided, what broke, and what's still open — and it keeps learning in the background.
 
 ```text
