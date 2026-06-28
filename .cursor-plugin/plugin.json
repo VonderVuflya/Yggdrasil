@@ -1,6 +1,6 @@
 {
   "name": "yggdrasil",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "One shared, durable memory for your AI coding agents — local-first, zero-dependency.",
   "author": {
     "name": "VonderVuflya",

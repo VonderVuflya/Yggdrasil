@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.5.4] — 2026-06-29
 
 ### Changed
 - **Relicensed from Elastic-2.0 to GNU AGPL-3.0-or-later.** Elastic-2.0 is not an
