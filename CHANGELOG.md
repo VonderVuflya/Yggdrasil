@@ -5,6 +5,11 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- **MCP `serverInfo`** reported a stale dev identity (`yggdrasil-mvp` / hardcoded
+  `0.1.0`) to every host — now reports `yggdrasil` and the real installed version
+  (read from package metadata). Surfaced by Glama showing the server as `0.1.0`.
+
 ### Added
 - **Dockerfile** — lets Glama and any container host build, start and introspect the
   MCP server (the stdio facade answers `initialize`/`tools/list` cold, no engine

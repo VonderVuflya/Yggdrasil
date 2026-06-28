@@ -20,6 +20,23 @@ ROOT = Path(__file__).resolve().parents[1]
 YGG = Path(__file__).resolve().parent / "ygg.py"
 
 
+def _server_version() -> str:
+    """Real package version for MCP `serverInfo` — installed metadata first
+    (pip/uv/Glama), then the adjacent __init__.py for flat deploys."""
+    try:
+        from importlib.metadata import version
+        return version("yggdrasil-memory")
+    except Exception:
+        pass
+    try:
+        for line in (Path(__file__).resolve().parent / "__init__.py").read_text().splitlines():
+            if line.startswith("__version__"):
+                return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return "0"
+
+
 def tool_schema() -> list[dict[str, Any]]:
     return [
         {
@@ -231,7 +248,7 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                 {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "yggdrasil-mvp", "version": "0.1.0"},
+                    "serverInfo": {"name": "yggdrasil", "version": _server_version()},
                 },
             )
         if method == "notifications/initialized":
