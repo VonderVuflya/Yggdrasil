@@ -19,6 +19,7 @@
   <a href="#-工作原理">工作原理</a> ·
   <a href="#-yggdrasil-与同类方案对比">对比</a> ·
   <a href="#-命令">命令</a> ·
+  <a href="#️-配置">配置</a> ·
   <a href="#-常见问题">常见问题</a>
 </p>
 
@@ -108,6 +109,12 @@ uvx --from yggdrasil-memory ygg install      # one-time guided setup
 ygg doctor       # engine · models · MCP registration · hook — all green?
 ```
 然后就开始干活吧。让你的助手*“回忆一下我们对这个项目定过什么”*，或者告诉它*“记住这个决策”*——到下一个会话时它就已经在那儿了。
+
+**已经有历史积累？** 一键从你现有的 **Claude Code + Codex** 会话记录、Obsidian 库和 `CLAUDE.md` 仓库播种记忆——全部在本地提炼：
+
+```bash
+ygg seed --dry-run    # see what it'd import; drop --dry-run to distill for real
+```
 
 只想先试试引擎，不安装服务？`uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`。
 
@@ -225,12 +232,29 @@ Ollama 只**计算**向量／运行后台模型——向量和所有记忆仍然
 | `ygg supersede --id ID` | 归档一条被更新记忆所替代的过期记忆 |
 | `ygg materialize --id ID --project P` | 把一条记忆导出为一份 Obsidian 笔记 |
 
+**冷启动——从你已有的工作中播种**
+
+| 命令 | 作用 |
+| --- | --- |
+| `ygg seed` | 把你的 **Claude Code + Codex** 会话记录、Obsidian 库和 `CLAUDE.md` 仓库提炼为教训——增量、去重、完全本地 |
+| `ygg seed --dry-run` · `--force` | 仅发现 + 估算 · 重新提炼所有内容 |
+| `ygg distill --source PATH` | 把单个目录/文件提炼为教训 |
+| `ygg reindex` | 为缺失嵌入的记忆补建嵌入（恢复稠密检索） |
+
+在小模型上，大型会话可能会很慢——把提炼工作指向你局域网里一台更强的机器（[配置](#️-配置) ↓）：
+
+```bash
+ygg seed --ollama-url http://192.168.3.124:11434 --model llama3.2:3b --timeout 240
+```
+
 **服务与设置**
 
 | 命令 | 作用 |
 | --- | --- |
 | `ygg install` · `ygg setup` | 引导式设置 → 后台服务 + MCP 注册 |
-| `ygg doctor` · `ygg update` | 诊断安装 · 重新部署最新代码 |
+| `ygg doctor` · `ygg update` | 诊断安装（给出可执行的修复建议）· 升级 + 重新部署 |
+| `ygg config` | 显示/设置持久化配置——`list` · `get` · `set` · `unset` |
+| `ygg register` | 把 MCP 服务器（重新）注册到 Claude Code / Codex |
 | `ygg status` · `start` · `stop` · `restart` · `logs` | 管理这个常驻守护进程 |
 | `ygg hooks` · `unhooks` | 启用/停用 SessionStart 自动 bootstrap 钩子 |
 | `ygg recommend` | 显示与硬件匹配的模型目录 |
@@ -243,6 +267,42 @@ Ollama 只**计算**向量／运行后台模型——向量和所有记忆仍然
 ```
 
 </details>
+
+## ⚙️ 配置
+
+Yggdrasil 零配置即可工作。当你*确实*想改点什么时，每一项设置都遵循同样的解析顺序：
+
+> **`--flag`  >  环境变量  >  `~/.yggdrasil/config.json`  >  默认值**
+
+临时用一次就加个 flag，想让它长期生效就用 `ygg config set`：
+
+```bash
+ygg config list                       # effective values + where each one comes from
+ygg config set distill_timeout 240    # persist a setting
+ygg config get distill_url
+ygg config unset bg_model             # back to the default
+```
+
+| 设置项 | 默认值 | 控制什么 |
+| --- | --- | --- |
+| `distill_url` | 本地 Ollama | `ygg seed` / 整合所用的端点——可指向一台更强的机器 |
+| `distill_timeout` | `120` | 单个文件的提炼超时（秒）——会话较大时调高 |
+| `bg_model` | `qwen2.5:1.5b` | 用于提炼与整合的模型 |
+| `embed_model` · `embed_url` | 本地 | 嵌入模型 + 端点（守护进程级；运行 `ygg redeploy` 生效） |
+| `user_id` · `namespace` | `demo-user` · `yggdrasil-demo` | 存储记忆所用的身份 / 命名空间 |
+
+**在另一台机器上提炼。** 提炼（`ygg seed`）很重但只是偶尔进行；嵌入很轻却持续不断。所以 `distill_url` 被刻意与 `embed_url` 分开——把提炼工作发往你局域网里一台强劲的机器，而嵌入（以及你的数据）始终留在本地、常驻在线：
+
+```bash
+# on the beefy box (B): expose Ollama to the LAN + pull the model
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+ollama pull llama3.2:3b
+
+# on your laptop (A): make B the default distill endpoint
+ygg config set distill_url http://192.168.3.124:11434
+ygg config set bg_model    llama3.2:3b
+ygg seed     # distills on B; your SQLite DB + embeddings never leave A
+```
 
 ## ❓ 常见问题
 

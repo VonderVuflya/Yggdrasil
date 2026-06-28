@@ -110,6 +110,12 @@ ygg doctor       # engine · models · MCP registration · hook — all green?
 ```
 Then just work. Ask your agent *"recall what we decided about this project"*, or tell it *"remember this decision"* — and in the next session it's already there.
 
+**Already have history?** Seed memory from your existing **Claude Code + Codex** transcripts, Obsidian vaults, and `CLAUDE.md` repos in one shot — all distilled locally:
+
+```bash
+ygg seed --dry-run    # see what it'd import; drop --dry-run to distill for real
+```
+
 Just kicking the tyres? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
 
 ## 🔌 More ways to connect
@@ -226,12 +232,29 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | `ygg supersede --id ID` | Archive an outdated memory a newer one replaces |
 | `ygg materialize --id ID --project P` | Export one memory to an Obsidian note |
 
+**Cold start — seed from your existing work**
+
+| Command | What it does |
+| --- | --- |
+| `ygg seed` | Distill your **Claude Code + Codex** transcripts, Obsidian vaults, and `CLAUDE.md` repos into lessons — incremental, deduped, fully local |
+| `ygg seed --dry-run` · `--force` | Discover + estimate only · re-distill everything |
+| `ygg distill --source PATH` | Distill one dir/file into lessons |
+| `ygg reindex` | Backfill embeddings for memories missing them (restores dense recall) |
+
+Big sessions can be slow on a tiny model — point distillation at a beefier box on your LAN ([Configuration](#️-configuration) ↓):
+
+```bash
+ygg seed --ollama-url http://192.168.3.124:11434 --model llama3.2:3b --timeout 240
+```
+
 **Service & setup**
 
 | Command | What it does |
 | --- | --- |
 | `ygg install` · `ygg setup` | Guided setup → background service + MCP registration |
-| `ygg doctor` · `ygg update` | Diagnose the install · redeploy the latest code |
+| `ygg doctor` · `ygg update` | Diagnose the install (actionable fixes) · upgrade + redeploy |
+| `ygg config` | Show/set persistent settings — `list` · `get` · `set` · `unset` |
+| `ygg register` | (Re)register the MCP server with Claude Code / Codex |
 | `ygg status` · `start` · `stop` · `restart` · `logs` | Manage the always-on daemon |
 | `ygg hooks` · `unhooks` | Enable/disable the SessionStart auto-bootstrap hook |
 | `ygg recommend` | Show the hardware-aware model catalog |
@@ -244,6 +267,42 @@ Give it a personality — edit `~/.yggdrasil/identity.json`:
 ```
 
 </details>
+
+## ⚙️ Configuration
+
+Yggdrasil works with zero config. When you *do* want to change something, every setting resolves the same way:
+
+> **`--flag`  >  environment variable  >  `~/.yggdrasil/config.json`  >  default**
+
+Use a flag for one run, or `ygg config set` to make it stick:
+
+```bash
+ygg config list                       # effective values + where each one comes from
+ygg config set distill_timeout 240    # persist a setting
+ygg config get distill_url
+ygg config unset bg_model             # back to the default
+```
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `distill_url` | local Ollama | Endpoint for `ygg seed` / consolidation — point at a beefier box |
+| `distill_timeout` | `120` | Per-file distill timeout (seconds) — raise for big sessions |
+| `bg_model` | `qwen2.5:1.5b` | Model used to distill & consolidate |
+| `embed_model` · `embed_url` | local | Embedding model + endpoint (daemon-level; run `ygg redeploy` to apply) |
+| `user_id` · `namespace` | `demo-user` · `yggdrasil-demo` | Identity / namespace for stored memories |
+
+**Distill on another machine.** Distillation (`ygg seed`) is heavy but occasional; embeddings are light but constant. So `distill_url` is deliberately kept separate from `embed_url` — send distillation to a powerful box on your LAN while embeddings (and your data) stay local and always-on:
+
+```bash
+# on the beefy box (B): expose Ollama to the LAN + pull the model
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+ollama pull llama3.2:3b
+
+# on your laptop (A): make B the default distill endpoint
+ygg config set distill_url http://192.168.3.124:11434
+ygg config set bg_model    llama3.2:3b
+ygg seed     # distills on B; your SQLite DB + embeddings never leave A
+```
 
 ## ❓ FAQ
 

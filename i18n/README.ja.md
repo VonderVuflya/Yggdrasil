@@ -101,6 +101,12 @@ ygg doctor       # engine · models · MCP registration · hook — all green?
 ```
 あとは作業するだけです。エージェントに *「このプロジェクトについて決めたことを思い出して」* と尋ねたり、*「この決定を記憶して」* と伝えたりすれば — 次のセッションではもうそこにあります。
 
+**すでに履歴がありますか?** 既存の **Claude Code + Codex** のトランスクリプト、Obsidian vault、`CLAUDE.md` リポジトリから、メモリを一気にシードできます — すべてローカルで蒸留されます:
+
+```bash
+ygg seed --dry-run    # see what it'd import; drop --dry-run to distill for real
+```
+
 サービスをインストールせずに気軽に試したいだけですか? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`。
 
 ## 🔌 さらに接続する方法
@@ -217,12 +223,29 @@ Ollama はベクトルの**計算**とバックグラウンドモデルの実行
 | `ygg supersede --id ID` | 新しいメモリが置き換える古いメモリをアーカイブする |
 | `ygg materialize --id ID --project P` | 1 つのメモリを Obsidian ノートにエクスポートする |
 
+**コールドスタート — 既存の作業からシードする**
+
+| コマンド | 何をするか |
+| --- | --- |
+| `ygg seed` | あなたの **Claude Code + Codex** のトランスクリプト、Obsidian vault、`CLAUDE.md` リポジトリを教訓へと蒸留する — 増分的・重複排除済み・完全ローカル |
+| `ygg seed --dry-run` · `--force` | 発見と見積もりのみ · すべてを再蒸留 |
+| `ygg distill --source PATH` | 1 つのディレクトリ/ファイルを教訓へ蒸留する |
+| `ygg reindex` | 埋め込みが欠けているメモリを補完する（密な想起を復元) |
+
+大きなセッションは小さなモデルでは遅くなることがあります — 蒸留処理を LAN 上のより高性能なマシンに向けましょう（設定 ↓):
+
+```bash
+ygg seed --ollama-url http://192.168.3.124:11434 --model llama3.2:3b --timeout 240
+```
+
 **サービスとセットアップ**
 
 | コマンド | 何をするか |
 | --- | --- |
 | `ygg install` · `ygg setup` | ガイド付きセットアップ → バックグラウンドサービス + MCP 登録 |
-| `ygg doctor` · `ygg update` | インストールを診断 · 最新コードを再デプロイ |
+| `ygg doctor` · `ygg update` | インストールを診断（実行可能な修正を提示) · アップグレード + 再デプロイ |
+| `ygg config` | 永続的な設定を表示/変更 — `list` · `get` · `set` · `unset` |
+| `ygg register` | MCP サーバーを Claude Code / Codex に(再)登録する |
 | `ygg status` · `start` · `stop` · `restart` · `logs` | 常時稼働デーモンを管理 |
 | `ygg hooks` · `unhooks` | SessionStart 自動ブートストラップフックを有効化/無効化 |
 | `ygg recommend` | ハードウェアに応じたモデルカタログを表示 |
@@ -235,6 +258,42 @@ Ollama はベクトルの**計算**とバックグラウンドモデルの実行
 ```
 
 </details>
+
+## ⚙️ 設定
+
+Yggdrasil は設定不要で動作します。それでも何かを変えたくなったとき、すべての設定は同じ順序で解決されます:
+
+> **`--flag`  >  環境変数  >  `~/.yggdrasil/config.json`  >  既定値**
+
+1 回の実行だけならフラグを、恒久的に効かせたいなら `ygg config set` を使ってください:
+
+```bash
+ygg config list                       # effective values + where each one comes from
+ygg config set distill_timeout 240    # persist a setting
+ygg config get distill_url
+ygg config unset bg_model             # back to the default
+```
+
+| 設定 | 既定値 | 制御する内容 |
+| --- | --- | --- |
+| `distill_url` | ローカルの Ollama | `ygg seed` / 統合処理のエンドポイント — より高性能なマシンを指定可能 |
+| `distill_timeout` | `120` | ファイルごとの蒸留タイムアウト（秒) — 大きなセッションでは引き上げる |
+| `bg_model` | `qwen2.5:1.5b` | 蒸留と統合に使うモデル |
+| `embed_model` · `embed_url` | ローカル | 埋め込みモデル + エンドポイント（デーモンレベル。適用するには `ygg redeploy` を実行) |
+| `user_id` · `namespace` | `demo-user` · `yggdrasil-demo` | 保存されるメモリの識別子 / 名前空間 |
+
+**別のマシンで蒸留する。** 蒸留（`ygg seed`）は重い処理ですが、行うのは時々だけです。埋め込みは軽い処理ですが、常に行われます。そのため `distill_url` は意図的に `embed_url` とは分けてあります — 蒸留を LAN 上の高性能なマシンに送りつつ、埋め込み（とあなたのデータ)はローカルで常時稼働させたままにできます:
+
+```bash
+# on the beefy box (B): expose Ollama to the LAN + pull the model
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+ollama pull llama3.2:3b
+
+# on your laptop (A): make B the default distill endpoint
+ygg config set distill_url http://192.168.3.124:11434
+ygg config set bg_model    llama3.2:3b
+ygg seed     # distills on B; your SQLite DB + embeddings never leave A
+```
 
 ## ❓ よくある質問
 

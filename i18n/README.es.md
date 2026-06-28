@@ -101,6 +101,12 @@ ygg doctor       # engine · models · MCP registration · hook — all green?
 ```
 Luego simplemente trabaja. Pídele a tu agente *"recuerda lo que decidimos sobre este proyecto"*, o dile *"recuerda esta decisión"* — y en la siguiente sesión ya está ahí.
 
+**¿Ya tienes historial?** Siembra la memoria a partir de tus transcripciones existentes de **Claude Code + Codex**, tus vaults de Obsidian y tus repos con `CLAUDE.md` de una sola vez — todo destilado localmente:
+
+```bash
+ygg seed --dry-run    # see what it'd import; drop --dry-run to distill for real
+```
+
 ¿Solo quieres probarlo? `uvx --from yggdrasil-memory ygg serve --reset --db /tmp/ygg.sqlite`.
 
 ## 🔌 Más formas de conectar
@@ -217,12 +223,29 @@ Los agentes ven seis herramientas MCP: `ygg_health`, `ygg_bootstrap`, `ygg_searc
 | `ygg supersede --id ID` | Archiva una memoria obsoleta que una más nueva reemplaza |
 | `ygg materialize --id ID --project P` | Exporta una memoria a una nota de Obsidian |
 
+**Arranque en frío — siembra desde tu trabajo existente**
+
+| Comando | Qué hace |
+| --- | --- |
+| `ygg seed` | Destila tus transcripciones de **Claude Code + Codex**, tus vaults de Obsidian y tus repos con `CLAUDE.md` en lecciones — incremental, deduplicado, totalmente local |
+| `ygg seed --dry-run` · `--force` | Solo descubre + estima · vuelve a destilar todo |
+| `ygg distill --source PATH` | Destila un directorio/archivo en lecciones |
+| `ygg reindex` | Rellena los embeddings de las memorias que no los tienen (restaura el recall denso) |
+
+Las sesiones grandes pueden ir lentas en un modelo diminuto — apunta la destilación a una máquina más potente de tu LAN (Configuración ↓):
+
+```bash
+ygg seed --ollama-url http://192.168.3.124:11434 --model llama3.2:3b --timeout 240
+```
+
 **Servicio y configuración**
 
 | Comando | Qué hace |
 | --- | --- |
 | `ygg install` · `ygg setup` | Configuración guiada → servicio en segundo plano + registro MCP |
-| `ygg doctor` · `ygg update` | Diagnostica la instalación · redespliega el último código |
+| `ygg doctor` · `ygg update` | Diagnostica la instalación (correcciones accionables) · actualiza + redespliega |
+| `ygg config` | Muestra/establece la configuración persistente — `list` · `get` · `set` · `unset` |
+| `ygg register` | (Vuelve a) registrar el servidor MCP con Claude Code / Codex |
 | `ygg status` · `start` · `stop` · `restart` · `logs` | Gestiona el daemon siempre activo |
 | `ygg hooks` · `unhooks` | Activa/desactiva el hook de autoarranque SessionStart |
 | `ygg recommend` | Muestra el catálogo de modelos según el hardware |
@@ -235,6 +258,42 @@ Dale una personalidad — edita `~/.yggdrasil/identity.json`:
 ```
 
 </details>
+
+## ⚙️ Configuración
+
+Yggdrasil funciona sin configuración alguna. Cuando *sí* quieras cambiar algo, cada ajuste se resuelve de la misma manera:
+
+> **`--flag`  >  variable de entorno  >  `~/.yggdrasil/config.json`  >  por defecto**
+
+Usa un flag para una sola ejecución, o `ygg config set` para que persista:
+
+```bash
+ygg config list                       # effective values + where each one comes from
+ygg config set distill_timeout 240    # persist a setting
+ygg config get distill_url
+ygg config unset bg_model             # back to the default
+```
+
+| Ajuste | Por defecto | Qué controla |
+| --- | --- | --- |
+| `distill_url` | Ollama local | Endpoint para `ygg seed` / consolidación — apúntalo a una máquina más potente |
+| `distill_timeout` | `120` | Tiempo de espera de destilación por archivo (segundos) — súbelo para sesiones grandes |
+| `bg_model` | `qwen2.5:1.5b` | Modelo usado para destilar y consolidar |
+| `embed_model` · `embed_url` | local | Modelo de embeddings + endpoint (a nivel de daemon; ejecuta `ygg redeploy` para aplicarlo) |
+| `user_id` · `namespace` | `demo-user` · `yggdrasil-demo` | Identidad / namespace para las memorias almacenadas |
+
+**Destila en otra máquina.** La destilación (`ygg seed`) es pesada pero ocasional; los embeddings son ligeros pero constantes. Por eso `distill_url` se mantiene deliberadamente separado de `embed_url` — envía la destilación a una máquina potente de tu LAN mientras los embeddings (y tus datos) siguen siendo locales y siempre activos:
+
+```bash
+# on the beefy box (B): expose Ollama to the LAN + pull the model
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+ollama pull llama3.2:3b
+
+# on your laptop (A): make B the default distill endpoint
+ygg config set distill_url http://192.168.3.124:11434
+ygg config set bg_model    llama3.2:3b
+ygg seed     # distills on B; your SQLite DB + embeddings never leave A
+```
 
 ## ❓ Preguntas frecuentes
 
