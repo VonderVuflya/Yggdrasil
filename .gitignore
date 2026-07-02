@@ -15,6 +15,12 @@ vault/99-review/*.md
 
 # --- Stray runtime artifacts ---
 debugging_lesson_record.json
+.cache/
+.claude/
+scratchpad/
+
+# --- Release bundles (hosted on GitHub Releases, not in git) ---
+packaging/mcpb/*.mcpb
 
 # --- Python / tooling / OS ---
 __pycache__/
