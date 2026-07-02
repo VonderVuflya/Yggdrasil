@@ -40,6 +40,16 @@ Legend: **[S]** security · **[C]** correctness · **[P]** performance · **[DX]
 24. ✅ **[C] Ranking parity** — pin/usage now cross to the vector-only path via the same lexical channel. Deliberately scoped to the user-earned signals (pin, usage), NOT importance/recency, so the eval corpus is provably unchanged (lexical recall@1 still 0.77) while real pins work on both paths. *(fe11af7)*
 
 > **P2 dense benchmark — verified 2026-07-02 (Ollama):** the blob/cache refactor and ranking-parity change reproduce every published number exactly — lexical recall@1 **0.7714**, `all-minilm` **0.8286**, `paraphrase-multilingual` **0.9429** (recall@3 **1.0**, MRR **0.9714**, crosslingual EN→RU **0.80**). Ranking is unmoved, confirming the parity change (#24) is dense-eval-invariant as designed.
+>
+> **P2 speed — measured A/B, pre-P2 engine vs new (2026-07-02):** synthetic 384-dim embeddings, median of 5 interleaved rounds, dense `search()` latency per query:
+>
+> | memories | old (JSON parse/query) | new (blob + cached unit vectors) | speedup | storage |
+> | --- | --- | --- | --- | --- |
+> | 1,000 | 502 ms | 49 ms | **10×** | ~3.9× smaller |
+> | 3,000 | 2,575 ms | 142 ms | **18×** | 3.9× smaller |
+> | 6,000 | 8,102 ms | 282 ms | **29×** | 3.9× smaller |
+>
+> Speedup grows with store size (old is O(N) `json.loads` per query; new is a cached dot product) — at 6k memories, 8.1 s/query → 0.28 s/query. Storage ~3.9× smaller (float32 blob vs JSON-text floats); the recall numbers above confirm this is pure speed/size, no quality change.
 
 ## P3 — Benchmark credibility (armor for the 0.94 badge)
 
