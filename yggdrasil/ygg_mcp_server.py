@@ -7,17 +7,24 @@ the same payload normalization and secret guardrails.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
-import subprocess
 import sys
-import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-YGG = Path(__file__).resolve().parent / "ygg.py"
+
+# The MCP tool calls run the CLI's command functions IN-PROCESS (below) rather
+# than shelling out to a fresh `python ygg.py` per call. redirect_stdout/stderr
+# is process-global, so serialize calls — the HTTP facade is threaded, and two
+# concurrent redirects would clobber each other's capture. Tool calls are short
+# REST hops and the engine serializes writes anyway, so a lock is free here.
+_RUN_LOCK = threading.Lock()
 
 
 def _server_version() -> str:
@@ -273,25 +280,37 @@ def tool_schema() -> list[dict[str, Any]]:
 
 
 def run_ygg(args: list[str]) -> str:
-    env = os.environ.copy()
-    env.setdefault("YGG_ENGINE_URL", "http://127.0.0.1:42069")
     # No token default here: ygg_core resolves env -> ~/.yggdrasil/token itself.
     # Forcing the demo constant used to short-circuit that file fallback and
     # 401 every manually-launched facade despite a valid installed token.
-    env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
-    env.setdefault("YGG_USER_ID", "demo-user")
-    completed = subprocess.run(
-        [sys.executable, str(YGG), *args],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
-    output = (completed.stdout + completed.stderr).strip()
-    if completed.returncode != 0:
-        raise RuntimeError(output or f"ygg.py exited with {completed.returncode}")
-    return output
+    os.environ.setdefault("YGG_ENGINE_URL", "http://127.0.0.1:42069")
+    os.environ.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
+    os.environ.setdefault("YGG_USER_ID", "demo-user")
+    try:  # package + flat-layout imports
+        from . import ygg as _ygg
+    except ImportError:  # pragma: no cover
+        import ygg as _ygg
+
+    out, err = io.StringIO(), io.StringIO()
+    with _RUN_LOCK:
+        saved_argv = sys.argv
+        sys.argv = ["ygg", *args]
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = _ygg.main()
+        except SystemExit as exc:  # argparse validation errors call sys.exit
+            rc = exc.code if isinstance(exc.code, int) else 1
+        except Exception as exc:  # never let one bad call crash the MCP loop
+            rc, _ = 1, err.write(str(exc))
+        finally:
+            sys.argv = saved_argv
+
+    stdout, stderr = out.getvalue().strip(), err.getvalue().strip()
+    if rc not in (0, None):
+        raise RuntimeError((stdout + "\n" + stderr).strip() or f"ygg exited with {rc}")
+    # stdout is the payload; stderr (e.g. the supersede/related hint from a write)
+    # is appended AFTER it, never interleaved — so a --json payload stays parseable.
+    return (stdout + ("\n" + stderr if stderr else "")).strip()
 
 
 def call_tool(name: str, arguments: dict[str, Any]) -> str:
