@@ -8,6 +8,27 @@ All notable changes to this project are documented here. Format loosely follows
 Results of a full technical audit (2026-07-01) — see `docs/IMPROVEMENT-PLAN.md`
 for the complete prioritized plan this release starts working through.
 
+### Performance
+- **Embeddings stored as packed float32 blobs** (~4× smaller than the old JSON
+  text) with an **in-process cache of unit-normalized vectors** — dense search
+  and semantic dedup no longer `json.loads` every scoped embedding per query;
+  cosine is a dot product of two cached unit vectors.
+- **Lexical search pushes `ORDER BY bm25 LIMIT` into SQLite** instead of pulling
+  every row matching any query term into Python to score.
+- **Batched reindex** via Ollama's `/api/embed` (up to 32 texts/request, falls
+  back to per-item on older Ollama), and **startup warmup + reindex moved off
+  the bind path** so the engine listens immediately (no lazy-spawn port race).
+- **MCP tool calls run in-process** instead of spawning `python ygg.py` per call
+  (~100-200 ms each), with stdout/stderr cleanly separated so `--json` payloads
+  stay parseable.
+- Index on `(user_id, namespace, created_at)` backing the session-start hook's
+  `get_all`.
+
+### Changed
+- **Embedding model is versioned per row.** Switching `YGG_EMBED_MODEL` now marks
+  old vectors stale and reindexes them, instead of silently comparing vectors
+  across models (meaningless cosines). `ygg doctor` counts model-mismatched rows.
+
 ### Added
 - **`ygg delete --id` and `ygg reset --project|--source|--type|--all`** — the
   recovery path for a bad `ygg seed` (previously: manual sqlite surgery).
