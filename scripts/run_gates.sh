@@ -11,7 +11,10 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PORT="${YGG_MEMORY_PORT:-42069}"
+# Dedicated gates port — NOT the daemon's default 42069. Sharing it meant the
+# gate runner kill -9'd the user's real memory daemon, then raced its restart
+# for the port (flaky SEED FAILED when the daemon won).
+PORT="${YGG_MEMORY_PORT:-42169}"
 export YGG_ENGINE_URL="http://127.0.0.1:${PORT}"
 export YGG_ENGINE_TOKEN="${YGG_ENGINE_TOKEN:-yggdrasil-demo-token}"
 DB="$(mktemp -t ygg-gates-XXXX.sqlite)"
