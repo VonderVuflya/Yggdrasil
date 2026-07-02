@@ -30,6 +30,11 @@ for the complete prioritized plan this release starts working through.
   across models (meaningless cosines). `ygg doctor` counts model-mismatched rows.
 
 ### Added
+- **`ygg review [--apply]`** — work the governance queue from the CLI:
+  consolidate exact/near duplicates (keep the oldest, archive the rest) and
+  surface stale/conflict markers. Interactive on a TTY; `--apply --yes`
+  auto-consolidates duplicates and flags stale markers for manual review.
+  Everything is archived (reversible), never hard-deleted — curation you can act on.
 - **`ygg export-native --project P`** — the native-memory bridge: writes a
   curated, type-grouped digest of a project's memory into a managed block in
   `AGENTS.md`/`MEMORY.md` (idempotent; preserves hand-written content). Pairs

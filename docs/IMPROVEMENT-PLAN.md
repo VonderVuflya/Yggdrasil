@@ -64,9 +64,10 @@ Legend: **[S]** security · **[C]** correctness · **[P]** performance · **[DX]
 33. ✅ **First-hour polish** — actionable port-conflict hint instead of a traceback; non-interactive install announces the lexical-only fallback; README CLI/bridge/two-way-FAQ. *(ebb4951)*
 34. ✅ **Secret-guard hardening** — AWS/JWT/`github_pat_`/`glpat-`/Google/connection-string patterns added to the CLI; NEW engine-side guard so a raw `/add` bypassing the CLI still can't persist a credential (high-confidence structured tokens only — no false positive on the eval corpus; verified live 400 vs 200). *(2c640f1)*
 
+29. ✅ **`ygg review` command** — wired the existing dup/stale/conflict finders (`ygg_review_queue.py`) into a user-facing loop: report-only by default; `--apply` walks each issue interactively (keep-oldest & archive duplicates / archive-verified-stale / skip); `--apply --yes` auto-consolidates duplicates and FLAGS stale-conflict markers for manual review (never auto-archives them — they need repo verification). All actions are archive (reversible), never hard-delete — the "curated, not captured" wedge made tangible. Pure core (`_review_issues`, `_dup_keep_and_archive`) unit-tested; verified end-to-end on a seeded store (3 dups → 1 kept + 2 archived, stale flagged). *(pending commit)*
+
 **Remaining (each its own focused session — substantial features, not polish):**
 
-29. **`ygg review` command** for the governance queue — the infra exists (`ygg_review_queue.py` builds the dup/stale/conflict queue, `ygg_review_actions.py` applies), but it's gate-only, not user-facing. Wire a `ygg review [--apply]`: build queue → present each proposed action → approve/archive/skip → apply (non-destructive). Makes "curated, not captured" tangible. ~M.
 30. **Git-backed vault sync** — cross-machine sync through the user's *own* git repo (optional encryption). Counters cmem.ai/mem0 cloud sync without betraying local-first; no server to run. ~L.
 31. **Relation graph** (`SOLVES` / `SUPERSEDES` / `CONTRADICTS`) — unlocks "why" answers, pairs with the review command. ~L.
 

@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .ygg_core import RestMemoryBackend, YggConfig, YggError, record_is_archived
+    from .ygg_core import RestMemoryBackend, YggConfig, YggError, metadata_of, record_is_archived
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_core import RestMemoryBackend, YggConfig, YggError, record_is_archived
+    from ygg_core import RestMemoryBackend, YggConfig, YggError, metadata_of, record_is_archived
 
 
 DEFAULT_URL = "http://127.0.0.1:42069"
@@ -546,6 +546,98 @@ def export_native(args: argparse.Namespace) -> None:
     print(f"{status}: {target}  ({len(live)} memories in the ygg-managed block)")
 
 
+# ---- ygg review: work the governance queue (curation is the wedge) ---------
+# The dup/stale/conflict FINDERS live in ygg_review_queue (also used by the
+# gates); this wires them into an interactive, user-facing loop that ACTS —
+# non-destructively (archive, never hard-delete), the "curated, not captured"
+# promise made tangible.
+
+def _review_issues(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    try:
+        from . import ygg_review_queue as rq
+    except ImportError:  # flat layout
+        import ygg_review_queue as rq
+    live = [r for r in records if not record_is_archived(r)]
+    issues = (rq.find_exact_duplicates(live)
+              + rq.find_near_duplicates(live)
+              + rq.find_stale_or_conflict_markers(live))
+    order = {"high": 0, "medium": 1, "low": 2}
+    issues.sort(key=lambda i: (order.get(i.get("severity"), 9), i.get("kind"), i.get("project") or ""))
+    return issues
+
+
+def _dup_keep_and_archive(issue: dict[str, Any]) -> tuple[str, list[str]]:
+    """For a duplicate group (records sorted oldest-first): keep the oldest,
+    return the ids of the rest to archive."""
+    recs = issue.get("records") or []
+    keep = recs[0]["id"] if recs else None
+    return keep, [r["id"] for r in recs[1:]]
+
+
+def _print_issue(index: int, total: int, issue: dict[str, Any]) -> None:
+    print(f"\n[{index}/{total}] {issue['kind']} ({issue['severity']})  "
+          f"project={issue.get('project')} type={issue.get('type')}")
+    print(f"    → {issue.get('recommendation')}")
+    for j, r in enumerate(issue.get("records") or []):
+        tag = "keep " if (issue['kind'].endswith('duplicate') and j == 0) else "     "
+        print(f"    {tag}{r.get('id')}  {r.get('preview')}")
+
+
+def review(args: argparse.Namespace) -> None:
+    records = backend().get_all(user_id=args.user_id, limit=args.limit, namespace=args.namespace)
+    if args.project:
+        records = [r for r in records if metadata_of(r).get("project") == args.project]
+    issues = _review_issues(records)
+    if not issues:
+        print("✓ no review issues — memory is clean"
+              + (f" (project {args.project})" if args.project else ""))
+        return
+
+    interactive = sys.stdin.isatty() and not args.yes
+    if not args.apply and not interactive:
+        for i, issue in enumerate(issues, 1):
+            _print_issue(i, len(issues), issue)
+        print(f"\n{len(issues)} issue(s). Act on them: `ygg review --apply` (interactive) "
+              "or `ygg review --apply --yes` (auto-consolidate duplicates, flag the rest).")
+        return
+
+    archived = skipped = flagged = 0
+    for i, issue in enumerate(issues, 1):
+        _print_issue(i, len(issues), issue)
+        kind = issue["kind"]
+        if kind in ("exact_duplicate", "near_duplicate"):
+            keep, dups = _dup_keep_and_archive(issue)
+            if not dups:
+                continue
+            ans = "k" if not interactive else input(
+                f"    [k]eep oldest & archive {len(dups)} dup(s) / [s]kip? ").strip().lower()
+            if ans in ("", "k", "y", "keep"):
+                for mid in dups:
+                    backend().archive_memory(mid, {"review": "duplicate", "status": "archived"})
+                    archived += 1
+                print(f"    archived {len(dups)}, kept {keep}")
+            else:
+                skipped += 1
+        else:  # stale/conflict marker — needs human verification, NEVER auto-archived
+            if not interactive:
+                flagged += 1
+                print("    flagged for manual review (verify against the repo before archiving)")
+                continue
+            ans = input("    [a]rchive (verified stale) / [s]kip? ").strip().lower()
+            if ans in ("a", "y", "archive"):
+                backend().archive_memory(issue["records"][0]["id"], {"review": "stale", "status": "archived"})
+                archived += 1
+                print("    archived")
+            else:
+                skipped += 1
+    parts = [f"archived {archived}"]
+    if skipped:
+        parts.append(f"skipped {skipped}")
+    if flagged:
+        parts.append(f"flagged {flagged} (need manual review)")
+    print(f"\nreview done — {', '.join(parts)}. Archives are reversible (nothing hard-deleted).")
+
+
 def bootstrap(args: argparse.Namespace) -> None:
     # Query-stuffing with the CANONICAL type names (the enum agents write with),
     # so bootstrap ranks typed memories up — legacy names matched nothing.
@@ -650,6 +742,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="no narrowing filter: wipe the whole namespace")
     p.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
     p.set_defaults(func=reset)
+
+    p = sub.add_parser("review", parents=[common])
+    p.add_argument("--project", help="only review this project's memories")
+    p.add_argument("--apply", action="store_true", help="act on the queue (interactive on a TTY)")
+    p.add_argument("--yes", action="store_true", help="non-interactive: auto-consolidate duplicates, flag the rest")
+    p.add_argument("--limit", type=int, default=1000)
+    p.set_defaults(func=review)
 
     p = sub.add_parser("export-native", parents=[common])
     p.add_argument("--project", required=True)

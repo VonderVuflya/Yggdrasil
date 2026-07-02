@@ -64,6 +64,7 @@ Memory ops:
   ygg remember --project P --type T --content "..."
   ygg materialize --id ID --project P
   ygg export-native --project P [--out AGENTS.md]   Write a curated digest into AGENTS.md/MEMORY.md (feeds the native memory)
+  ygg review [--apply] [--project P]   Work the governance queue: consolidate duplicates, flag stale/conflicts (archives, reversible)
   ygg delete --id ID       Hard-delete ONE memory (irreversible; prefer supersede)
   ygg reset --project P | --source S | --all   Bulk hard-delete (undo a bad seed; confirms first)
 
@@ -76,7 +77,7 @@ SERVICE_CMDS = {
     "consolidate", "unconsolidate",
 }
 MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize",
-               "pin", "unpin", "supersede", "delete", "reset", "export-native"}
+               "pin", "unpin", "supersede", "delete", "reset", "export-native", "review"}
 
 
 def _port() -> int:
