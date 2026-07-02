@@ -348,6 +348,12 @@ class MemoryStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    def get_by_id(self, memory_id: str) -> dict[str, Any] | None:
+        """Direct indexed lookup by memory id (any store size, archived included)."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM memories WHERE id=?", (memory_id,)).fetchone()
+        return self._row_to_record(row) if row else None
+
     def find_by_hash(self, *, user_id: str, project: str, memory_type: str,
                      content_hash: str) -> dict[str, Any] | None:
         """Indexed dedup lookup: the live record with this content_hash in the
@@ -701,6 +707,18 @@ class Handler(BaseHTTPRequestHandler):
             namespace = (qs.get("namespace") or [None])[0]
             data = self.store.get_all(user_id=user_id, limit=limit, namespace=namespace)
             self._send(200, {"success": True, "data": data})
+            return
+        if parsed.path == "/get":
+            qs = parse_qs(parsed.query)
+            memory_id = (qs.get("id") or [""])[0]
+            if not memory_id:
+                self._send(400, {"success": False, "error": "id is required"})
+                return
+            rec = self.store.get_by_id(memory_id)
+            if rec is None:
+                self._send(404, {"success": False, "error": f"memory not found: {memory_id}"})
+                return
+            self._send(200, {"success": True, "data": rec})
             return
         if parsed.path == "/find_hash":
             qs = parse_qs(parsed.query)

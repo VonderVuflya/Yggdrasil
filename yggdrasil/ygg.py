@@ -396,11 +396,19 @@ def note_for_record(record: dict[str, Any]) -> str:
 
 
 def get_record_by_id(memory_id: str, args: argparse.Namespace) -> dict[str, Any]:
+    # Fast path: direct indexed lookup — works at any store size (the old scan
+    # could not materialize anything beyond the first `limit` records).
+    try:
+        rec = request_json("GET", "/get", query={"id": memory_id}).get("data")
+        if rec:
+            return rec
+    except YggError:
+        pass  # older engine without /get — bounded scan below
     result = request_json("GET", "/get_all", query={"user_id": args.user_id, "limit": args.limit})
     for record in result.get("data", []):
         if record.get("id") == memory_id:
             return record
-    raise YggError(f"Memory not found in first {args.limit} records: {memory_id}")
+    raise YggError(f"Memory not found: {memory_id}")
 
 
 def materialize(args: argparse.Namespace) -> None:

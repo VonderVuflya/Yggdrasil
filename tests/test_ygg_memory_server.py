@@ -263,6 +263,14 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in results], [record["id"]])
         self.assertGreater(results[0]["score"], 0.0)
 
+    def test_get_by_id_returns_record_or_none(self) -> None:
+        record = self.add_memory("Lookup me directly by id")
+
+        found = self.store.get_by_id(record["id"])
+        self.assertIsNotNone(found)
+        self.assertEqual(found["content"], "Lookup me directly by id")
+        self.assertIsNone(self.store.get_by_id("ygg_does_not_exist"))
+
     def test_update_content_refreshes_content_hash(self) -> None:
         import hashlib
 
