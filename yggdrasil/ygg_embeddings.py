@@ -56,6 +56,30 @@ class OllamaEmbedder:
                 return None
         return None
 
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float] | None] | None:
+        """Embed many texts in ONE request via Ollama's /api/embed (newer API).
+
+        Returns a list aligned with `texts` (None for any that produced nothing),
+        or None if the endpoint is unavailable/older — the caller then falls back
+        to per-item embed(). Turns a cold-start reindex of N memories from N round
+        trips into ceil(N/batch)."""
+        items = [(t or "").strip()[:4000] for t in texts]
+        if not items:
+            return []
+        body = json.dumps({"model": self.model, "input": items}).encode("utf-8")
+        req = urllib.request.Request(
+            self.url + "/api/embed", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                embs = json.loads(resp.read()).get("embeddings")
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
+            return None  # older Ollama (no /api/embed) or transport error -> caller loops
+        if not isinstance(embs, list) or len(embs) != len(items):
+            return None
+        return [e if isinstance(e, list) and e else None for e in embs]
+
 
 def get_embedder() -> OllamaEmbedder | None:
     """Return an embedder iff dense search is configured, else None (lexical)."""

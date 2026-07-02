@@ -772,13 +772,20 @@ class MemoryStore:
                 (self._embed_model,),
             ).fetchall()
         healed = 0
-        for row in rows:
-            vec = self._embed_raw(row["content"])
-            if vec:
-                with self._lock:
-                    with self._conn:
-                        self._store_embedding_locked(row["seq"], vec)
-                healed += 1
+        batch = getattr(self.embedder, "embed_batch", None)
+        CHUNK = 32
+        for i in range(0, len(rows), CHUNK):
+            chunk = rows[i:i + CHUNK]
+            texts = [r["content"] for r in chunk]
+            vecs = batch(texts) if batch is not None else None
+            if vecs is None:  # no batch API (or it failed) -> per-item fallback
+                vecs = [self._embed_raw(t) for t in texts]
+            for row, vec in zip(chunk, vecs):
+                if vec:
+                    with self._lock:
+                        with self._conn:
+                            self._store_embedding_locked(row["seq"], vec)
+                    healed += 1
         return healed
 
 
@@ -1044,13 +1051,7 @@ def main() -> int:
                 pass
 
     embedder = OllamaEmbedder(args.embed_url, args.embed_model) if args.embed_model else None
-    if embedder is not None:
-        embedder.embed("warmup")  # load the model before serving so the first adds don't time out
     store = MemoryStore(args.db, embedder=embedder)
-    if embedder is not None:
-        healed = store.reindex_embeddings()
-        if healed:
-            print(f"ygg-memory: backfilled {healed} missing embeddings", flush=True)
     Handler.store = store
     tok = args.token
     if args.token_file:  # a value from the 0600 file beats the visible CLI default
@@ -1107,6 +1108,18 @@ def main() -> int:
             _upd.refresh_cache()
             time.sleep(_upd.TTL)
     threading.Thread(target=_update_loop, daemon=True).start()
+
+    # Warm the model + backfill embeddings AFTER binding, off the request path.
+    # Doing it before bind delayed listening (a long reindex could let
+    # service.ensure_running lazy-spawn a SECOND daemon racing for the port).
+    if embedder is not None:
+        def _warm_and_reindex() -> None:
+            embedder.embed("warmup")  # load the model so the first real embed doesn't time out
+            healed = store.reindex_embeddings()
+            if healed:
+                print(f"ygg-memory: backfilled {healed} embeddings", flush=True)
+        threading.Thread(target=_warm_and_reindex, daemon=True).start()
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
