@@ -114,7 +114,7 @@ Von Haus aus läuft Yggdrasil auf **SQLite + FTS5 mit null Abhängigkeiten** —
 | Tier | Du fügst hinzu | Du gewinnst |
 | --- | --- | --- |
 | **0 · Standard** | nichts — SQLite + FTS5 | Stichwortsuche, null Abhängigkeiten, sofort — recall@1 = **0.77** |
-| **1 · semantisch** | ein **Embedding**-Modell (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | Suche nach **Bedeutung**, über Sprachen hinweg — recall@1 = **0.94** |
+| **1 · semantisch** | ein **Embedding**-Modell (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | Suche nach **Bedeutung**, über Sprachen hinweg — recall@1 = **0.93**, recall@3 **1.00** |
 | **2 · selbstpflegend** | ein kleines **LLM** (`qwen2.5:1.5b` ~1 GB) | Dedup/Merge des Gedächtnisses im Hintergrund (nur Vorschläge) |
 
 Ollama *berechnet* nur Vektoren und führt das Hintergrundmodell aus — jede Erinnerung und jeder Vektor bleibt in derselben lokalen SQLite. `ygg install` erkennt deine Hardware und empfiehlt eine passende Wahl (`ygg recommend` zeigt den vollständigen Katalog).
@@ -145,15 +145,14 @@ Die Engine selbst ist austauschbar — jeder Dienst, der den `MemoryBackend`-Ver
 
 ## 📊 Die Zahlen
 
-Gemessen mit [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 gelabelte Anfragen, dev/holdout-Split, recall@1:
+Gemessen mit [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 gelabelte Anfragen, die Ranking-Gewichte werden nur auf dem *dev*-Split abgestimmt, deshalb ist **holdout die unverzerrte Zahl** (recall@1, mit dem `paraphrase-multilingual`-Modell):
 
-| Modus | recall@1 | Paraphrase | sprachübergreifend (EN→RU) |
+| Suchansicht | holdout recall@1 | recall@3 | Null-Abh. lexikalisch |
 | --- | --- | --- | --- |
-| lexikalisch (Standard) | 0.77 | 0.63 | 0.00 |
-| dense · `all-minilm` (45 MB) | 0.83 | 0.88 | 0.00 |
-| dense · `paraphrase-multilingual` (~560 MB) | **0.94** | 0.88 | **0.80** |
+| **Innerhalb eines Projekts** (der reale Pfad, Pool ~6) | **0.93** | **1.00** | 0.77 |
+| **Gesamter Speicher** (kein Filter, Pool 35) | 0.80 | **1.00** | 0.77 |
 
-Stichwort- und Code-Identifier-Anfragen erreichen in jedem Modus 1.00; mit dem mehrsprachigen Modell **recall@3 = 1.00**. Glaub uns nicht einfach — führe es in etwa einer Minute selbst aus: `python3 eval/ygg_eval.py --mode lexical` ([BENCHMARKS.md](../BENCHMARKS.md), das per `pip show` auch die Null-Abhängigkeiten-Behauptung verifiziert).
+**recall@3 = 1.00 in beiden Ansichten** — mit dem lokalen Modell liegt die richtige Erinnerung *immer* in den Top 3, selbst bei der Suche im gesamten Speicher; innerhalb eines Projekts ist sie in 0.93 der Fälle auf Platz 1. Der lexikalische Modus ohne Abhängigkeiten löst Stichwort- und Code-Identifier-Anfragen bereits vollständig (1.00). Kleiner Korpus (n=35), daher zeigt die [vollständige Aufschlüsselung in BENCHMARKS.md](../BENCHMARKS.md) 95-%-Konfidenzintervalle, Pool-Größen und Werte je Klasse — und du kannst sie in einer Minute neu ausführen: `python3 eval/ygg_eval.py --report`.
 
 ## 🆚 Yggdrasil im Vergleich
 

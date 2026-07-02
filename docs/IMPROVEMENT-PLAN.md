@@ -51,11 +51,11 @@ Legend: **[S]** security · **[C]** correctness · **[P]** performance · **[DX]
 >
 > Speedup grows with store size (old is O(N) `json.loads` per query; new is a cached dot product) — at 6k memories, 8.1 s/query → 0.28 s/query. Storage ~3.9× smaller (float32 blob vs JSON-text floats); the recall numbers above confirm this is pure speed/size, no quality change.
 
-## P3 — Benchmark credibility (armor for the 0.94 badge)
+## P3 — Benchmark credibility (armor for the 0.94 badge) — ✅ 25 & 27 done; 26 partial (2026-07-02, commit cbe7b14)
 
-25. Publish **holdout-only** headline (current 0.94 aggregates dev+holdout, where dev tuned the fusion weights) and **disclose candidate pool sizes** (most queries pick from 2–9 same-project memories — a skeptic finds this in `eval/ygg_eval.py:215-218` in ten minutes). ~S.
-26. **Grow the corpus to 200+ queries**, including distilled *real* transcripts (what users actually experience is unmeasured today); add simple confidence intervals; pin the Ollama model digest. ~L.
-27. Run the lexical benchmark **in CI** and publish the output — turns the badge from a claim into a receipt. ~S (after #9).
+25. ✅ **Holdout headline + pool disclosure + full-corpus view.** `eval/ygg_eval.py --report` now leads with **holdout** recall@1 (weights tuned on dev only): **0.93** within a project (pool ~6), **0.80** full-corpus (pool 35, no filter). recall@3 = **1.00 in both views**. Per-query pool sizes (min 2 / median 6 / max 35) and 95% bootstrap CIs are printed. Re-measured on live Ollama; BENCHMARKS.md §1 + README numbers + badge (→ 0.93) + all 6 i18n rewritten to the honest two-view framing. *(cbe7b14)*
+26. ◑ **Partial.** Added 95% **bootstrap confidence intervals** (stdlib) and documented the model-digest-pinning caveat. **Not done:** growing the corpus to 200+ from *real* distilled transcripts — genuinely needs the user's own `ygg seed` output; the harness reports n=35 + wide CIs honestly and flags this as a known limitation in BENCHMARKS.md §4. ~L (remaining).
+27. ✅ Lexical benchmark **runs in CI** with a recall@1 ≥ 0.77 floor (the badge is now a receipt, not a claim). *(6a246e1, P1)*
 
 ## P4 — Features (differentiation-driven, in order of positioning value)
 

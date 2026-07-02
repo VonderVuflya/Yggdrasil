@@ -114,7 +114,7 @@ De fábrica, Yggdrasil funciona con **SQLite + FTS5 y cero dependencias** — b�
 | Nivel | Lo que añades | Lo que ganas |
 | --- | --- | --- |
 | **0 · por defecto** | nada — SQLite + FTS5 | búsqueda por palabras clave, cero dependencias, instantánea — recall@1 = **0.77** |
-| **1 · semántico** | un modelo de **embeddings** (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | búsqueda por **significado**, entre idiomas — recall@1 = **0.94** |
+| **1 · semántico** | un modelo de **embeddings** (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | búsqueda por **significado**, entre idiomas — recall@1 = **0.93**, recall@3 **1.00** |
 | **2 · automantenido** | un **LLM** pequeño (`qwen2.5:1.5b` ~1 GB) | deduplicación/fusión de memoria en segundo plano (solo propone) |
 
 Ollama solo *calcula* los vectores y ejecuta el modelo en segundo plano — cada memoria y cada vector se quedan en la misma SQLite local. `ygg install` detecta tu hardware y recomienda uno que encaje (`ygg recommend` muestra el catálogo completo).
@@ -145,15 +145,14 @@ El motor en sí es intercambiable — cualquier servicio que cumpla el contrato 
 
 ## 📊 Las cifras
 
-Medidas por [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 consultas etiquetadas, división dev/holdout, recall@1:
+Medidas por [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 consultas etiquetadas, pesos de ranking ajustados solo con la división *dev*, de modo que **el holdout es la cifra sin sesgo** (recall@1, con el modelo `paraphrase-multilingual`):
 
-| Modo | recall@1 | paráfrasis | translingüe (EN→RU) |
+| Modo de búsqueda | recall@1 (holdout) | recall@3 | léxico sin dependencias |
 | --- | --- | --- | --- |
-| léxico (por defecto) | 0.77 | 0.63 | 0.00 |
-| denso · `all-minilm` (45 MB) | 0.83 | 0.88 | 0.00 |
-| denso · `paraphrase-multilingual` (~560 MB) | **0.94** | 0.88 | **0.80** |
+| **Dentro de un proyecto** (la ruta real, pool ~6) | **0.93** | **1.00** | 0.77 |
+| **Store completo** (sin filtro, pool 35) | 0.80 | **1.00** | 0.77 |
 
-Las consultas por palabra clave y por identificador de código puntúan 1.00 en todos los modos; con el modelo multilingüe **recall@3 = 1.00**. No nos creas — vuelve a ejecutarlo en un minuto: `python3 eval/ygg_eval.py --mode lexical` ([BENCHMARKS.md](../BENCHMARKS.md), que además verifica la afirmación de cero dependencias vía `pip show`).
+**recall@3 = 1.00 en ambas vistas** — con el modelo local la memoria correcta está *siempre* entre las 3 primeras, incluso buscando en todo el store; es la #1 el 0.93 de las veces dentro de un proyecto. El modo léxico sin dependencias ya resuelve las consultas por palabra clave y por identificador de código (1.00). Corpus pequeño (n=35), así que el [desglose completo en BENCHMARKS.md](../BENCHMARKS.md) muestra intervalos de confianza al 95 %, tamaños de pool y puntuaciones por clase — y puedes volver a ejecutarlo en un minuto: `python3 eval/ygg_eval.py --report`.
 
 ## 🆚 Yggdrasil frente al resto
 
