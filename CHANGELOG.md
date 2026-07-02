@@ -3,42 +3,39 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.5.5] — 2026-07-03
 
-Results of a full technical audit (2026-07-01) — see `docs/IMPROVEMENT-PLAN.md`
-for the complete prioritized plan this release starts working through.
+The audit release — security & correctness fixes from a full technical audit
+(`docs/IMPROVEMENT-PLAN.md`), no behaviour changes for the happy path.
 
 ### Fixed
-- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK, …). The
-  query-side tokenizer was ASCII-only while the FTS index used `unicode61`, so
-  e.g. a Russian query matched nothing in lexical mode. Also splits `snake_case`.
-- **Engine writes are transactional.** An exception mid-write (disk full, bad
-  input) used to leave an open transaction that the *next* request silently
-  committed — producing memories invisible to lexical search. Row + FTS now
-  commit or roll back together.
-- **Malformed client input returns a JSON 400** instead of a traceback and a
-  dropped connection (`limit="abc"`, `importance:"high"`, …).
-- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted
-  dedup both ways (old text wrongly rejected as duplicate, new text duplicable).
-- **`ygg doctor` no longer prints "All good." when no MCP registration exists**
-  anywhere — a missing registration now fails the check.
+- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK …). The
+  query tokenizer was ASCII-only while the FTS index used `unicode61`, so e.g. a
+  Russian query matched nothing in lexical mode. Also splits `snake_case`.
+- **Engine writes are transactional** — an exception mid-write no longer leaves an
+  open transaction that the next request silently commits (which produced memories
+  invisible to lexical search). Row + FTS commit or roll back together.
+- **Malformed client input returns a JSON 400** instead of a traceback and a dropped
+  connection (`limit="abc"`, `importance:"high"`, …).
+- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted dedup
+  both ways.
+- **`ygg doctor` no longer prints "All good." with no MCP registration** anywhere.
 
 ### Security
-- **No more `yggdrasil-demo-token` fallback in the engine.** A bare `ygg serve`
-  now reuses (or generates) the standard 0600 `~/.yggdrasil/token` file instead
-  of accepting a publicly-known constant from any local process.
-- **The Streamable-HTTP MCP facade refuses to start without a token** (it is
-  built to sit behind public tunnels). Explicit `YGG_MCP_INSECURE=1` opts into
-  open mode for local testing.
-- **`ygg_materialize` output is confined to the vault root.** A remote MCP
-  client could previously write attacker-seeded `.md` files to any path the
-  user can write (e.g. `~/.claude/commands/` — persistent prompt injection).
-- **Auth token no longer written in plaintext** into world-readable launchd
-  plists (`install.sh` legacy path, still used by `ygg consolidate`), into MCP
-  registrations, or into `~/.claude.json` — everything now resolves the 0600
-  token file at call time.
-- **Timing-safe token comparison** (`hmac.compare_digest`) and a **Host-header
-  check** on loopback binds (blocks DNS-rebinding drive-bys from the browser).
+- **No `yggdrasil-demo-token` fallback in the engine** — a bare `ygg serve` reuses or
+  generates the 0600 `~/.yggdrasil/token` instead of a publicly-known constant.
+- **The Streamable-HTTP MCP facade refuses to start without a token** (`YGG_MCP_INSECURE=1`
+  opts into open mode for local testing).
+- **`ygg_materialize` output confined to the vault root** — a remote MCP client could
+  previously write attacker-seeded `.md` anywhere the user can write.
+- **Auth token no longer written in plaintext** into launchd plists, MCP registrations,
+  or `~/.claude.json` — everything resolves the 0600 token file at call time.
+- **Timing-safe token comparison** (`hmac.compare_digest`) + a **Host-header check** on
+  loopback binds (blocks DNS-rebinding drive-bys).
+
+### Changed
+- Untracked the `.mcpb` desktop bundles (hosted on GitHub Releases); ignore
+  `.cache/`, `.claude/`, `scratchpad/`.
 
 ## [0.5.4] — 2026-06-29
 

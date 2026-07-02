@@ -6,13 +6,13 @@
     "url": "https://github.com/VonderVuflya/yggdrasil",
     "source": "github"
   },
-  "version": "0.5.4",
+  "version": "0.5.5",
   "websiteUrl": "https://github.com/VonderVuflya/yggdrasil",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "yggdrasil-memory",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
