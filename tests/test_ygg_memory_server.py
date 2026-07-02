@@ -241,6 +241,48 @@ class MemoryStoreTests(unittest.TestCase):
     def test_tokenize_lowercases_and_drops_stopwords_and_one_char_tokens(self) -> None:
         self.assertEqual(tokenize("The A QUICK x fox"), ["quick", "fox"])
 
+    def test_tokenize_handles_cyrillic(self) -> None:
+        # The FTS index uses unicode61 (indexes Cyrillic fine); the query-side
+        # tokenizer must not silently drop non-Latin words.
+        self.assertEqual(tokenize("исправил Баг в парсере"), ["исправил", "баг", "парсере"])
+
+    def test_tokenize_splits_snake_case(self) -> None:
+        self.assertEqual(tokenize("retry_backoff limit"), ["retry", "backoff", "limit"])
+
+    def test_search_finds_cyrillic_content_lexically(self) -> None:
+        record = self.add_memory("исправил баг в парсере вакансий — дедупликация по хэшу")
+
+        results = self.store.search(
+            query="баг парсере",
+            user_id="user-1",
+            limit=5,
+            filters={},
+            namespaces=None,
+        )
+
+        self.assertEqual([r["id"] for r in results], [record["id"]])
+        self.assertGreater(results[0]["score"], 0.0)
+
+    def test_update_content_refreshes_content_hash(self) -> None:
+        import hashlib
+
+        old_hash = hashlib.sha256(b"old content for hashing").hexdigest()
+        record = self.add_memory(
+            "old content for hashing",
+            metadata={"project": "p", "type": "lesson", "content_hash": old_hash},
+        )
+
+        self.store.update(record["id"], data="new content after edit", metadata_patch=None, archived=None)
+
+        new_hash = hashlib.sha256(b"new content after edit").hexdigest()
+        # The dedup index must see the NEW hash (and the old one must be free again).
+        self.assertIsNotNone(
+            self.store.find_by_hash(user_id="user-1", project="p", memory_type="lesson", content_hash=new_hash)
+        )
+        self.assertIsNone(
+            self.store.find_by_hash(user_id="user-1", project="p", memory_type="lesson", content_hash=old_hash)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

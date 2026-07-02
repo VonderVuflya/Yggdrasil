@@ -28,6 +28,8 @@ Auth: every endpoint except /health requires `Authorization: Bearer <token>`.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -47,10 +49,14 @@ except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
 
 DEFAULT_HOST = os.environ.get("YGG_MEMORY_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("YGG_MEMORY_PORT", "42069"))
+# No hardcoded fallback: when neither env var nor --token/--token-file provides a
+# secret, main() reuses (or generates) the ~/.yggdrasil/token file instead of a
+# publicly-known demo constant — a bare `ygg serve` must never be open to every
+# local process. Clients (ygg_core, hooks, doctor) already read the same file.
 DEFAULT_TOKEN = (
     os.environ.get("YGG_MEMORY_TOKEN")
     or os.environ.get("YGG_ENGINE_TOKEN")
-    or "yggdrasil-demo-token"
+    or ""
 )
 DEFAULT_DB = os.environ.get("YGG_MEMORY_DB") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "ygg-memory.sqlite"
@@ -90,7 +96,12 @@ STOPWORDS = {
     "than", "to", "was", "were", "will", "with",
 }
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Unicode-aware: [^\W_] matches letters/digits in ANY script (Cyrillic, Greek,
+# CJK, …) but not underscore, so snake_case still splits into words. The FTS
+# index side already tokenizes with unicode61 — both sides now agree on
+# non-Latin text (an ASCII-only regex here made every non-Latin query match
+# nothing in lexical mode).
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 # Split camelCase / PascalCase: "scrollWidth" -> [scroll, Width],
 # "getBoundingClientRect" -> [get, Bounding, Client, Rect], "HTMLParser" -> [HTML, Parser].
@@ -245,22 +256,25 @@ class MemoryStore:
                 existing["event"] = "SEMANTIC_DUPLICATE"
                 return existing
         with self._lock:
-            cur = self._conn.execute(
-                """
-                INSERT INTO memories
-                    (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)
-                """,
-                (
-                    memory_id, user_id, namespace, scope, project, mem_type, content,
-                    content_hash, source, confidence, importance, created_at,
-                    json.dumps(metadata, sort_keys=True), embedding_json,
-                ),
-            )
-            seq = cur.lastrowid
-            if self.use_fts:
-                self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, expand_identifiers(content)))
-            self._conn.commit()
+            # One transaction for row + FTS: an exception rolls BOTH back instead of
+            # leaking a half-written memory the next commit would silently flush
+            # (a memories row with no mem_fts row is invisible to lexical search).
+            with self._conn:
+                cur = self._conn.execute(
+                    """
+                    INSERT INTO memories
+                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)
+                    """,
+                    (
+                        memory_id, user_id, namespace, scope, project, mem_type, content,
+                        content_hash, source, confidence, importance, created_at,
+                        json.dumps(metadata, sort_keys=True), embedding_json,
+                    ),
+                )
+                seq = cur.lastrowid
+                if self.use_fts:
+                    self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, expand_identifiers(content)))
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         record = self._row_to_record(row)
         record["event"] = "ADD"
@@ -280,8 +294,13 @@ class MemoryStore:
             if not isinstance(metadata, dict):
                 metadata = {}
 
+            content_hash = row["content_hash"]
             if data is not None:
                 content = data
+                # Edited content gets a fresh hash — a stale one corrupts dedup both
+                # ways (old text wrongly rejected, new text freely duplicable).
+                content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                metadata["content_hash"] = content_hash
             if metadata_patch:
                 metadata.update(metadata_patch)
             archived_flag = row["archived"]
@@ -290,27 +309,28 @@ class MemoryStore:
                 if archived:
                     metadata["status"] = "archived"
 
-            self._conn.execute(
-                "UPDATE memories SET content=?, project=?, type=?, source=?, archived=?, metadata_json=? WHERE seq=?",
-                (
-                    content,
-                    metadata.get("project", row["project"]),
-                    metadata.get("type", row["type"]),
-                    metadata.get("source", row["source"]),
-                    archived_flag,
-                    json.dumps(metadata, sort_keys=True),
-                    seq,
-                ),
-            )
-            if data is not None and self.use_fts:
-                self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
-            self._conn.commit()
+            with self._conn:  # row + FTS in one transaction (rollback on error)
+                self._conn.execute(
+                    "UPDATE memories SET content=?, content_hash=?, project=?, type=?, source=?, archived=?, metadata_json=? WHERE seq=?",
+                    (
+                        content,
+                        content_hash,
+                        metadata.get("project", row["project"]),
+                        metadata.get("type", row["type"]),
+                        metadata.get("source", row["source"]),
+                        archived_flag,
+                        json.dumps(metadata, sort_keys=True),
+                        seq,
+                    ),
+                )
+                if data is not None and self.use_fts:
+                    self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         if data is not None and self.embedder is not None:
             emb_json = self._embed_json(content)  # network call outside the lock
             with self._lock:
-                self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, seq))
-                self._conn.commit()
+                with self._conn:
+                    self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, seq))
                 row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         return self._row_to_record(row)
 
@@ -540,11 +560,11 @@ class MemoryStore:
             return
         now = time.time()
         with self._lock:
-            self._conn.executemany(
-                "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?",
-                [(now, i) for i in ids],
-            )
-            self._conn.commit()
+            with self._conn:
+                self._conn.executemany(
+                    "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?",
+                    [(now, i) for i in ids],
+                )
 
     def reindex_embeddings(self) -> int:
         """Embed any rows missing an embedding — self-heals after a cold-start
@@ -558,8 +578,8 @@ class MemoryStore:
             emb_json = self._embed_json(row["content"])
             if emb_json:
                 with self._lock:
-                    self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, row["seq"]))
-                    self._conn.commit()
+                    with self._conn:
+                        self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, row["seq"]))
                 healed += 1
         return healed
 
@@ -584,8 +604,23 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authorized(self) -> bool:
+        if not self.token:
+            return False  # never run open: no token means nothing authenticates
         header = self.headers.get("Authorization", "")
-        return header == f"Bearer {self.token}"
+        # Constant-time compare — a plain == leaks the token byte-by-byte to a
+        # local timing attacker.
+        return hmac.compare_digest(header, f"Bearer {self.token}")
+
+    def _host_ok(self) -> bool:
+        """Reject DNS-rebinding: when bound to loopback, only loopback Host
+        headers are legitimate — a browser lured to attacker.com resolving to
+        127.0.0.1 sends `Host: attacker.com`. Deliberate non-loopback binds
+        (YGG_MEMORY_HOST) are the operator's exposure choice and pass through."""
+        bind = self.server.server_address[0]
+        if bind not in ("127.0.0.1", "::1", "localhost"):
+            return True
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
+        return host in ("127.0.0.1", "localhost", "::1", "")
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -600,7 +635,29 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- routes ------------------------------------------------------------
 
+    def _guarded(self, handler) -> None:
+        """Malformed client input must yield a JSON 400, not a traceback and a
+        dropped connection (which also used to leave a transaction open)."""
+        try:
+            handler()
+        except (ValueError, TypeError, KeyError) as exc:
+            self._send(400, {"success": False, "error": f"bad request: {exc}"})
+        except Exception as exc:  # noqa: BLE001 — last-resort JSON 500
+            self._send(500, {"success": False, "error": f"internal error: {exc}"})
+
     def do_GET(self) -> None:
+        self._guarded(self._route_get)
+
+    def do_POST(self) -> None:
+        self._guarded(self._route_post)
+
+    def do_PUT(self) -> None:
+        self._guarded(self._route_put)
+
+    def _route_get(self) -> None:
+        if not self._host_ok():
+            self._send(403, {"success": False, "error": "forbidden host header"})
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             embedder = self.store.embedder
@@ -657,7 +714,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, {"success": False, "error": f"not found: {parsed.path}"})
 
-    def do_POST(self) -> None:
+    def _route_post(self) -> None:
+        if not self._host_ok():
+            self._send(403, {"success": False, "error": "forbidden host header"})
+            return
         if not self._authorized():
             self._send(401, {"success": False, "error": "unauthorized"})
             return
@@ -696,7 +756,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, {"success": False, "error": f"not found: {parsed.path}"})
 
-    def do_PUT(self) -> None:
+    def _route_put(self) -> None:
+        if not self._host_ok():
+            self._send(403, {"success": False, "error": "forbidden host header"})
+            return
         if not self._authorized():
             self._send(401, {"success": False, "error": "unauthorized"})
             return
@@ -761,6 +824,30 @@ def main() -> int:
                 tok = file_tok
         except OSError:
             pass
+    if not tok:
+        # Nothing configured anywhere: reuse (or create) the standard install
+        # token file instead of a publicly-known demo constant. Clients
+        # (ygg_core, hooks, doctor) auto-read the same file, so a bare
+        # `ygg serve` stays plug-and-play — without being open to every local process.
+        home = os.environ.get("YGG_HOME") or os.path.join(os.path.expanduser("~"), ".yggdrasil")
+        token_path = os.path.join(home, "token")
+        try:
+            with open(token_path, encoding="utf-8") as fh:
+                tok = fh.read().strip()
+        except OSError:
+            tok = ""
+        if not tok:
+            import secrets
+            tok = secrets.token_hex(24)
+            try:
+                os.makedirs(home, exist_ok=True)
+                with open(token_path, "w", encoding="utf-8") as fh:
+                    fh.write(tok)
+                os.chmod(token_path, 0o600)
+                print(f"ygg-memory: no token configured — generated one -> {token_path}", flush=True)
+            except OSError:
+                print("ygg-memory: no token configured — using an ephemeral random token "
+                      f"(could not write {token_path})", flush=True)
     Handler.token = tok
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
