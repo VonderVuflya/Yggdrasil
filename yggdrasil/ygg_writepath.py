@@ -10,7 +10,7 @@ relationship, then applies only NON-DESTRUCTIVE actions (archive), high-confiden
 only — everything else is left for human review. Runs in the background; costs
 the main agent zero tokens.
 
-  python3 scripts/ygg_writepath.py [--apply] [--limit N]   # dry-run by default
+  python3 ygg_writepath.py [--apply] [--limit N]   # dry-run by default (scheduled via `ygg consolidate`)
 """
 
 from __future__ import annotations

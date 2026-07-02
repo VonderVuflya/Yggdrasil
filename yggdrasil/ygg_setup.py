@@ -4,8 +4,8 @@
 `recommend` prints a hardware summary + a model catalog with descriptions and a
 per-model fit verdict for THIS machine, plus recommended picks. `wizard` is the
 interactive flow (model + feature choices) that writes ~/.yggdrasil/config.json
-and hands off to install.sh. The recommend logic is pure/testable; the wizard
-needs a TTY.
+and hands off to service.install (cross-platform). The recommend logic is
+pure/testable; the wizard needs a TTY.
 """
 
 from __future__ import annotations

@@ -3,10 +3,12 @@
 
 A thin dispatcher over the package modules. The Python components
 (serve / mcp / setup / memory ops) run in-process; service lifecycle
-(install / start / ...) delegates to the bundled ``install.sh``, which copies
-the engine into ``~/.yggdrasil`` and wires up the launchd service + MCP
-registration. Default install is zero-config and lexical-only — picking a local
-model is an optional upgrade in ``ygg setup``.
+(install / start / ...) goes through ``service.py`` — cross-platform
+(launchd / systemd / schtasks + lazy-spawn), deploys the engine into
+``~/.yggdrasil`` and wires up MCP registration. Only the macOS-only
+``consolidate`` schedule still shells out to the bundled ``install.sh``.
+Default install is zero-config and lexical-only — picking a local model
+is an optional upgrade in ``ygg setup``.
 """
 
 from __future__ import annotations

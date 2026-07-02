@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Yggdrasil MVP CLI: a thin, safe facade over the engine.s REST API."""
+"""Yggdrasil memory CLI: a thin, safe facade over the engine's REST API."""
 
 from __future__ import annotations
 
@@ -46,14 +46,7 @@ def env_default(name: str, fallback: str) -> str:
 
 
 def engine_url() -> str:
-    return env_default("YGG_ENGINE_URL", env_default("YGG_ENGINE_URL", DEFAULT_URL)).rstrip("/")
-
-
-def engine_token() -> str:
-    token = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN")
-    if not token:
-        raise YggError("Missing token. Set YGG_ENGINE_TOKEN or YGG_ENGINE_TOKEN.")
-    return token
+    return env_default("YGG_ENGINE_URL", DEFAULT_URL).rstrip("/")
 
 
 def namespace_default() -> str:
@@ -424,7 +417,9 @@ def materialize(args: argparse.Namespace) -> None:
 
 
 def bootstrap(args: argparse.Namespace) -> None:
-    args.query = " ".join([args.query, "debugging_lesson decision failed_approach workflow project instruction"]).strip()
+    # Query-stuffing with the CANONICAL type names (the enum agents write with),
+    # so bootstrap ranks typed memories up — legacy names matched nothing.
+    args.query = " ".join([args.query, "decision lesson convention fix project_status follow_up reference"]).strip()
     args.type = None
     args.limit = args.limit or 5
     args.rerank = False

@@ -19,7 +19,7 @@ YGG = Path(__file__).resolve().parent / "ygg.py"
 YGG_MCP = Path(__file__).resolve().parent / "ygg_mcp_server.py"
 REPORTS = ROOT / "reports"
 DEFAULT_URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
-DEFAULT_TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
+DEFAULT_TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_MEMORY_TOKEN") or "yggdrasil-demo-token"
 
 
 def run(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
