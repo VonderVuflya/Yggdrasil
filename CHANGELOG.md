@@ -3,103 +3,122 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-07-03
 
-Results of a full technical audit (2026-07-01) — see `docs/IMPROVEMENT-PLAN.md`
-for the complete prioritized plan this release starts working through.
+Performance, benchmark honesty, and the native-memory bridge.
 
 ### Performance
-- **Embeddings stored as packed float32 blobs** (~4× smaller than the old JSON
-  text) with an **in-process cache of unit-normalized vectors** — dense search
-  and semantic dedup no longer `json.loads` every scoped embedding per query;
-  cosine is a dot product of two cached unit vectors.
-- **Lexical search pushes `ORDER BY bm25 LIMIT` into SQLite** instead of pulling
-  every row matching any query term into Python to score.
-- **Batched reindex** via Ollama's `/api/embed` (up to 32 texts/request, falls
-  back to per-item on older Ollama), and **startup warmup + reindex moved off
-  the bind path** so the engine listens immediately (no lazy-spawn port race).
-- **MCP tool calls run in-process** instead of spawning `python ygg.py` per call
-  (~100-200 ms each), with stdout/stderr cleanly separated so `--json` payloads
-  stay parseable.
-- Index on `(user_id, namespace, created_at)` backing the session-start hook's
-  `get_all`.
+- **Embeddings stored as packed float32 blobs** (~3.9× smaller than JSON text) with an
+  **in-process cache of unit-normalized vectors** — dense search/dedup no longer
+  `json.loads` every scoped embedding per query; cosine is a dot of two cached unit
+  vectors. Measured A/B vs the previous engine: dense `search()` **10–29× faster** and
+  the speedup grows with store size (at 6k memories, 8.1 s/query → 0.28 s). Still
+  zero-dependency (stdlib `array`, no numpy).
+- **Lexical search pushes `ORDER BY bm25 LIMIT` into SQLite** instead of Python-scoring
+  every term match.
+- **Batched reindex** via Ollama `/api/embed` (32/req, per-item fallback) and **startup
+  warmup/reindex moved off the bind path** (no lazy-spawn port race).
+- **MCP tool calls run in-process** instead of a `python ygg.py` subprocess per call,
+  with stdout/stderr separated so `--json` stays parseable.
+- Index on `(user_id, namespace, created_at)` for the session-start hook's `get_all`.
 
 ### Changed
-- **Embedding model is versioned per row.** Switching `YGG_EMBED_MODEL` now marks
-  old vectors stale and reindexes them, instead of silently comparing vectors
-  across models (meaningless cosines). `ygg doctor` counts model-mismatched rows.
+- **Embedding model is versioned per row.** Switching `YGG_EMBED_MODEL` marks old vectors
+  stale and reindexes them, instead of comparing vectors across models. `ygg doctor`
+  counts model-mismatched rows.
+- **Benchmark reporting is credibility-first.** `eval/ygg_eval.py --report` leads with
+  **holdout** recall@1 (weights tuned on dev only): 0.93 within a project, 0.80 full-corpus,
+  recall@3 = 1.00 in both. Discloses candidate pool sizes (min 2 / median 6 / max 35) and
+  95% bootstrap CIs. README badge → holdout 0.93; BENCHMARKS.md + all 6 translations
+  rewritten to the honest two-view framing.
 
 ### Added
-- **`ygg review [--apply]`** — work the governance queue from the CLI:
-  consolidate exact/near duplicates (keep the oldest, archive the rest) and
-  surface stale/conflict markers. Interactive on a TTY; `--apply --yes`
-  auto-consolidates duplicates and flags stale markers for manual review.
-  Everything is archived (reversible), never hard-deleted — curation you can act on.
-- **`ygg export-native --project P`** — the native-memory bridge: writes a
-  curated, type-grouped digest of a project's memory into a managed block in
-  `AGENTS.md`/`MEMORY.md` (idempotent; preserves hand-written content). Pairs
-  with `ygg seed` (which imports *from* the native memory) so Yggdrasil is the
-  layer above Claude Code's and Codex's own memory, feeding them both ways.
-- **`ygg delete --id` and `ygg reset --project|--source|--type|--all`** — the
-  recovery path for a bad `ygg seed` (previously: manual sqlite surgery).
-  `reset` previews the exact count and demands typed confirmation (or `--yes`).
-  The engine's `/delete` + `/purge` are the only destructive endpoints and are
-  deliberately **not** exposed as MCP tools.
-- **`GET /get?id=`** — direct indexed lookup; `ygg materialize` now works at any
-  store size (the old scan couldn't reach memories beyond the first 1000).
-- **CI** (GitHub Actions): unit tests on ubuntu/macos/windows (py3.10 + 3.13),
-  behavioral gates on ubuntu/macos, and a benchmark job that fails the build if
-  lexical recall@1 regresses below the published 0.77.
-- **`distill_num_ctx` setting** (default 8192) — seed distillation now sends
-  `options.num_ctx` explicitly instead of inheriting Ollama's server default
-  (often 4096, which silently truncated long transcripts); output cut off by
-  the token limit is rejected instead of persisted as a garbage lesson.
-
-### Fixed
-- **Hooks work on Windows** (`python3 … || python …` launcher — `python3` has no
-  Windows shim, so plugin hooks failed silently forever) and **context is never
-  injected twice** when both the plugin and `ygg hooks` are enabled
-  (atomic per-session / per-prompt locks; registration dedupe by script name).
-- **`ygg bootstrap` query-stuffing used legacy type names** absent from the
-  canonical enum — typed memories got no ranking boost.
-- Deleted dead code: `materialize_memory.py` (diverged twin with its own YAML
-  bug), `ygg.py engine_token()` (triple copy-paste of one env var), duplicated
-  env lookup in the quality gate; docstrings caught up with the `service.py`
-  rewrite.
-- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK, …). The
-  query-side tokenizer was ASCII-only while the FTS index used `unicode61`, so
-  e.g. a Russian query matched nothing in lexical mode. Also splits `snake_case`.
-- **Engine writes are transactional.** An exception mid-write (disk full, bad
-  input) used to leave an open transaction that the *next* request silently
-  committed — producing memories invisible to lexical search. Row + FTS now
-  commit or roll back together.
-- **Malformed client input returns a JSON 400** instead of a traceback and a
-  dropped connection (`limit="abc"`, `importance:"high"`, …).
-- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted
-  dedup both ways (old text wrongly rejected as duplicate, new text duplicable).
-- **`ygg doctor` no longer prints "All good." when no MCP registration exists**
-  anywhere — a missing registration now fails the check.
+- **`ygg export-native --project P`** — the native-memory bridge: writes a curated,
+  type-grouped digest of a project's memory into a managed block in `AGENTS.md`/`MEMORY.md`
+  (idempotent; preserves hand-written content). Pairs with `ygg seed` (which imports *from*
+  the native memory) so Yggdrasil is the layer above Claude Code's and Codex's own memory,
+  feeding them both ways.
+- **`ygg review [--apply]`** — work the governance queue from the CLI: consolidate exact/
+  near duplicates (keep the oldest, archive the rest) and surface stale/conflict markers.
+  Interactive on a TTY; `--apply --yes` auto-consolidates duplicates and flags stale markers
+  for manual review. Everything is archived (reversible), never hard-deleted.
+- **Ranking parity** — a pinned or frequently-recalled memory retrieved only by vector now
+  gets its pin/usage boost, via the same channel lexical hits use.
 
 ### Security
-- **Engine-side secret guard** — a raw `POST /add` that bypasses the CLI now
-  also refuses obvious credentials (AWS keys, JWTs, GitHub/GitLab PATs, private
-  keys, connection-string passwords). High-confidence structured tokens only, so
-  legitimate memories that mention "password"/"secret" are unaffected.
-- **No more `yggdrasil-demo-token` fallback in the engine.** A bare `ygg serve`
-  now reuses (or generates) the standard 0600 `~/.yggdrasil/token` file instead
-  of accepting a publicly-known constant from any local process.
-- **The Streamable-HTTP MCP facade refuses to start without a token** (it is
-  built to sit behind public tunnels). Explicit `YGG_MCP_INSECURE=1` opts into
-  open mode for local testing.
-- **`ygg_materialize` output is confined to the vault root.** A remote MCP
-  client could previously write attacker-seeded `.md` files to any path the
-  user can write (e.g. `~/.claude/commands/` — persistent prompt injection).
-- **Auth token no longer written in plaintext** into world-readable launchd
-  plists (`install.sh` legacy path, still used by `ygg consolidate`), into MCP
-  registrations, or into `~/.claude.json` — everything now resolves the 0600
-  token file at call time.
-- **Timing-safe token comparison** (`hmac.compare_digest`) and a **Host-header
-  check** on loopback binds (blocks DNS-rebinding drive-bys from the browser).
+- **Engine-side secret guard** — a raw `POST /add` bypassing the CLI now also refuses obvious
+  credentials (AWS keys, JWTs, GitHub/GitLab PATs, private keys, connection-string passwords).
+  High-confidence structured tokens only, so memories that merely mention "password"/"secret"
+  are unaffected.
+
+### Fixed
+- **Cross-platform `hw()`** — Linux `/proc/meminfo` + `/proc/cpuinfo` (+ nvidia-smi), Windows
+  PowerShell CIM; the model recommender no longer sizes off 0 GB off-macOS.
+- **First-hour polish** — actionable port-conflict hint instead of a traceback; non-interactive
+  install announces the lexical-only fallback.
+
+## [0.6.0] — 2026-07-03
+
+Robustness, DX and CI — the second slice of the audit plan.
+
+### Added
+- **CI** (GitHub Actions): unit tests on ubuntu/macos/windows (py3.10 + 3.13),
+  behavioural gates on ubuntu/macos, and a benchmark job that fails the build if
+  lexical recall@1 regresses below 0.77 — the badge becomes a receipt.
+- **`ygg delete --id` and `ygg reset --project|--source|--type|--all`** — recover from a
+  bad `ygg seed` without sqlite surgery. `reset` previews the count and demands typed
+  confirmation (or `--yes`). The engine's `/delete` + `/purge` are the only destructive
+  endpoints and are deliberately **not** exposed as MCP tools.
+- **`GET /get?id=`** — direct indexed lookup; `ygg materialize` now works at any store
+  size (the old scan couldn't reach memories past the first 1000).
+- **`distill_num_ctx` setting** (default 8192) — seed distillation sends `options.num_ctx`
+  explicitly instead of inheriting Ollama's default (often 4096, which silently truncated
+  long transcripts); output cut off by the token limit is rejected, not persisted.
+
+### Fixed
+- **Hooks work on Windows** (`python3 … || python …` launcher) and **context is never
+  injected twice** when both the plugin and `ygg hooks` are enabled (atomic per-session /
+  per-prompt locks; registration dedupe by script name).
+- **`ygg bootstrap` used legacy type names** absent from the canonical enum — typed
+  memories got no ranking boost.
+- Deleted dead code (`materialize_memory.py` twin, dead `engine_token()`, duplicated
+  gate env lookup); docstrings caught up with the `service.py` rewrite.
+- **Gates run on a dedicated port** (42169) instead of sharing the daemon's 42069 — the
+  runner used to kill the user's daemon and race its restart (flaky `SEED FAILED`).
+
+## [0.5.5] — 2026-07-03
+
+The audit release — security & correctness fixes from a full technical audit
+(`docs/IMPROVEMENT-PLAN.md`), no behaviour changes for the happy path.
+
+### Fixed
+- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK …). The
+  query tokenizer was ASCII-only while the FTS index used `unicode61`, so e.g. a
+  Russian query matched nothing in lexical mode. Also splits `snake_case`.
+- **Engine writes are transactional** — an exception mid-write no longer leaves an
+  open transaction that the next request silently commits (which produced memories
+  invisible to lexical search). Row + FTS commit or roll back together.
+- **Malformed client input returns a JSON 400** instead of a traceback and a dropped
+  connection (`limit="abc"`, `importance:"high"`, …).
+- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted dedup
+  both ways.
+- **`ygg doctor` no longer prints "All good." with no MCP registration** anywhere.
+
+### Security
+- **No `yggdrasil-demo-token` fallback in the engine** — a bare `ygg serve` reuses or
+  generates the 0600 `~/.yggdrasil/token` instead of a publicly-known constant.
+- **The Streamable-HTTP MCP facade refuses to start without a token** (`YGG_MCP_INSECURE=1`
+  opts into open mode for local testing).
+- **`ygg_materialize` output confined to the vault root** — a remote MCP client could
+  previously write attacker-seeded `.md` anywhere the user can write.
+- **Auth token no longer written in plaintext** into launchd plists, MCP registrations,
+  or `~/.claude.json` — everything resolves the 0600 token file at call time.
+- **Timing-safe token comparison** (`hmac.compare_digest`) + a **Host-header check** on
+  loopback binds (blocks DNS-rebinding drive-bys).
+
+### Changed
+- Untracked the `.mcpb` desktop bundles (hosted on GitHub Releases); ignore
+  `.cache/`, `.claude/`, `scratchpad/`.
 
 ## [0.5.4] — 2026-06-29
 
