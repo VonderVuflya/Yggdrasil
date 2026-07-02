@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: unit tests (${{ matrix.os }} · py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10"]
+        include:
+          - os: ubuntu-latest
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+  gates:
+    name: behavioral gates (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run every gate against the real engine
+        run: bash scripts/run_gates.sh
+
+  benchmark:
+    name: lexical retrieval floor (the README badge's receipt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: recall@1 must not regress below the published lexical floor
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "eval")
+          from ygg_eval import evaluate
+
+          result = evaluate(embedder=None)  # lexical-only: deterministic, zero-dep
+          print(f"recall@1={result['recall@1']}  recall@3={result['recall@3']}  mrr={result['mrr']}")
+          for klass, stats in result["by_class"].items():
+              print(f"  {klass:>12}: n={stats['n']}  recall@1={stats['recall@1']}")
+          floor = 0.77
+          assert result["recall@1"] >= floor, (
+              f"lexical recall@1 regressed: {result['recall@1']} < {floor}")
+          PY
