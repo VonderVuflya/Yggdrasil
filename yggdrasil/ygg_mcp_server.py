@@ -263,7 +263,7 @@ def tool_schema() -> list[dict[str, Any]]:
                     "output_dir": {
                         "type": "string",
                         "default": "vault/04-learnings",
-                        "description": "Directory to write the Markdown note into (default \"vault/04-learnings\").",
+                        "description": "Directory to write the Markdown note into (default \"vault/04-learnings\"). Must stay inside the local vault root; paths escaping it are rejected.",
                     },
                 },
                 "additionalProperties": False,
@@ -275,7 +275,9 @@ def tool_schema() -> list[dict[str, Any]]:
 def run_ygg(args: list[str]) -> str:
     env = os.environ.copy()
     env.setdefault("YGG_ENGINE_URL", "http://127.0.0.1:42069")
-    env.setdefault("YGG_ENGINE_TOKEN", env.get("YGG_ENGINE_TOKEN", "yggdrasil-demo-token"))
+    # No token default here: ygg_core resolves env -> ~/.yggdrasil/token itself.
+    # Forcing the demo constant used to short-circuit that file fallback and
+    # 401 every manually-launched facade despite a valid installed token.
     env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
     env.setdefault("YGG_USER_ID", "demo-user")
     completed = subprocess.run(
@@ -353,10 +355,30 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str:
                 "--project",
                 str(arguments["project"]),
                 "--output-dir",
-                str(arguments.get("output_dir", "vault/04-learnings")),
+                _safe_output_dir(str(arguments.get("output_dir") or "vault/04-learnings")),
             ]
         )
     raise RuntimeError(f"Unknown tool: {name}")
+
+
+def _safe_output_dir(raw: str) -> str:
+    """Confine ygg_materialize writes to the vault root.
+
+    This facade is also reachable by remote clients (via the Streamable-HTTP
+    transport); an unconstrained output_dir would let them drop .md files with
+    attacker-seeded content anywhere the user can write — e.g. into
+    ~/.claude/commands/, which becomes a persistent prompt injection. Relative
+    paths resolve under the facade root as before; the resolved target must
+    stay inside the vault (override the root with YGG_VAULT_DIR)."""
+    root = Path(os.environ.get("YGG_VAULT_DIR") or (ROOT / "vault")).resolve()
+    candidate = Path(raw)
+    target = (candidate if candidate.is_absolute() else (ROOT / candidate)).resolve()
+    if target != root and root not in target.parents:
+        raise RuntimeError(
+            f"output_dir must stay inside the vault root ({root}); got {raw!r}. "
+            "Set YGG_VAULT_DIR to relocate the vault."
+        )
+    return str(target)
 
 
 def success(message_id: Any, result: dict[str, Any]) -> dict[str, Any]:

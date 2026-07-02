@@ -118,6 +118,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
+    if not TOKEN and os.environ.get("YGG_MCP_INSECURE") != "1":
+        # This transport is explicitly built to sit behind a public tunnel — an
+        # unauthenticated start must be a loud, deliberate choice, not a silent
+        # default when the token file happens to be missing.
+        print(
+            "ygg mcp-http: refusing to start with NO auth token.\n"
+            "  Fix: run `ygg install` (writes ~/.yggdrasil/token) or set YGG_MCP_TOKEN.\n"
+            "  Local testing only: set YGG_MCP_INSECURE=1 to run open.",
+            file=sys.stderr,
+        )
+        return 2
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     auth = "bearer-protected" if TOKEN else "OPEN (no token — local only!)"
     print(f"ygg mcp-http: Streamable-HTTP MCP on http://{HOST}:{PORT}/mcp  [{auth}]",
