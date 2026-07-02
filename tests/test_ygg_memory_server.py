@@ -271,6 +271,37 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(found["content"], "Lookup me directly by id")
         self.assertIsNone(self.store.get_by_id("ygg_does_not_exist"))
 
+    def test_delete_by_id_removes_row_and_fts_entry(self) -> None:
+        record = self.add_memory("deletable secret leaked accidentally")
+
+        self.assertTrue(self.store.delete_by_id(record["id"]))
+        self.assertFalse(self.store.delete_by_id(record["id"]))  # already gone
+        self.assertEqual(self.store.count(), 0)
+        self.assertEqual(
+            self.store.search(query="deletable secret", user_id="user-1", limit=5, filters={}, namespaces=None),
+            [],
+        )
+
+    def test_purge_filters_dry_run_and_deletes(self) -> None:
+        self.add_memory("seed lesson one", metadata={"project": "p", "source": "seed-claude"})
+        self.add_memory("seed lesson two", metadata={"project": "p", "source": "seed-claude"})
+        keeper = self.add_memory("hand-written keeper", metadata={"project": "p", "source": "ygg-cli"})
+
+        preview = self.store.purge(user_id="user-1", source="seed-claude", dry_run=True)
+        self.assertEqual(preview, 2)
+        self.assertEqual(self.store.count(), 3)  # dry run deletes nothing
+
+        deleted = self.store.purge(user_id="user-1", source="seed-claude")
+        self.assertEqual(deleted, 2)
+        self.assertEqual(self.store.count(), 1)
+        remaining = self.store.get_all(user_id="user-1", limit=10, namespace=None)
+        self.assertEqual([r["id"] for r in remaining], [keeper["id"]])
+        # FTS agrees: purged rows are unsearchable, the keeper still matches.
+        self.assertEqual(
+            self.store.search(query="seed lesson", user_id="user-1", limit=5, filters={}, namespaces=None),
+            [],
+        )
+
     def test_update_content_refreshes_content_hash(self) -> None:
         import hashlib
 

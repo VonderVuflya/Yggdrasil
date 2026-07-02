@@ -193,6 +193,41 @@ def supersede(args: argparse.Namespace) -> None:
     print(f"superseded (archived) {args.id}")
 
 
+def delete(args: argparse.Namespace) -> None:
+    """HARD delete one memory — irreversible. For 'this should never have been
+    saved' (secrets, junk); prefer `ygg supersede` for merely-outdated memories."""
+    request_json("POST", "/delete", {"memory_id": args.id})
+    print(f"deleted {args.id} (irreversible)")
+
+
+def reset(args: argparse.Namespace) -> None:
+    """Bulk HARD delete by filter — the recovery path for a bad `ygg seed` or a
+    model switch (previously: manual sqlite surgery). Previews the count and
+    demands confirmation; always scoped to the namespace + user."""
+    narrowing = {k: getattr(args, k) for k in ("project", "source", "type") if getattr(args, k)}
+    if not narrowing and not args.all:
+        raise YggError("Refusing to reset without a filter. Narrow with --project/--source/--type, "
+                       "or pass --all to wipe the whole namespace.")
+    payload: dict[str, Any] = {"user_id": args.user_id, "namespace": args.namespace,
+                               "all": args.all, **narrowing}
+    preview = request_json("POST", "/purge", {**payload, "dry_run": True})["data"]["deleted"]
+    if preview == 0:
+        print("(nothing matches — 0 memories to delete)")
+        return
+    scope = ", ".join(f"{k}={v}" for k, v in ({"namespace": args.namespace, **narrowing}).items())
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise YggError(f"Would PERMANENTLY delete {preview} memories ({scope}). "
+                           "Non-interactive run: pass --yes to confirm.")
+        answer = input(f"About to PERMANENTLY delete {preview} memories ({scope}). "
+                       f"Type 'delete' to confirm: ").strip()
+        if answer != "delete":
+            print("aborted — nothing deleted")
+            return
+    deleted = request_json("POST", "/purge", payload)["data"]["deleted"]
+    print(f"deleted {deleted} memories (irreversible)")
+
+
 def write_memory(
     *,
     content: str,
@@ -516,6 +551,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("supersede", parents=[common])
     p.add_argument("--id", required=True)
     p.set_defaults(func=supersede)
+
+    p = sub.add_parser("delete", parents=[common])
+    p.add_argument("--id", required=True)
+    p.set_defaults(func=delete)
+
+    p = sub.add_parser("reset", parents=[common])
+    p.add_argument("--project")
+    p.add_argument("--source", help="e.g. seed-claude / seed-obsidian — undo one seeding run")
+    p.add_argument("--type")
+    p.add_argument("--all", action="store_true", help="no narrowing filter: wipe the whole namespace")
+    p.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
+    p.set_defaults(func=reset)
 
     return parser
 

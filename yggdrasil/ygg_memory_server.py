@@ -394,6 +394,48 @@ class MemoryStore:
         rec["similarity"] = round(best, 4)
         return rec
 
+    def delete_by_id(self, memory_id: str) -> bool:
+        """HARD delete one memory (row + FTS). The engine's philosophy is
+        archive-never-delete; this and purge() are the explicit escape hatch
+        for unrecoverable mistakes (a bad `ygg seed`, leaked content)."""
+        with self._lock:
+            with self._conn:
+                row = self._conn.execute("SELECT seq FROM memories WHERE id=?", (memory_id,)).fetchone()
+                if row is None:
+                    return False
+                if self.use_fts:
+                    self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
+                self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
+        return True
+
+    def purge(self, *, user_id: str, namespace: str | None = None, project: str | None = None,
+              source: str | None = None, mem_type: str | None = None, dry_run: bool = False) -> int:
+        """HARD delete every memory matching the filters (always scoped to
+        user_id; namespace/project/source/type narrow it). dry_run only counts.
+        Callers (the /purge route, the CLI) enforce that at least one narrowing
+        filter — or an explicit all flag — was provided."""
+        where = ["user_id=?"]
+        params: list[Any] = [user_id]
+        for column, value in (("namespace", namespace), ("project", project),
+                              ("source", source), ("type", mem_type)):
+            if value:
+                where.append(f"{column}=?")
+                params.append(value)
+        where_sql = " AND ".join(where)
+        with self._lock:
+            rows = self._conn.execute(f"SELECT seq FROM memories WHERE {where_sql}", params).fetchall()
+            seqs = [r["seq"] for r in rows]
+            if dry_run or not seqs:
+                return len(seqs)
+            with self._conn:
+                for i in range(0, len(seqs), 500):  # stay under SQLite's variable cap
+                    chunk = seqs[i:i + 500]
+                    marks = ",".join("?" for _ in chunk)
+                    if self.use_fts:
+                        self._conn.execute(f"DELETE FROM mem_fts WHERE rowid IN ({marks})", chunk)
+                    self._conn.execute(f"DELETE FROM memories WHERE seq IN ({marks})", chunk)
+        return len(seqs)
+
     def count(self) -> int:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -760,6 +802,33 @@ class Handler(BaseHTTPRequestHandler):
                 dedupe_threshold=body.get("dedupe_threshold"),
             )
             self._send(200, {"success": True, "data": record})
+            return
+        if parsed.path == "/delete":
+            memory_id = body.get("memory_id")
+            if not memory_id:
+                self._send(400, {"success": False, "error": "memory_id is required"})
+                return
+            if not self.store.delete_by_id(str(memory_id)):
+                self._send(404, {"success": False, "error": f"memory not found: {memory_id}"})
+                return
+            self._send(200, {"success": True, "data": {"deleted": 1}})
+            return
+        if parsed.path == "/purge":
+            narrowing = {k: body.get(k) for k in ("namespace", "project", "source", "type") if body.get(k)}
+            if not narrowing and not body.get("all"):
+                self._send(400, {"success": False, "error":
+                                 "refusing to purge without a narrowing filter "
+                                 "(namespace/project/source/type) — pass all=true to override"})
+                return
+            deleted = self.store.purge(
+                user_id=str(body.get("user_id") or "global_user"),
+                namespace=narrowing.get("namespace"),
+                project=narrowing.get("project"),
+                source=narrowing.get("source"),
+                mem_type=narrowing.get("type"),
+                dry_run=bool(body.get("dry_run")),
+            )
+            self._send(200, {"success": True, "data": {"deleted": deleted, "dry_run": bool(body.get("dry_run"))}})
             return
         if parsed.path == "/search":
             data = self.store.search(

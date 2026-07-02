@@ -63,6 +63,8 @@ Memory ops:
   ygg recall   --query Q [--type T] [--limit N] [--json]
   ygg remember --project P --type T --content "..."
   ygg materialize --id ID --project P
+  ygg delete --id ID       Hard-delete ONE memory (irreversible; prefer supersede)
+  ygg reset --project P | --source S | --all   Bulk hard-delete (undo a bad seed; confirms first)
 
   ygg version
 """
@@ -72,7 +74,8 @@ SERVICE_CMDS = {
     "uninstall", "hooks", "unhooks", "stophooks", "unstophooks",
     "consolidate", "unconsolidate",
 }
-MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize", "pin", "unpin", "supersede"}
+MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize",
+               "pin", "unpin", "supersede", "delete", "reset"}
 
 
 def _port() -> int:
