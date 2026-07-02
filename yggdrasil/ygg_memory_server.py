@@ -114,6 +114,33 @@ def tokenize(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) >= 2 and t not in STOPWORDS]
 
 
+# Last-line-of-defense secret guard AT THE ENGINE, so a raw POST /add that bypasses
+# the CLI's broader heuristic still can't persist an obvious credential. Deliberately
+# only HIGH-CONFIDENCE *structured tokens* (not a generic "password: …" heuristic),
+# so legitimate memories that merely mention a password aren't rejected.
+_SECRET_PATTERNS = [
+    re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bgh[oprsu]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+]
+
+
+def looks_like_secret(text: str) -> str | None:
+    """Return the matched secret snippet (truncated) if `text` contains an obvious
+    credential, else None."""
+    for pat in _SECRET_PATTERNS:
+        m = pat.search(text or "")
+        if m:
+            return m.group(0)[:64]
+    return None
+
+
 # --- vector storage helpers -------------------------------------------------
 # Embeddings are stored as packed float32 BLOBs (4 bytes/dim) rather than JSON
 # text (~15 bytes/dim) — ~4× smaller on disk AND no json.loads on the hot path.
@@ -950,6 +977,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"success": False, "error": "content is required"})
                 return
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+            # Engine-level secret guard: refuse an obvious credential on ANY /add,
+            # even one bypassing the CLI (the CLI's broader heuristic runs first).
+            hit = looks_like_secret(str(content)) or looks_like_secret(json.dumps(metadata))
+            if hit:
+                self._send(400, {"success": False, "error": f"refusing to store an apparent secret: {hit}"})
+                return
             record = self.store.add(
                 content=str(content),
                 user_id=str(body.get("user_id") or "global_user"),

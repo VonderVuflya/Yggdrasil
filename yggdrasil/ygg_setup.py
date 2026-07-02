@@ -45,26 +45,90 @@ FEATURES = [
 ]
 
 
+def _ram_gb_linux() -> int:
+    """Total RAM from /proc/meminfo (MemTotal is in kB)."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // (1024 ** 2)
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def _ram_gb_windows() -> int:
+    """Total RAM via PowerShell CIM (bytes)."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+        return int(out) // (1024 ** 3) if out.isdigit() else 0
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
 def hw() -> dict:
+    """Detect arch / RAM / cores / CPU / accelerator — cross-platform.
+
+    macOS uses sysctl; Linux reads /proc/meminfo + /proc/cpuinfo; Windows uses
+    PowerShell CIM. RAM/CPU degrade to 0/'unknown' only if all probes fail, so
+    the model recommender never silently sizes off 0 GB off-macOS."""
+    system = platform.system()
+    arch = platform.machine()
+    apple_silicon = system == "Darwin" and arch == "arm64"
+
     def sysctl(key: str) -> str:
         try:
             return subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, timeout=3).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return ""
-    arch = platform.machine()
-    apple_silicon = arch == "arm64"
-    try:
-        ram_gb = int(sysctl("hw.memsize") or 0) // (1024 ** 3)
-    except ValueError:
-        ram_gb = 0
+
+    cpu = platform.processor() or "unknown"
+    ram_gb = 0
+    accel = "CPU"
+    if system == "Darwin":
+        try:
+            ram_gb = int(sysctl("hw.memsize") or 0) // (1024 ** 3)
+        except ValueError:
+            ram_gb = 0
+        cpu = sysctl("machdep.cpu.brand_string") or cpu
+        accel = "GPU (Metal)" if apple_silicon else "CPU"
+    elif system == "Linux":
+        ram_gb = _ram_gb_linux()
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.lower().startswith("model name"):
+                        cpu = line.split(":", 1)[1].strip()
+                        break
+        except OSError:
+            pass
+        # Best-effort NVIDIA detection; absence just means CPU.
+        if _has("nvidia-smi"):
+            try:
+                if subprocess.run(["nvidia-smi"], capture_output=True, timeout=3).returncode == 0:
+                    accel = "GPU (CUDA)"
+            except (OSError, subprocess.SubprocessError):
+                pass
+    elif system == "Windows":
+        ram_gb = _ram_gb_windows()
+
     return {
         "arch": arch,
+        "os": system,
         "apple_silicon": apple_silicon,
         "ram_gb": ram_gb,
         "cores": os.cpu_count() or 0,
-        "cpu": sysctl("machdep.cpu.brand_string") or platform.processor() or "unknown",
-        "accel": "GPU (Metal)" if apple_silicon else "CPU",
+        "cpu": cpu or "unknown",
+        "accel": accel,
     }
+
+
+def _has(binary: str) -> bool:
+    from shutil import which
+    return which(binary) is not None
 
 
 def verdict(tier: str, h: dict) -> str:

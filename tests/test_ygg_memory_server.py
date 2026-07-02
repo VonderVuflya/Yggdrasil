@@ -241,6 +241,18 @@ class MemoryStoreTests(unittest.TestCase):
     def test_tokenize_lowercases_and_drops_stopwords_and_one_char_tokens(self) -> None:
         self.assertEqual(tokenize("The A QUICK x fox"), ["quick", "fox"])
 
+    def test_secret_guard_flags_structured_tokens_only(self) -> None:
+        from ygg_memory_server import looks_like_secret
+        # real credentials -> flagged
+        self.assertIsNotNone(looks_like_secret("aws key AKIAIOSFODNN7EXAMPLE in config"))
+        self.assertIsNotNone(looks_like_secret("token ghp_1234567890abcdefghijklmnopqrstuv"))
+        self.assertIsNotNone(looks_like_secret("glpat-abcdef1234567890XYZ_"))
+        self.assertIsNotNone(looks_like_secret("Authorization: Bearer eyJhbGciOiJIUzI1Niedd.eyJzdWIiOiIxMjM0NTY.abcdef"))
+        self.assertIsNotNone(looks_like_secret("-----BEGIN OPENSSH PRIVATE KEY-----"))
+        # legitimate memory content that merely MENTIONS secrets -> NOT flagged
+        self.assertIsNone(looks_like_secret("the fix was to rotate the signing secret and redeploy"))
+        self.assertIsNone(looks_like_secret("store the password hash, never the plaintext password"))
+
     def test_tokenize_handles_cyrillic(self) -> None:
         # The FTS index uses unicode61 (indexes Cyrillic fine); the query-side
         # tokenizer must not silently drop non-Latin words.

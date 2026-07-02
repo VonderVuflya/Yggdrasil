@@ -33,10 +33,18 @@ SEMDEDUP_THRESHOLD = float(os.environ.get("YGG_SEMDEDUP_AT", "0.92"))
 
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----"),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
-    re.compile(r"(?i)\b(api[_-]?key|token|password|secret|client_secret)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),                       # OpenAI-style
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),                        # GitHub classic PAT
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),               # GitHub fine-grained PAT
+    re.compile(r"\bgh[opsu]_[A-Za-z0-9]{20,}\b"),                  # GitHub OAuth/app/refresh tokens
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),                   # GitLab PAT
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),               # Slack
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),                           # AWS access key id
+    re.compile(r"\bASIA[0-9A-Z]{16}\b"),                           # AWS temporary key id
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}\b"),  # JWT
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),                      # Google API key
+    re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s:@]+@"),  # scheme://user:PASSWORD@host
+    re.compile(r"(?i)\b(api[_-]?key|token|password|passwd|secret|client_secret)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,}"),
 ]
 
 
