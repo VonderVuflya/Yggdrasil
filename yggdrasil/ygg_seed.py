@@ -166,8 +166,11 @@ def discover() -> list[dict[str, Any]]:
                     "detail": f"{tfiles} transcript(s) + {mfiles} memory note(s)",
                 })
 
-    # 2. Obsidian vaults (dirs containing a .obsidian/) under common roots, bounded depth
-    roots = [HOME / "Documents", HOME / "Library" / "CloudStorage", HOME / "obsidian", HOME / "vaults"]
+    # 2. Obsidian vaults (dirs containing a .obsidian/) under common roots, bounded depth.
+    #    The iCloud root is where the official Obsidian iOS/macOS sync keeps vaults —
+    #    for many users that's THE vault, and it was silently invisible before.
+    roots = [HOME / "Documents", HOME / "Library" / "CloudStorage", HOME / "obsidian", HOME / "vaults",
+             HOME / "Library" / "Mobile Documents" / "iCloud~md~obsidian" / "Documents"]
     seen: set[str] = set()
     for root in roots:
         if not root.is_dir():
@@ -431,7 +434,13 @@ def _source_files(src: dict[str, Any]) -> list[Path]:
     if src["kind"] == "claude":
         return sorted(base.glob("*.jsonl")) + sorted((base / "memory").glob("*.md"))
     if src["kind"] == "obsidian":
-        return sorted(base.glob("**/*.md"))[:50]
+        # Bounded, but most-recent-first: the old alphabetical [:50] silently
+        # dropped an arbitrary slice of larger vaults (a 151-note vault kept
+        # notes A–G). Recency is the right priority for memory, and the bound
+        # is generous enough for real personal vaults.
+        notes = sorted(base.glob("**/*.md"),
+                       key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+        return notes[:500]
     if src["kind"] == "repo":
         return [base / "CLAUDE.md"]
     if src["kind"] == "codex":  # explicit per-project file list gathered in discover()
