@@ -459,6 +459,85 @@ def materialize(args: argparse.Namespace) -> None:
     print(output_path)
 
 
+# Native-memory bridge: Yggdrasil is the layer ABOVE the vendors' own memory
+# (Claude Code's MEMORY.md, Codex's AGENTS.md) — `ygg seed` already imports FROM
+# them; this exports a curated digest BACK into the vendor-neutral AGENTS.md
+# format both read, inside a managed block so a hand-edited file is never
+# clobbered. Result: a fresh clone, a teammate, or a tool WITHOUT Yggdrasil still
+# gets your curated memory.
+_YGG_BEGIN = "<!-- ygg:begin (managed by `ygg export-native` — edits here are overwritten) -->"
+_YGG_END = "<!-- ygg:end -->"
+_EXPORT_ORDER = ["project_status", "follow_up", "decision", "lesson", "fix", "convention", "reference"]
+_EXPORT_HEADING = {
+    "project_status": "Current status", "follow_up": "Open follow-ups",
+    "decision": "Decisions", "lesson": "Lessons", "fix": "Fixes",
+    "convention": "Conventions", "reference": "References",
+}
+
+
+def _render_native_block(project: str, records: list[dict[str, Any]]) -> str:
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for r in records:
+        md = r.get("metadata") or {}
+        by_type.setdefault(md.get("type") or r.get("memory_type") or "reference", []).append(r)
+    lines = [_YGG_BEGIN, f"## 🌳 Durable memory — `{project}`",
+             "_Curated by Yggdrasil. Verify against the code; memory can be stale._", ""]
+    for mtype in _EXPORT_ORDER + sorted(set(by_type) - set(_EXPORT_ORDER)):
+        items = by_type.get(mtype)
+        if not items:
+            continue
+        lines.append(f"### {_EXPORT_HEADING.get(mtype, mtype.replace('_', ' ').title())}")
+        for r in items:
+            pin = "📌 " if (r.get("metadata") or {}).get("pinned") else ""
+            text = " ".join((r.get("memory") or r.get("content") or "").split())
+            lines.append(f"- {pin}{text}")
+        lines.append("")
+    lines.append(_YGG_END)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _upsert_managed_block(path: Path, block: str) -> str:
+    """Insert/replace the ygg-managed block in `path`, preserving all other
+    content. Returns 'created' | 'updated' | 'unchanged'."""
+    existing = path.read_text() if path.exists() else ""
+    if _YGG_BEGIN in existing and _YGG_END in existing:
+        pre = existing[: existing.index(_YGG_BEGIN)]
+        post = existing[existing.index(_YGG_END) + len(_YGG_END):]
+        new = pre.rstrip("\n") + ("\n\n" if pre.strip() else "") + block + post.lstrip("\n")
+        status = "unchanged" if new == existing else "updated"
+    else:
+        sep = "\n\n" if existing.strip() else ""
+        new = existing.rstrip("\n") + sep + block if existing.strip() else block
+        status = "created" if not existing.strip() else "updated"
+    if new != existing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(new)
+    return status
+
+
+def export_native(args: argparse.Namespace) -> None:
+    """Write a project's curated memory into a native AGENTS.md/MEMORY.md block."""
+    records = backend().get_all(user_id=args.user_id, limit=args.limit, namespace=args.namespace)
+    live = [r for r in records
+            if not record_is_archived(r)
+            and (r.get("metadata") or {}).get("project") == args.project
+            and (not args.type or (r.get("metadata") or {}).get("type") == args.type)]
+    if not live:
+        raise YggError(f"No memories to export for project '{args.project}' "
+                       f"(namespace {args.namespace}).")
+    # Pinned first, then by type priority, then most-recalled — the same signals
+    # the engine ranks with, so the digest leads with what matters.
+    def _rank(r: dict[str, Any]) -> tuple:
+        md = r.get("metadata") or {}
+        prio = _EXPORT_ORDER.index(md.get("type")) if md.get("type") in _EXPORT_ORDER else len(_EXPORT_ORDER)
+        return (0 if md.get("pinned") else 1, prio, -(r.get("access_count") or 0))
+    live.sort(key=_rank)
+    block = _render_native_block(args.project, live)
+    target = Path(args.out) if args.out else Path.cwd() / "AGENTS.md"
+    status = _upsert_managed_block(target, block)
+    print(f"{status}: {target}  ({len(live)} memories in the ygg-managed block)")
+
+
 def bootstrap(args: argparse.Namespace) -> None:
     # Query-stuffing with the CANONICAL type names (the enum agents write with),
     # so bootstrap ranks typed memories up — legacy names matched nothing.
@@ -563,6 +642,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="no narrowing filter: wipe the whole namespace")
     p.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
     p.set_defaults(func=reset)
+
+    p = sub.add_parser("export-native", parents=[common])
+    p.add_argument("--project", required=True)
+    p.add_argument("--out", help="target file (default: AGENTS.md in the current dir; "
+                                 "e.g. ~/.claude/projects/<p>/memory/MEMORY.md, CLAUDE.md)")
+    p.add_argument("--type", help="only export one memory type")
+    p.add_argument("--limit", type=int, default=1000)
+    p.set_defaults(func=export_native)
 
     return parser
 
