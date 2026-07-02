@@ -3,68 +3,68 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.6.0] — 2026-07-03
 
-Results of a full technical audit (2026-07-01) — see `docs/IMPROVEMENT-PLAN.md`
-for the complete prioritized plan this release starts working through.
+Robustness, DX and CI — the second slice of the audit plan.
 
 ### Added
-- **`ygg delete --id` and `ygg reset --project|--source|--type|--all`** — the
-  recovery path for a bad `ygg seed` (previously: manual sqlite surgery).
-  `reset` previews the exact count and demands typed confirmation (or `--yes`).
-  The engine's `/delete` + `/purge` are the only destructive endpoints and are
-  deliberately **not** exposed as MCP tools.
-- **`GET /get?id=`** — direct indexed lookup; `ygg materialize` now works at any
-  store size (the old scan couldn't reach memories beyond the first 1000).
 - **CI** (GitHub Actions): unit tests on ubuntu/macos/windows (py3.10 + 3.13),
-  behavioral gates on ubuntu/macos, and a benchmark job that fails the build if
-  lexical recall@1 regresses below the published 0.77.
-- **`distill_num_ctx` setting** (default 8192) — seed distillation now sends
-  `options.num_ctx` explicitly instead of inheriting Ollama's server default
-  (often 4096, which silently truncated long transcripts); output cut off by
-  the token limit is rejected instead of persisted as a garbage lesson.
+  behavioural gates on ubuntu/macos, and a benchmark job that fails the build if
+  lexical recall@1 regresses below 0.77 — the badge becomes a receipt.
+- **`ygg delete --id` and `ygg reset --project|--source|--type|--all`** — recover from a
+  bad `ygg seed` without sqlite surgery. `reset` previews the count and demands typed
+  confirmation (or `--yes`). The engine's `/delete` + `/purge` are the only destructive
+  endpoints and are deliberately **not** exposed as MCP tools.
+- **`GET /get?id=`** — direct indexed lookup; `ygg materialize` now works at any store
+  size (the old scan couldn't reach memories past the first 1000).
+- **`distill_num_ctx` setting** (default 8192) — seed distillation sends `options.num_ctx`
+  explicitly instead of inheriting Ollama's default (often 4096, which silently truncated
+  long transcripts); output cut off by the token limit is rejected, not persisted.
 
 ### Fixed
-- **Hooks work on Windows** (`python3 … || python …` launcher — `python3` has no
-  Windows shim, so plugin hooks failed silently forever) and **context is never
-  injected twice** when both the plugin and `ygg hooks` are enabled
-  (atomic per-session / per-prompt locks; registration dedupe by script name).
-- **`ygg bootstrap` query-stuffing used legacy type names** absent from the
-  canonical enum — typed memories got no ranking boost.
-- Deleted dead code: `materialize_memory.py` (diverged twin with its own YAML
-  bug), `ygg.py engine_token()` (triple copy-paste of one env var), duplicated
-  env lookup in the quality gate; docstrings caught up with the `service.py`
-  rewrite.
-- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK, …). The
-  query-side tokenizer was ASCII-only while the FTS index used `unicode61`, so
-  e.g. a Russian query matched nothing in lexical mode. Also splits `snake_case`.
-- **Engine writes are transactional.** An exception mid-write (disk full, bad
-  input) used to leave an open transaction that the *next* request silently
-  committed — producing memories invisible to lexical search. Row + FTS now
-  commit or roll back together.
-- **Malformed client input returns a JSON 400** instead of a traceback and a
-  dropped connection (`limit="abc"`, `importance:"high"`, …).
-- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted
-  dedup both ways (old text wrongly rejected as duplicate, new text duplicable).
-- **`ygg doctor` no longer prints "All good." when no MCP registration exists**
-  anywhere — a missing registration now fails the check.
+- **Hooks work on Windows** (`python3 … || python …` launcher) and **context is never
+  injected twice** when both the plugin and `ygg hooks` are enabled (atomic per-session /
+  per-prompt locks; registration dedupe by script name).
+- **`ygg bootstrap` used legacy type names** absent from the canonical enum — typed
+  memories got no ranking boost.
+- Deleted dead code (`materialize_memory.py` twin, dead `engine_token()`, duplicated
+  gate env lookup); docstrings caught up with the `service.py` rewrite.
+- **Gates run on a dedicated port** (42169) instead of sharing the daemon's 42069 — the
+  runner used to kill the user's daemon and race its restart (flaky `SEED FAILED`).
+
+## [0.5.5] — 2026-07-03
+
+The audit release — security & correctness fixes from a full technical audit
+(`docs/IMPROVEMENT-PLAN.md`), no behaviour changes for the happy path.
+
+### Fixed
+- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK …). The
+  query tokenizer was ASCII-only while the FTS index used `unicode61`, so e.g. a
+  Russian query matched nothing in lexical mode. Also splits `snake_case`.
+- **Engine writes are transactional** — an exception mid-write no longer leaves an
+  open transaction that the next request silently commits (which produced memories
+  invisible to lexical search). Row + FTS commit or roll back together.
+- **Malformed client input returns a JSON 400** instead of a traceback and a dropped
+  connection (`limit="abc"`, `importance:"high"`, …).
+- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted dedup
+  both ways.
+- **`ygg doctor` no longer prints "All good." with no MCP registration** anywhere.
 
 ### Security
-- **No more `yggdrasil-demo-token` fallback in the engine.** A bare `ygg serve`
-  now reuses (or generates) the standard 0600 `~/.yggdrasil/token` file instead
-  of accepting a publicly-known constant from any local process.
-- **The Streamable-HTTP MCP facade refuses to start without a token** (it is
-  built to sit behind public tunnels). Explicit `YGG_MCP_INSECURE=1` opts into
-  open mode for local testing.
-- **`ygg_materialize` output is confined to the vault root.** A remote MCP
-  client could previously write attacker-seeded `.md` files to any path the
-  user can write (e.g. `~/.claude/commands/` — persistent prompt injection).
-- **Auth token no longer written in plaintext** into world-readable launchd
-  plists (`install.sh` legacy path, still used by `ygg consolidate`), into MCP
-  registrations, or into `~/.claude.json` — everything now resolves the 0600
-  token file at call time.
-- **Timing-safe token comparison** (`hmac.compare_digest`) and a **Host-header
-  check** on loopback binds (blocks DNS-rebinding drive-bys from the browser).
+- **No `yggdrasil-demo-token` fallback in the engine** — a bare `ygg serve` reuses or
+  generates the 0600 `~/.yggdrasil/token` instead of a publicly-known constant.
+- **The Streamable-HTTP MCP facade refuses to start without a token** (`YGG_MCP_INSECURE=1`
+  opts into open mode for local testing).
+- **`ygg_materialize` output confined to the vault root** — a remote MCP client could
+  previously write attacker-seeded `.md` anywhere the user can write.
+- **Auth token no longer written in plaintext** into launchd plists, MCP registrations,
+  or `~/.claude.json` — everything resolves the 0600 token file at call time.
+- **Timing-safe token comparison** (`hmac.compare_digest`) + a **Host-header check** on
+  loopback binds (blocks DNS-rebinding drive-bys).
+
+### Changed
+- Untracked the `.mcpb` desktop bundles (hosted on GitHub Releases); ignore
+  `.cache/`, `.claude/`, `scratchpad/`.
 
 ## [0.5.4] — 2026-06-29
 
