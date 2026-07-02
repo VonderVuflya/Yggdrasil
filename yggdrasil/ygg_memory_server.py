@@ -213,6 +213,10 @@ class MemoryStore:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_user ON memories(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(user_id, namespace, project, scope)")
+        # Backs get_all's `WHERE user_id[,namespace] ORDER BY created_at` — the
+        # session-start hook hits it every session; without it that's a full
+        # scan + sort of the whole store per call.
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_created ON memories(user_id, namespace, created_at)")
         # Indexed dedup lookup — O(log n) content-hash check at any store size (no 1000-row cap).
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_hash ON memories(user_id, project, type, content_hash)")
         # Lazy migration for pre-existing DBs created before these columns.
@@ -299,6 +303,18 @@ class MemoryStore:
             if unit is not None:
                 cache[row["seq"]] = unit
         self._vec_cache = cache
+
+    def _user_signal(self, record: dict[str, Any]) -> float:
+        """The explicitly-earned ranking boosts: pin + usage. Applied on the
+        vector-only path too, so a pinned / frequently-recalled memory surfaced
+        purely by meaning gets the same lift a lexical hit does. Importance and
+        recency are left to the lexical path (they're near-uniform and always
+        present, so adding them to vector-only hits would perturb ranking without
+        a user having asked for it)."""
+        access = float(record.get("access_count") or 0.0)
+        usage = W_USAGE * (access / (access + USAGE_SCALE)) if access > 0 else 0.0
+        pin = W_PIN if (record.get("metadata") or {}).get("pinned") else 0.0
+        return usage + pin
 
     def _row_unit(self, row) -> "array.array | None":
         """Unit vector for a row: cache hit, else parse its blob once and warm
@@ -597,6 +613,13 @@ class MemoryStore:
             params.extend(namespaces)
         where_sql = " AND ".join(where)
 
+        # Cap the lexical candidate set inside SQLite by BM25 rather than pulling
+        # EVERY row that matches any OR-term into Python (a query with one common
+        # word otherwise Python-scores half the corpus). Generous headroom over
+        # the requested limit so the post-hoc boosts (importance/recency/usage/
+        # pin) and lexical+vector fusion still have candidates to reorder; vector
+        # hits enter separately via vec_rows, so this never hides a semantic match.
+        fts_cap = max(limit * 10, 50)
         now = time.time()
         with self._lock:
             if self.use_fts and terms:
@@ -604,9 +627,10 @@ class MemoryStore:
                 sql = (
                     "SELECT m.*, bm25(mem_fts) AS rank FROM mem_fts "
                     "JOIN memories m ON m.seq = mem_fts.rowid "
-                    f"WHERE mem_fts MATCH ? AND {where_sql}"
+                    f"WHERE mem_fts MATCH ? AND {where_sql} "
+                    "ORDER BY bm25(mem_fts) LIMIT ?"
                 )
-                rows = self._conn.execute(sql, [match_query, *params]).fetchall()
+                rows = self._conn.execute(sql, [match_query, *params, fts_cap]).fetchall()
             elif self.use_fts:
                 rows = []  # no usable lexical terms -> lean on dense (handled below)
             else:
@@ -661,7 +685,13 @@ class MemoryStore:
                 sim = _dot(qunit, cv)
                 if sim is None or sim <= 0:
                     continue
-                record = records.get(row["id"]) or self._row_to_record(row)
+                record = records.get(row["id"])
+                if record is None:
+                    record = self._row_to_record(row)
+                    # Vector-only hit: still honor the user's explicit signals
+                    # (pin, usage) via the same lexical channel — parity with
+                    # lexical hits, which already bake these in.
+                    record["lexical_score"] = self._user_signal(record)
                 record["vector_score"] = round(sim, 6)
                 records[record["id"]] = record
                 vec_scored.append(record)

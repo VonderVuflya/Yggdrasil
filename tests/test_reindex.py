@@ -64,6 +64,29 @@ class ReindexTest(unittest.TestCase):
         self.assertEqual(store.missing_embeddings(), 0)
 
 
+class VectorPathRankingParityTest(unittest.TestCase):
+    """A pinned memory found only by meaning (no keyword overlap) must still get
+    its pin boost — parity with the lexical path."""
+
+    class ConstEmbedder:
+        model = "toy"
+        def embed(self, text):  # noqa: ARG002 — same vector for all: pure vector tie
+            return [1.0, 0.0, 0.0]
+
+    def test_pin_boost_applies_on_vector_only_hits(self):
+        store = eng.MemoryStore(tempfile.mktemp(suffix=".sqlite"), embedder=self.ConstEmbedder())
+        a = store.add(content="alpha note", user_id="u", namespace="n", scope="global",
+                      metadata={"project": "p", "type": "lesson"})
+        b = store.add(content="beta note", user_id="u", namespace="n", scope="global",
+                      metadata={"project": "p", "type": "lesson"})
+        store.update(b["id"], data=None, metadata_patch={"pinned": True}, archived=None)
+        # Query shares no tokens with either memory -> retrieved by vector only.
+        res = store.search(query="zzz", user_id="u", limit=2,
+                           filters={"project": "p"}, namespaces=["n"])
+        self.assertEqual({r["id"] for r in res}, {a["id"], b["id"]})
+        self.assertEqual(res[0]["id"], b["id"])  # pinned first, despite the vector tie
+
+
 class LegacyMigrationTest(unittest.TestCase):
     def test_json_embedding_migrates_to_blob_on_open(self):
         import json
