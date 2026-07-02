@@ -57,15 +57,18 @@ Legend: **[S]** security · **[C]** correctness · **[P]** performance · **[DX]
 26. ◑ **Partial.** Added 95% **bootstrap confidence intervals** (stdlib) and documented the model-digest-pinning caveat. **Not done:** growing the corpus to 200+ from *real* distilled transcripts — genuinely needs the user's own `ygg seed` output; the harness reports n=35 + wide CIs honestly and flags this as a known limitation in BENCHMARKS.md §4. ~L (remaining).
 27. ✅ Lexical benchmark **runs in CI** with a recall@1 ≥ 0.77 floor (the badge is now a receipt, not a claim). *(6a246e1, P1)*
 
-## P4 — Features (differentiation-driven, in order of positioning value)
+## P4 — Features (differentiation-driven) — ◑ core wedge + hardening done (2026-07-03); 3 larger features remain
 
-28. **Native-memory bridge** — import from Claude Code's native memory dir (`~/.claude/projects/*/memory/`) and Codex Memories; optionally materialize a curated digest *back* into `MEMORY.md`/`AGENTS.md`. Positions Yggdrasil as *the layer above the natives* instead of their competitor — the natives are structurally repo- and vendor-siloed, and that's strategic, not fixable by them. ~M.
-29. **`ygg review` TUI** for the governance queue — curation is the wedge; today it's JSON reports. A 15-minute-to-build `less`-style review loop (approve merge / archive / skip) makes "curated, not captured" tangible. ~M.
-30. **Git-backed vault sync** — cross-machine sync through the user's *own* git repo (encrypted optional). Directly counters cmem.ai/mem0 cloud sync without betraying local-first; no server to run. ~L.
-31. **Relation graph** (`SOLVES` / `SUPERSEDES` / `CONTRADICTS`) — already on the roadmap; unlocks "why" answers, pairs with the review TUI. ~L.
-32. **Linux/Windows GA** — installers exist; finish on-device testing + make `ygg_setup.hw()` read `/proc/meminfo` / `wmic` (today Linux gets model recommendations computed from 0 GB RAM). ~M.
-33. **First-hour polish** — port-42069-conflict hint; non-interactive install prints "lexical-only" notice; warn that the `/tmp` tyre-kicking DB is throwaway; document the session-1 dead zone (plugin engine lazy-starts on first *tool call*, so injected memory appears from session 2). ~S each.
-34. **Secret-guard hardening** — add AWS `AKIA…`, JWT, `github_pat_`, `glpat-`, connection-string patterns (`ygg.py:34-40`); move the guard engine-side so raw `/add` is covered too. ~S.
+28. ✅ **Native-memory bridge** — `ygg seed` already imports FROM the natives (`.claude/projects/*/memory/*.md`, Codex sessions); added **`ygg export-native --project P`** which writes a ranked, type-grouped curated digest BACK into the vendor-neutral `AGENTS.md`/`MEMORY.md` (managed `<!-- ygg:begin/end -->` block, idempotent, preserves hand-written content). This is the sharpest positioning wedge made concrete: Yggdrasil is the layer *above* the natives that feeds them. Verified live (6 real memories exported, idempotent re-run). *(a639a3d)*
+32. ✅ **Cross-platform `hw()`** — macOS sysctl, Linux `/proc/meminfo`+`/proc/cpuinfo`(+nvidia-smi), Windows PowerShell CIM; the recommender no longer sizes off 0 GB off-macOS. Installers themselves already cross-platform (P1). *(2c640f1)*
+33. ✅ **First-hour polish** — actionable port-conflict hint instead of a traceback; non-interactive install announces the lexical-only fallback; README CLI/bridge/two-way-FAQ. *(ebb4951)*
+34. ✅ **Secret-guard hardening** — AWS/JWT/`github_pat_`/`glpat-`/Google/connection-string patterns added to the CLI; NEW engine-side guard so a raw `/add` bypassing the CLI still can't persist a credential (high-confidence structured tokens only — no false positive on the eval corpus; verified live 400 vs 200). *(2c640f1)*
+
+**Remaining (each its own focused session — substantial features, not polish):**
+
+29. **`ygg review` command** for the governance queue — the infra exists (`ygg_review_queue.py` builds the dup/stale/conflict queue, `ygg_review_actions.py` applies), but it's gate-only, not user-facing. Wire a `ygg review [--apply]`: build queue → present each proposed action → approve/archive/skip → apply (non-destructive). Makes "curated, not captured" tangible. ~M.
+30. **Git-backed vault sync** — cross-machine sync through the user's *own* git repo (optional encryption). Counters cmem.ai/mem0 cloud sync without betraying local-first; no server to run. ~L.
+31. **Relation graph** (`SOLVES` / `SUPERSEDES` / `CONTRADICTS`) — unlocks "why" answers, pairs with the review command. ~L.
 
 ## Positioning (decided; already applied to README on 2026-07-01)
 

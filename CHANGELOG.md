@@ -30,6 +30,11 @@ for the complete prioritized plan this release starts working through.
   across models (meaningless cosines). `ygg doctor` counts model-mismatched rows.
 
 ### Added
+- **`ygg export-native --project P`** — the native-memory bridge: writes a
+  curated, type-grouped digest of a project's memory into a managed block in
+  `AGENTS.md`/`MEMORY.md` (idempotent; preserves hand-written content). Pairs
+  with `ygg seed` (which imports *from* the native memory) so Yggdrasil is the
+  layer above Claude Code's and Codex's own memory, feeding them both ways.
 - **`ygg delete --id` and `ygg reset --project|--source|--type|--all`** — the
   recovery path for a bad `ygg seed` (previously: manual sqlite surgery).
   `reset` previews the exact count and demands typed confirmation (or `--yes`).
@@ -71,6 +76,10 @@ for the complete prioritized plan this release starts working through.
   anywhere — a missing registration now fails the check.
 
 ### Security
+- **Engine-side secret guard** — a raw `POST /add` that bypasses the CLI now
+  also refuses obvious credentials (AWS keys, JWTs, GitHub/GitLab PATs, private
+  keys, connection-string passwords). High-confidence structured tokens only, so
+  legitimate memories that mention "password"/"secret" are unaffected.
 - **No more `yggdrasil-demo-token` fallback in the engine.** A bare `ygg serve`
   now reuses (or generates) the standard 0600 `~/.yggdrasil/token` file instead
   of accepting a publicly-known constant from any local process.
