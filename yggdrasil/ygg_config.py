@@ -29,6 +29,10 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
                     "Point at a beefier box, e.g. http://192.168.3.124:11434."),
     "distill_timeout": (("YGG_DISTILL_TIMEOUT",), "120",
                         "Per-file distill timeout in seconds (raise for big sessions)."),
+    "distill_num_ctx": (("YGG_DISTILL_NUM_CTX",), "8192",
+                        "Context window (tokens) requested from the distill model. Without "
+                        "this Ollama uses ITS default (often 4096) and silently truncates "
+                        "long transcripts into low-quality lessons."),
     "bg_model": (("YGG_BG_MODEL",), "qwen2.5:1.5b",
                  "Local model used for distillation and consolidation."),
     "embed_model": (("YGG_EMBED_MODEL",), "",
@@ -90,6 +94,13 @@ def distill_timeout(flag: str | int | None = None) -> int:
         return int(resolve("distill_timeout", str(flag) if flag not in (None, "") else None))
     except (TypeError, ValueError):
         return 120
+
+
+def distill_num_ctx(flag: str | int | None = None) -> int:
+    try:
+        return int(resolve("distill_num_ctx", str(flag) if flag not in (None, "") else None))
+    except (TypeError, ValueError):
+        return 8192
 
 
 def bg_model(flag: str | None = None) -> str:

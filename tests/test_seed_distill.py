@@ -91,5 +91,34 @@ class IncrementalSeedTest(unittest.TestCase):
         self.assertEqual((r["added"], r["skipped"]), (1, 0))     # force re-processes
 
 
+class DistillTruncationTest(unittest.TestCase):
+    """A generation cut off by the token limit must save NOTHING (a truncated
+    stub persisted as a 'lesson' is worse than an error)."""
+
+    def setUp(self):
+        self._orig_write = ygg_seed._ygg.write_memory
+        self._orig_gen = ygg_seed._ollama_generate
+        self.writes = []
+        ygg_seed._ygg.write_memory = lambda **kw: (self.writes.append(kw) or ("added", {"id": "x"}))
+
+    def tearDown(self):
+        ygg_seed._ygg.write_memory = self._orig_write
+        ygg_seed._ollama_generate = self._orig_gen
+
+    def test_truncated_generation_is_an_error_and_saves_nothing(self):
+        def truncated(*a, **k):
+            raise ValueError("model output truncated (done_reason=length) — nothing saved")
+        ygg_seed._ollama_generate = truncated
+
+        result = ygg_seed.distill_text(
+            "a very long work log", project="t", source="seed",
+            model="m", user_id="u", namespace="n",
+        )
+
+        self.assertEqual(result["errors"], 1)
+        self.assertEqual(result["added"], 0)
+        self.assertEqual(self.writes, [])
+
+
 if __name__ == "__main__":
     unittest.main()

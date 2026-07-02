@@ -47,6 +47,7 @@ MAX_CHARS_PER_FILE = 14000  # window we feed the local model per source file
 # distill_timeout`. Timed-out files are NOT marked done, so a re-run retries them.
 OLLAMA_URL = _cfg.distill_url()
 DISTILL_TIMEOUT = _cfg.distill_timeout()
+DISTILL_NUM_CTX = _cfg.distill_num_ctx()
 
 
 # --------------------------------------------------------------------------- #
@@ -248,11 +249,23 @@ Return only the JSON object."""
 
 
 def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str:
-    body = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json"}).encode()
+    # num_ctx is sent EXPLICITLY: without it Ollama applies its server default
+    # (often 4096), silently truncating long transcripts — lesson quality then
+    # depends on a setting the user never chose.
+    body = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json",
+                       "options": {"num_ctx": DISTILL_NUM_CTX}}).encode()
     req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body,
                                  headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=timeout or DISTILL_TIMEOUT) as r:
-        return json.loads(r.read().decode("utf-8")).get("response", "")
+        data = json.loads(r.read().decode("utf-8"))
+    if data.get("done_reason") == "length":
+        # The model ran out of output tokens mid-JSON. Persisting a truncated
+        # stub as a "lesson" is worse than persisting nothing.
+        raise ValueError(
+            "model output truncated (done_reason=length) — nothing saved for this file; "
+            "raise `ygg config set distill_num_ctx` or use a larger model"
+        )
+    return data.get("response", "")
 
 
 def _is_timeout(exc: BaseException) -> bool:
