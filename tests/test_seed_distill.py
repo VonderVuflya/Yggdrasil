@@ -91,6 +91,24 @@ class IncrementalSeedTest(unittest.TestCase):
         self.assertEqual((r["added"], r["skipped"]), (1, 0))     # force re-processes
 
 
+class StripFencesTest(unittest.TestCase):
+    """Phone/on-device LLM servers ignore strict format=json and fence their
+    JSON in markdown; plain Ollama output must pass through untouched."""
+
+    def test_json_fence_unwrapped(self):
+        fenced = '```json\n{"lessons": [{"content": "x"}]}\n```'
+        self.assertEqual(json.loads(ygg_seed._strip_fences(fenced))["lessons"][0]["content"], "x")
+
+    def test_bare_fence_unwrapped(self):
+        self.assertEqual(ygg_seed._strip_fences('```\n{"a": 1}\n```'), '{"a": 1}')
+
+    def test_plain_json_untouched(self):
+        self.assertEqual(ygg_seed._strip_fences('{"a": 1}'), '{"a": 1}')
+
+    def test_empty(self):
+        self.assertEqual(ygg_seed._strip_fences(""), "")
+
+
 class DistillTruncationTest(unittest.TestCase):
     """A generation cut off by the token limit must save NOTHING (a truncated
     stub persisted as a 'lesson' is worse than an error)."""

@@ -251,24 +251,88 @@ Work log follows:
 Return only the JSON object."""
 
 
-def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str:
-    # num_ctx is sent EXPLICITLY: without it Ollama applies its server default
-    # (often 4096), silently truncating long transcripts — lesson quality then
-    # depends on a setting the user never chose.
-    body = json.dumps({"model": model, "prompt": prompt, "stream": False, "format": "json",
-                       "options": {"num_ctx": DISTILL_NUM_CTX}}).encode()
-    req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body,
+def _strip_fences(text: str) -> str:
+    """Unwrap a ```json … ``` (or bare ```) markdown fence. Servers that ignore
+    strict format=json (e.g. phone/on-device LLM apps) fence their JSON; plain
+    Ollama output passes through untouched."""
+    t = (text or "").strip()
+    if not t.startswith("```"):
+        return t
+    first_nl = t.find("\n")
+    if first_nl != -1:
+        t = t[first_nl + 1:]
+    t = t.rstrip()
+    if t.endswith("```"):
+        t = t[:-3]
+    return t.strip()
+
+
+def _post_json(url: str, body: dict, timeout: int) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout or DISTILL_TIMEOUT) as r:
-        data = json.loads(r.read().decode("utf-8"))
-    if data.get("done_reason") == "length":
-        # The model ran out of output tokens mid-JSON. Persisting a truncated
-        # stub as a "lesson" is worse than persisting nothing.
-        raise ValueError(
-            "model output truncated (done_reason=length) — nothing saved for this file; "
-            "raise `ygg config set distill_num_ctx` or use a larger model"
-        )
-    return data.get("response", "")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+_TRUNCATED_MSG = ("model output truncated (ran out of output tokens) — nothing saved for this "
+                  "file; raise `ygg config set distill_num_ctx` or use a larger model")
+
+# base URL -> API dialect that worked ("generate" | "chat" | "openai"), so the
+# fallback probing is paid once per endpoint, not once per file.
+_ENDPOINT_CACHE: dict[str, str] = {}
+
+
+def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str:
+    """Call the distill endpoint — speaking whichever dialect it implements.
+
+    Tries, in order: Ollama's classic /api/generate, Ollama's /api/chat, and
+    OpenAI-style /v1/chat/completions — falling through on 404 only. This makes
+    `--ollama-url` work against anything on the LAN: Ollama, LM Studio,
+    llama.cpp-server, exo, and phone LLM-server apps (found live: an iPhone
+    'Local LLM Server' implements /api/chat + /v1 but not /api/generate).
+
+    num_ctx is sent EXPLICITLY on the Ollama dialects: without it Ollama applies
+    its server default (often 4096), silently truncating long transcripts."""
+    timeout = timeout or DISTILL_TIMEOUT
+    order = ["generate", "chat", "openai"]
+    cached = _ENDPOINT_CACHE.get(OLLAMA_URL)
+    if cached in order:
+        order.remove(cached)
+        order.insert(0, cached)
+    last_404: Exception | None = None
+    for kind in order:
+        try:
+            if kind == "generate":
+                data = _post_json(f"{OLLAMA_URL}/api/generate",
+                                  {"model": model, "prompt": prompt, "stream": False, "format": "json",
+                                   "options": {"num_ctx": DISTILL_NUM_CTX}}, timeout)
+                if data.get("done_reason") == "length":
+                    raise ValueError(_TRUNCATED_MSG)
+                out = data.get("response", "")
+            elif kind == "chat":
+                data = _post_json(f"{OLLAMA_URL}/api/chat",
+                                  {"model": model, "messages": [{"role": "user", "content": prompt}],
+                                   "stream": False, "format": "json",
+                                   "options": {"num_ctx": DISTILL_NUM_CTX}}, timeout)
+                if data.get("done_reason") == "length":
+                    raise ValueError(_TRUNCATED_MSG)
+                out = (data.get("message") or {}).get("content", "")
+            else:  # openai
+                data = _post_json(f"{OLLAMA_URL}/v1/chat/completions",
+                                  {"model": model, "messages": [{"role": "user", "content": prompt}],
+                                   "stream": False}, timeout)
+                choice = (data.get("choices") or [{}])[0]
+                if choice.get("finish_reason") == "length":
+                    raise ValueError(_TRUNCATED_MSG)
+                out = ((choice.get("message") or {}).get("content")) or ""
+            _ENDPOINT_CACHE[OLLAMA_URL] = kind
+            return _strip_fences(out)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:  # dialect not implemented here — try the next one
+                last_404 = exc
+                continue
+            raise
+    raise last_404 if last_404 else ValueError("no usable distill endpoint")
 
 
 def _is_timeout(exc: BaseException) -> bool:
