@@ -27,8 +27,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import statistics
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "yggdrasil"))
@@ -37,6 +40,19 @@ from ygg_embeddings import get_embedder  # noqa: E402
 
 NS = "yggdrasil-eval"
 USER = "eval-user"
+
+
+def bootstrap_ci(hits: list[int], n_resamples: int = 5000, alpha: float = 0.05, seed: int = 0) -> tuple[float, float]:
+    """95% bootstrap confidence interval for the mean of 0/1 hits. Honest about
+    small n — with 15 holdout cases the interval is wide, and it should be."""
+    if not hits:
+        return (0.0, 0.0)
+    rng = random.Random(seed)
+    k = len(hits)
+    means = sorted(sum(hits[rng.randrange(k)] for _ in range(k)) / k for _ in range(n_resamples))
+    lo = means[int((alpha / 2) * n_resamples)]
+    hi = means[min(int((1 - alpha / 2) * n_resamples), n_resamples - 1)]
+    return (round(lo, 3), round(hi, 3))
 
 # --- fixed corpus: (label, project, type, content) ------------------------
 CORPUS = [
@@ -198,8 +214,21 @@ def seed(store: MemoryStore) -> dict[str, str]:
 
 _UNSET = object()
 
+# How many corpus memories share each project — the candidate pool a
+# project-scoped query is actually choosing between. Disclosed in the report so
+# a reader knows whether recall@1 means "picked 1 of ~6" or "1 of the whole store".
+_POOL = Counter(project for _, project, _, _ in CORPUS)
 
-def evaluate(splits: set[str] | None = None, embedder=_UNSET) -> dict:
+
+def evaluate(splits: set[str] | None = None, embedder=_UNSET, project_filter: bool = True) -> dict:
+    """Score the labelled queries.
+
+    project_filter=True  -> search WITHIN each query's project (the real
+        `ygg search --project P` path; candidate pool = same-project memories).
+    project_filter=False -> search the WHOLE corpus (the hard "have I solved this
+        anywhere?" path; candidate pool = every memory). The honest upper-bound
+        on difficulty; report both so the headline isn't read as harder than it is.
+    """
     fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
     os.close(fd)
     try:
@@ -210,18 +239,22 @@ def evaluate(splits: set[str] | None = None, embedder=_UNSET) -> dict:
         per_class: dict[str, dict] = {}
         per_split: dict[str, dict] = {}
         details = []
+        hits1: list[int] = []          # per-query recall@1, for the bootstrap CI
         rr_sum = 0.0
         r1 = r3 = 0
+        pools: list[int] = []
         for query, label, project, klass, split in cases:
             expected = label_to_id[label]
-            results = store.search(query=query, user_id=USER, limit=5,
-                                   filters={"project": project, "scope": "project"}, namespaces=[NS])
+            filters = {"project": project, "scope": "project"} if project_filter else {}
+            pools.append(_POOL[project] if project_filter else len(CORPUS))
+            results = store.search(query=query, user_id=USER, limit=5, filters=filters, namespaces=[NS])
             ids = [r["id"] for r in results]
             rank = ids.index(expected) + 1 if expected in ids else 0
             hit1 = 1 if rank == 1 else 0
             hit3 = 1 if 0 < rank <= 3 else 0
             rr = 1.0 / rank if rank else 0.0
             r1 += hit1; r3 += hit3; rr_sum += rr
+            hits1.append(hit1)
             for bucket, key in ((per_class, klass), (per_split, split)):
                 pc = bucket.setdefault(key, {"n": 0, "r1": 0, "r3": 0, "rr": 0.0})
                 pc["n"] += 1; pc["r1"] += hit1; pc["r3"] += hit3; pc["rr"] += rr
@@ -247,7 +280,11 @@ def evaluate(splits: set[str] | None = None, embedder=_UNSET) -> dict:
             "cross_project_recall@3": cross_project,
             "n_cases": n,
             "splits": sorted(splits) if splits else "all",
+            "project_filter": project_filter,
+            "candidate_pool": ({"min": min(pools), "median": statistics.median(pools), "max": max(pools)}
+                               if pools else None),
             "recall@1": round(r1 / n, 4) if n else 0.0,
+            "recall@1_ci95": bootstrap_ci(hits1),
             "recall@3": round(r3 / n, 4) if n else 0.0,
             "mrr": round(rr_sum / n, 4) if n else 0.0,
             "by_class": _summ(per_class),
@@ -262,5 +299,34 @@ def evaluate(splits: set[str] | None = None, embedder=_UNSET) -> dict:
                 pass
 
 
+def _mode_name() -> str:
+    return os.environ.get("YGG_EMBED_MODEL") or "lexical"
+
+
+def honest_report() -> None:
+    """Print the credibility-first view: holdout-only headline (the split NOT
+    used for tuning), the hard full-corpus number, disclosed pool sizes, and a
+    95% CI that's honest about the small corpus."""
+    mode = _mode_name()
+    print(f"# Yggdrasil retrieval eval — mode: {mode}\n")
+    for pf, scope_label in ((True, "project-scoped (real `ygg search --project P` path)"),
+                            (False, "full-corpus (hard: 1 of the whole store)")):
+        print(f"## {scope_label}")
+        allr = evaluate(project_filter=pf)
+        hold = evaluate(splits={"holdout"}, project_filter=pf)
+        dev = evaluate(splits={"dev"}, project_filter=pf)
+        pool = allr["candidate_pool"]
+        print(f"  candidate pool per query: min {pool['min']} · median {pool['median']} · max {pool['max']}")
+        for name, r in (("HOLDOUT (untouched by tuning)", hold), ("dev (tuning split)", dev), ("all", allr)):
+            lo, hi = r["recall@1_ci95"]
+            print(f"  {name:<30} n={r['n_cases']:<3} recall@1={r['recall@1']:.3f} "
+                  f"[95% CI {lo:.2f}–{hi:.2f}]  recall@3={r['recall@3']:.3f}  mrr={r['mrr']:.3f}")
+        print()
+    print("Headline should be read as HOLDOUT recall@1 (the split the fusion weights were NOT tuned on).")
+
+
 if __name__ == "__main__":
-    print(json.dumps(evaluate(), indent=2, ensure_ascii=False))
+    if "--report" in sys.argv or os.environ.get("YGG_EVAL_REPORT"):
+        honest_report()
+    else:
+        print(json.dumps(evaluate(), indent=2, ensure_ascii=False))
