@@ -39,7 +39,7 @@ Legend: **[S]** security · **[C]** correctness · **[P]** performance · **[DX]
 23. ✅ **[C] Embedding model versioning** — per-row `embed_model`; `missing_embeddings`/`reindex` treat a model switch as stale and re-embed. *(3bd78ab)*
 24. ✅ **[C] Ranking parity** — pin/usage now cross to the vector-only path via the same lexical channel. Deliberately scoped to the user-earned signals (pin, usage), NOT importance/recency, so the eval corpus is provably unchanged (lexical recall@1 still 0.77) while real pins work on both paths. *(fe11af7)*
 
-> **P2 verification gap:** the dense benchmark (recall@1 0.94) needs Ollama, which wasn't available in the change environment — the default gate runs the engine lexical-only. Re-run `python3 eval/ygg_eval.py --mode paraphrase-multilingual` on a machine with Ollama before the next release to confirm dense ranking is unmoved. The ranking-parity change (#24) was deliberately built to be dense-eval-invariant (only pin/usage, absent from the eval corpus), but this hasn't been measured end-to-end.
+> **P2 dense benchmark — verified 2026-07-02 (Ollama):** the blob/cache refactor and ranking-parity change reproduce every published number exactly — lexical recall@1 **0.7714**, `all-minilm` **0.8286**, `paraphrase-multilingual` **0.9429** (recall@3 **1.0**, MRR **0.9714**, crosslingual EN→RU **0.80**). Ranking is unmoved, confirming the parity change (#24) is dense-eval-invariant as designed.
 
 ## P3 — Benchmark credibility (armor for the 0.94 badge)
 
