@@ -43,6 +43,54 @@ class ReindexTest(unittest.TestCase):
         self._insert(store, archived=1)
         self.assertEqual(store.missing_embeddings(), 0)
 
+    def test_add_populates_vector_cache(self):
+        store = self._store()
+        rec = store.add(content="cache me", user_id="u", namespace="n",
+                        scope="global", metadata={})
+        # add() with a live embedder must warm the in-process cache so the next
+        # search doesn't re-parse the blob.
+        seq = store._conn.execute("SELECT seq FROM memories WHERE id=?", (rec["id"],)).fetchone()[0]
+        self.assertIn(seq, store._vec_cache)
+
+    def test_reindex_reembeds_on_model_change(self):
+        store = self._store()
+        store.add(content="written by model A", user_id="u", namespace="n", scope="global", metadata={})
+        self.assertEqual(store.missing_embeddings(), 0)   # current model, up to date
+        # Simulate switching the embedding model: the old row is now stale.
+        store._embed_model = "fake-v2"
+        store.embedder.model = "fake-v2"
+        self.assertEqual(store.missing_embeddings(), 1)   # model mismatch = needs reindex
+        self.assertEqual(store.reindex_embeddings(), 1)
+        self.assertEqual(store.missing_embeddings(), 0)
+
+
+class LegacyMigrationTest(unittest.TestCase):
+    def test_json_embedding_migrates_to_blob_on_open(self):
+        import json
+        path = tempfile.mktemp(suffix=".sqlite")
+        # First open: write a legacy JSON-text embedding directly (pre-blob format).
+        store = eng.MemoryStore(path, embedder=None)
+        with store._lock:
+            store._conn.execute(
+                "INSERT INTO memories (id,user_id,namespace,scope,project,type,content,"
+                "content_hash,source,confidence,importance,created_at,access_count,archived,"
+                "metadata_json,embedding) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)",
+                ("ygg_legacy", "u", "n", "project", "p", "lesson", "x", None, "t", None,
+                 0.5, time.time(), "{}", json.dumps([1.0, 0.0, 0.0])),
+            )
+            store._conn.commit()
+        store._conn.close()
+
+        # Reopen: _init_schema must backfill the blob from the JSON text.
+        store2 = eng.MemoryStore(path, embedder=None)
+        row = store2._conn.execute("SELECT embedding_blob, embed_model FROM memories WHERE id='ygg_legacy'").fetchone()
+        self.assertIsNotNone(row["embedding_blob"])
+        self.assertEqual(row["embed_model"], "(legacy)")
+        # And it's usable for semantic dedup.
+        hit = store2.find_similar(user_id="u", project="p", mem_type="lesson",
+                                  vec=[1.0, 0.0, 0.0], threshold=0.9)
+        self.assertIsNotNone(hit)
+
 
 if __name__ == "__main__":
     unittest.main()

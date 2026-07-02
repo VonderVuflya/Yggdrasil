@@ -28,9 +28,11 @@ Auth: every endpoint except /health requires `Authorization: Bearer <token>`.
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import sqlite3
@@ -112,6 +114,38 @@ def tokenize(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) >= 2 and t not in STOPWORDS]
 
 
+# --- vector storage helpers -------------------------------------------------
+# Embeddings are stored as packed float32 BLOBs (4 bytes/dim) rather than JSON
+# text (~15 bytes/dim) — ~4× smaller on disk AND no json.loads on the hot path.
+# The store keeps an in-process cache of UNIT-normalized vectors, so cosine
+# collapses to a plain dot product and each row is parsed at most once.
+
+def _vec_to_blob(vec) -> bytes:
+    return array.array("f", vec).tobytes()
+
+
+def _blob_to_array(blob: bytes) -> "array.array":
+    a = array.array("f")
+    a.frombytes(blob)
+    return a
+
+
+def _unit(vec) -> "array.array | None":
+    """Unit-length float32 copy of vec, or None for an empty/zero vector."""
+    norm = math.sqrt(sum(x * x for x in vec)) if vec else 0.0
+    if not norm:
+        return None
+    return array.array("f", [x / norm for x in vec])
+
+
+def _dot(a, b) -> float | None:
+    """Dot product of two equal-length vectors; None if the dimensions differ
+    (e.g. the embedding model changed and this row hasn't been reindexed)."""
+    if len(a) != len(b):
+        return None
+    return sum(x * y for x, y in zip(a, b))
+
+
 def expand_identifiers(text: str) -> str:
     """Append space-split forms of camelCase/PascalCase identifiers so code
     memory is searchable by words (e.g. 'scrollWidth' also matches 'scroll width').
@@ -141,6 +175,16 @@ class MemoryStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self.use_fts = self._init_schema()
+        # Name of the embedding model this process produces vectors with — stored
+        # per row so a model switch can be detected and reindexed (item: model
+        # versioning), and so mixed-model rows are never silently cosine-compared.
+        self._embed_model = getattr(self.embedder, "model", None) if self.embedder else None
+        # seq -> unit vector. Built once at startup (single-threaded here) and
+        # kept warm incrementally on every write; None-guarded so lexical-only
+        # runs pay nothing.
+        self._vec_cache: dict[int, "array.array"] = {}
+        if self.embedder is not None:
+            self._load_vec_cache()
 
     def _init_schema(self) -> bool:
         cur = self._conn
@@ -171,12 +215,30 @@ class MemoryStore:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_scope ON memories(user_id, namespace, project, scope)")
         # Indexed dedup lookup — O(log n) content-hash check at any store size (no 1000-row cap).
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_hash ON memories(user_id, project, type, content_hash)")
-        # Lazy migration for pre-existing DBs created before the embedding column.
+        # Lazy migration for pre-existing DBs created before these columns.
         existing_cols = {r[1] for r in cur.execute("PRAGMA table_info(memories)").fetchall()}
         if "embedding" not in existing_cols:
             cur.execute("ALTER TABLE memories ADD COLUMN embedding TEXT")
         if "last_accessed_at" not in existing_cols:
             cur.execute("ALTER TABLE memories ADD COLUMN last_accessed_at REAL")
+        if "embedding_blob" not in existing_cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN embedding_blob BLOB")
+        if "embed_model" not in existing_cols:
+            cur.execute("ALTER TABLE memories ADD COLUMN embed_model TEXT")
+        # One-time backfill: convert any legacy JSON-text embeddings to packed
+        # float32 blobs (tagged '(legacy)' so a later reindex re-embeds them with
+        # the real model name). Bounded, runs once — after it, only blobs matter.
+        legacy = cur.execute(
+            "SELECT seq, embedding FROM memories WHERE embedding IS NOT NULL AND embedding_blob IS NULL"
+        ).fetchall()
+        for r in legacy:
+            try:
+                vec = json.loads(r["embedding"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(vec, list) and vec:
+                cur.execute("UPDATE memories SET embedding_blob=?, embed_model=COALESCE(embed_model, '(legacy)') WHERE seq=?",
+                            (_vec_to_blob(vec), r["seq"]))
         use_fts = True
         try:
             cur.execute(
@@ -226,9 +288,47 @@ class MemoryStore:
         except Exception:
             return None
 
-    def _embed_json(self, text: str) -> str | None:
-        vec = self._embed_raw(text)
-        return json.dumps(vec) if vec else None
+    def _load_vec_cache(self) -> None:
+        """Parse every stored blob into a unit vector once (called single-threaded
+        at startup, or under the lock when rebuilding)."""
+        cache: dict[int, "array.array"] = {}
+        for row in self._conn.execute(
+            "SELECT seq, embedding_blob FROM memories WHERE embedding_blob IS NOT NULL"
+        ):
+            unit = _unit(_blob_to_array(row["embedding_blob"]))
+            if unit is not None:
+                cache[row["seq"]] = unit
+        self._vec_cache = cache
+
+    def _row_unit(self, row) -> "array.array | None":
+        """Unit vector for a row: cache hit, else parse its blob once and warm
+        the cache. Keeps the cache an optimization, not a correctness requirement
+        (rows added while dense was off, or inserted directly, still resolve)."""
+        cv = self._vec_cache.get(row["seq"])
+        if cv is not None:
+            return cv
+        blob = row["embedding_blob"] if "embedding_blob" in row.keys() else None
+        if not blob:
+            return None
+        unit = _unit(_blob_to_array(blob))
+        if unit is not None:
+            self._vec_cache[row["seq"]] = unit
+        return unit
+
+    def _store_embedding_locked(self, seq: int, vec) -> None:
+        """Persist vec as a float32 blob + model tag and refresh the warm cache.
+        The caller must hold self._lock (and own the surrounding transaction)."""
+        if vec:
+            self._conn.execute("UPDATE memories SET embedding_blob=?, embed_model=? WHERE seq=?",
+                               (_vec_to_blob(vec), self._embed_model, seq))
+            unit = _unit(vec)
+            if unit is not None:
+                self._vec_cache[seq] = unit
+            else:
+                self._vec_cache.pop(seq, None)
+        else:
+            self._conn.execute("UPDATE memories SET embedding_blob=NULL, embed_model=NULL WHERE seq=?", (seq,))
+            self._vec_cache.pop(seq, None)
 
     # ---- write path --------------------------------------------------------
 
@@ -242,16 +342,14 @@ class MemoryStore:
         confidence = metadata.get("confidence")
         content_hash = metadata.get("content_hash")
         importance = float(metadata.get("importance", 0.5)) if metadata.get("importance") is not None else 0.5
-        embedding_json = self._embed_json(content)  # network call outside the lock
+        vec = self._embed_raw(content)  # network call outside the lock
+        embedding_blob = _vec_to_blob(vec) if vec else None
+        embed_model = self._embed_model if vec else None
         # Semantic dedup (only when dense is on): reuse this one embedding to skip
         # a write that's near-identical to an existing memory in the same scope.
-        if dedupe_threshold is not None and embedding_json:
-            try:
-                vec = json.loads(embedding_json)
-            except (json.JSONDecodeError, TypeError):
-                vec = None
+        if dedupe_threshold is not None and vec:
             existing = self.find_similar(user_id=user_id, project=project, mem_type=mem_type,
-                                         vec=vec, threshold=float(dedupe_threshold)) if vec else None
+                                         vec=vec, threshold=float(dedupe_threshold))
             if existing is not None:
                 existing["event"] = "SEMANTIC_DUPLICATE"
                 return existing
@@ -263,18 +361,22 @@ class MemoryStore:
                 cur = self._conn.execute(
                     """
                     INSERT INTO memories
-                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)
+                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding_blob,embed_model)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?)
                     """,
                     (
                         memory_id, user_id, namespace, scope, project, mem_type, content,
                         content_hash, source, confidence, importance, created_at,
-                        json.dumps(metadata, sort_keys=True), embedding_json,
+                        json.dumps(metadata, sort_keys=True), embedding_blob, embed_model,
                     ),
                 )
                 seq = cur.lastrowid
                 if self.use_fts:
                     self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, expand_identifiers(content)))
+            if vec:  # keep the warm cache in sync
+                unit = _unit(vec)
+                if unit is not None:
+                    self._vec_cache[seq] = unit
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         record = self._row_to_record(row)
         record["event"] = "ADD"
@@ -327,10 +429,10 @@ class MemoryStore:
                     self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         if data is not None and self.embedder is not None:
-            emb_json = self._embed_json(content)  # network call outside the lock
+            vec = self._embed_raw(content)  # network call outside the lock
             with self._lock:
                 with self._conn:
-                    self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, seq))
+                    self._store_embedding_locked(seq, vec)
                 row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         return self._row_to_record(row)
 
@@ -371,22 +473,22 @@ class MemoryStore:
         """The most semantically-similar live memory in the same (user, project,
         type) whose cosine to `vec` is >= threshold, or None. Catches near-dupes
         that exact content-hash misses (e.g. the LLM re-wording the same lesson)."""
-        if not vec:
+        qunit = _unit(vec)
+        if qunit is None:
             return None
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM memories WHERE user_id=? AND project=? AND type=? "
-                "AND archived=0 AND embedding IS NOT NULL",
+                "AND archived=0 AND embedding_blob IS NOT NULL",
                 (user_id, project, mem_type),
             ).fetchall()
         best_row, best = None, float(threshold)
         for row in rows:
-            try:
-                emb = json.loads(row["embedding"])
-            except (json.JSONDecodeError, TypeError):
+            cv = self._row_unit(row)
+            if cv is None:
                 continue
-            sim = cosine(vec, emb)
-            if sim >= best:
+            sim = _dot(qunit, cv)  # both unit vectors → dot == cosine
+            if sim is not None and sim >= best:
                 best, best_row = sim, row
         if best_row is None:
             return None
@@ -406,6 +508,7 @@ class MemoryStore:
                 if self.use_fts:
                     self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
                 self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
+            self._vec_cache.pop(row["seq"], None)
         return True
 
     def purge(self, *, user_id: str, namespace: str | None = None, project: str | None = None,
@@ -434,6 +537,8 @@ class MemoryStore:
                     if self.use_fts:
                         self._conn.execute(f"DELETE FROM mem_fts WHERE rowid IN ({marks})", chunk)
                     self._conn.execute(f"DELETE FROM memories WHERE seq IN ({marks})", chunk)
+            for s in seqs:
+                self._vec_cache.pop(s, None)
         return len(seqs)
 
     def count(self) -> int:
@@ -441,10 +546,18 @@ class MemoryStore:
             return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
 
     def missing_embeddings(self) -> int:
-        """Live memories with no stored embedding — invisible to dense recall."""
+        """Live memories with no current-model embedding — invisible to (or stale
+        for) dense recall. Counts rows with no blob, plus rows embedded by a
+        different model than this process uses (they need a reindex)."""
         with self._lock:
+            if self._embed_model is None:
+                return self._conn.execute(
+                    "SELECT COUNT(*) FROM memories WHERE embedding_blob IS NULL AND archived=0"
+                ).fetchone()[0]
             return self._conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE embedding IS NULL AND archived=0"
+                "SELECT COUNT(*) FROM memories WHERE archived=0 AND "
+                "(embedding_blob IS NULL OR embed_model IS NOT ?)",
+                (self._embed_model,),
             ).fetchone()[0]
 
     def search(
@@ -501,7 +614,7 @@ class MemoryStore:
             vec_rows = []
             if self.embedder is not None:
                 vec_rows = self._conn.execute(
-                    f"SELECT m.* FROM memories m WHERE {where_sql} AND m.embedding IS NOT NULL", params
+                    f"SELECT m.* FROM memories m WHERE {where_sql} AND m.embedding_blob IS NOT NULL", params
                 ).fetchall()
 
         # Lexical ranking: BM25/overlap relevance + importance + recency boost.
@@ -535,17 +648,18 @@ class MemoryStore:
                 r["score"] = r["lexical_score"]
             return lex_scored[:limit]
 
-        # Dense ranking: cosine of the query vs stored embeddings over the scoped set.
+        # Dense ranking: cosine of the query vs the cached unit vectors over the
+        # scoped set — no per-row JSON parse; cosine is a dot of two unit vectors.
         query_vec = self._embed_raw(query)
+        qunit = _unit(query_vec) if query_vec else None
         vec_scored: list[dict[str, Any]] = []
-        if query_vec:
+        if qunit is not None:
             for row in vec_rows:
-                try:
-                    emb = json.loads(row["embedding"])
-                except (json.JSONDecodeError, TypeError):
+                cv = self._row_unit(row)
+                if cv is None:
                     continue
-                sim = cosine(query_vec, emb)
-                if sim <= 0:
+                sim = _dot(qunit, cv)
+                if sim is None or sim <= 0:
                     continue
                 record = records.get(row["id"]) or self._row_to_record(row)
                 record["vector_score"] = round(sim, 6)
@@ -582,14 +696,15 @@ class MemoryStore:
         # back to the nearest memories by cosine (helps one-word / paraphrase /
         # cross-lingual queries where nothing cleared the cutoff above). Marked so
         # callers can tell these are "closest", not strong matches.
-        if not result and query_vec and vec_rows:
+        if not result and qunit is not None and vec_rows:
             near: list[tuple[float, Any]] = []
             for row in vec_rows:
-                try:
-                    emb = json.loads(row["embedding"])
-                except (json.JSONDecodeError, TypeError):
+                cv = self._row_unit(row)
+                if cv is None:
                     continue
-                near.append((cosine(query_vec, emb), row))
+                sim = _dot(qunit, cv)
+                if sim is not None:
+                    near.append((sim, row))
             near.sort(key=lambda t: t[0], reverse=True)
             for sim, row in near[:limit]:
                 rec = self._row_to_record(row)
@@ -615,19 +730,24 @@ class MemoryStore:
                 )
 
     def reindex_embeddings(self) -> int:
-        """Embed any rows missing an embedding — self-heals after a cold-start
-        timeout, or when dense is enabled after content already exists."""
+        """Embed rows that have no current-model vector — self-heals after a
+        cold-start timeout, when dense is enabled after content already exists,
+        OR when the embedding model changed (rows tagged with a different model,
+        including '(legacy)' JSON migrations, are re-embedded)."""
         if self.embedder is None:
             return 0
         with self._lock:
-            rows = self._conn.execute("SELECT seq, content FROM memories WHERE embedding IS NULL").fetchall()
+            rows = self._conn.execute(
+                "SELECT seq, content FROM memories WHERE embedding_blob IS NULL OR embed_model IS NOT ?",
+                (self._embed_model,),
+            ).fetchall()
         healed = 0
         for row in rows:
-            emb_json = self._embed_json(row["content"])
-            if emb_json:
+            vec = self._embed_raw(row["content"])
+            if vec:
                 with self._lock:
                     with self._conn:
-                        self._conn.execute("UPDATE memories SET embedding=? WHERE seq=?", (emb_json, row["seq"]))
+                        self._store_embedding_locked(row["seq"], vec)
                 healed += 1
         return healed
 

@@ -18,13 +18,15 @@ class FindSimilarTest(unittest.TestCase):
         return eng.MemoryStore(tempfile.mktemp(suffix=".sqlite"), embedder=None)
 
     def _insert(self, store, vec, *, project="p", mtype="lesson", user="u"):
+        # Embeddings are stored as packed float32 blobs; find_similar reads them
+        # via the row/cache path, so seed the blob column directly.
         with store._lock:
             store._conn.execute(
                 "INSERT INTO memories (id,user_id,namespace,scope,project,type,content,"
                 "content_hash,source,confidence,importance,created_at,access_count,archived,"
-                "metadata_json,embedding) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)",
+                "metadata_json,embedding_blob,embed_model) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?)",
                 ("ygg_" + uuid.uuid4().hex, user, "n", "project", project, mtype, "x",
-                 None, "t", None, 0.5, time.time(), "{}", json.dumps(vec)),
+                 None, "t", None, 0.5, time.time(), "{}", eng._vec_to_blob(vec), "test"),
             )
             store._conn.commit()
 
