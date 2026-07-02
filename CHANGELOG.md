@@ -3,6 +3,43 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+Results of a full technical audit (2026-07-01) — see `docs/IMPROVEMENT-PLAN.md`
+for the complete prioritized plan this release starts working through.
+
+### Fixed
+- **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK, …). The
+  query-side tokenizer was ASCII-only while the FTS index used `unicode61`, so
+  e.g. a Russian query matched nothing in lexical mode. Also splits `snake_case`.
+- **Engine writes are transactional.** An exception mid-write (disk full, bad
+  input) used to leave an open transaction that the *next* request silently
+  committed — producing memories invisible to lexical search. Row + FTS now
+  commit or roll back together.
+- **Malformed client input returns a JSON 400** instead of a traceback and a
+  dropped connection (`limit="abc"`, `importance:"high"`, …).
+- **Editing a memory refreshes its `content_hash`** — a stale hash corrupted
+  dedup both ways (old text wrongly rejected as duplicate, new text duplicable).
+- **`ygg doctor` no longer prints "All good." when no MCP registration exists**
+  anywhere — a missing registration now fails the check.
+
+### Security
+- **No more `yggdrasil-demo-token` fallback in the engine.** A bare `ygg serve`
+  now reuses (or generates) the standard 0600 `~/.yggdrasil/token` file instead
+  of accepting a publicly-known constant from any local process.
+- **The Streamable-HTTP MCP facade refuses to start without a token** (it is
+  built to sit behind public tunnels). Explicit `YGG_MCP_INSECURE=1` opts into
+  open mode for local testing.
+- **`ygg_materialize` output is confined to the vault root.** A remote MCP
+  client could previously write attacker-seeded `.md` files to any path the
+  user can write (e.g. `~/.claude/commands/` — persistent prompt injection).
+- **Auth token no longer written in plaintext** into world-readable launchd
+  plists (`install.sh` legacy path, still used by `ygg consolidate`), into MCP
+  registrations, or into `~/.claude.json` — everything now resolves the 0600
+  token file at call time.
+- **Timing-safe token comparison** (`hmac.compare_digest`) and a **Host-header
+  check** on loopback binds (blocks DNS-rebinding drive-bys from the browser).
+
 ## [0.5.4] — 2026-06-29
 
 ### Changed

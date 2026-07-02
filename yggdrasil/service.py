@@ -240,12 +240,17 @@ def _win_pythonw(py: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def claude_json_entry() -> dict:
-    """The MCP server entry as it should appear in ~/.claude.json."""
+    """The MCP server entry as it should appear in ~/.claude.json.
+
+    Deliberately NO token in the entry: ~/.claude.json is a world-readable-ish
+    config other tools sync and back up. ygg_core resolves the token from the
+    0600 ~/.yggdrasil/token file at call time — the secret stays in one place.
+    """
     return {
         "type": "stdio",
         "command": _python(),
         "args": [str(_mcp_py())],
-        "env": {"YGG_ENGINE_URL": URL, "YGG_ENGINE_TOKEN": token()},
+        "env": {"YGG_ENGINE_URL": URL},
     }
 
 
@@ -280,7 +285,9 @@ def _register_claude_json() -> bool:
 
 
 def register_mcp() -> list[str]:
-    tok = token()
+    # No YGG_ENGINE_TOKEN in the registrations: the agent configs (~/.claude.json,
+    # Codex config) would persist the secret in plaintext. ygg_core reads the
+    # 0600 ~/.yggdrasil/token file itself when the env var is absent.
     mcp = str(_mcp_py())
     py = _python()
     done = []
@@ -289,7 +296,7 @@ def register_mcp() -> list[str]:
                        capture_output=True)
         r = subprocess.run(
             ["claude", "mcp", "add", "yggdrasil", "-s", "user",
-             "-e", f"YGG_ENGINE_URL={URL}", "-e", f"YGG_ENGINE_TOKEN={tok}",
+             "-e", f"YGG_ENGINE_URL={URL}",
              "--", py, mcp],
             capture_output=True, text=True)
         if r.returncode == 0:
@@ -301,7 +308,7 @@ def register_mcp() -> list[str]:
         subprocess.run(["codex", "mcp", "remove", "yggdrasil"], capture_output=True)
         r = subprocess.run(
             ["codex", "mcp", "add", "yggdrasil",
-             "--env", f"YGG_ENGINE_URL={URL}", "--env", f"YGG_ENGINE_TOKEN={tok}",
+             "--env", f"YGG_ENGINE_URL={URL}",
              "--", py, mcp],
             capture_output=True, text=True)
         if r.returncode == 0:

@@ -214,6 +214,9 @@ def _doctor() -> int:
     if not codex_reg:
         print("       → fix: ygg register")
     if not claude_reg and not codex_reg:
+        # No registration anywhere means no agent has the ygg_* tools — that is
+        # a failed install, not "All good."
+        ok = False
         print("       (or install the plugin: /plugin marketplace add VonderVuflya/Yggdrasil"
               " then /plugin install yggdrasil)")
 
