@@ -598,7 +598,9 @@ def enable_session_hook() -> int:
     for event, script in _RETRIEVAL_HOOKS:
         cmd = f"{_python()} {SCRIPTS / 'hooks' / script}"
         groups = cfg.setdefault("hooks", {}).setdefault(event, [])
-        if any(h.get("command") == cmd for g in groups for h in g.get("hooks", [])):
+        # Dedupe by script name, not the exact command — a changed python path
+        # used to re-register the same hook and inject context twice.
+        if any(script in h.get("command", "") for g in groups for h in g.get("hooks", [])):
             continue
         groups.append({"hooks": [{"type": "command", "command": cmd}]})
         added.append(event)

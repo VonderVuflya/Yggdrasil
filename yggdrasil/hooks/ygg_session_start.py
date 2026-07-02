@@ -83,6 +83,27 @@ def render_identity(ident: dict) -> str:
     return "\n".join(lines)
 
 
+def duplicate_invocation(payload: dict, event: str = "session-start") -> bool:
+    """True when another registration of this hook already ran for this session.
+
+    The plugin AND `ygg hooks` can both be enabled — two registrations then
+    inject the whole context twice per session. An atomic O_CREAT|O_EXCL lock
+    keyed by session_id makes the second invocation a silent no-op (the tmp
+    dir cleans the locks up)."""
+    sid = str(payload.get("session_id") or "")
+    if not sid:
+        return False
+    import tempfile
+    lock = Path(tempfile.gettempdir()) / f"ygg-{event}-{sid}.lock"
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return False
+    except FileExistsError:
+        return True
+    except OSError:
+        return False  # can't lock -> better to risk a duplicate than inject nothing
+
+
 def project_for(cwd: str) -> str:
     try:
         top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"],
@@ -125,6 +146,8 @@ def main() -> int:
         payload = json.loads(raw) if raw.strip() else {}
     except (json.JSONDecodeError, ValueError):
         payload = {}
+    if duplicate_invocation(payload):
+        return 0
     cwd = payload.get("cwd") or os.getcwd()
     project = project_for(cwd)
 

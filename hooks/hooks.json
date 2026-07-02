@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_session_start.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_session_start.py\" || python \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_session_start.py\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_user_prompt.py\""
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_user_prompt.py\" || python \"${CLAUDE_PLUGIN_ROOT}/yggdrasil/hooks/ygg_user_prompt.py\""
           }
         ]
       }

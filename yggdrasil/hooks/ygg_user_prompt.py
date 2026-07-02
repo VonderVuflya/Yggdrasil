@@ -39,6 +39,34 @@ def token() -> str:
         return "yggdrasil-demo-token"
 
 
+def duplicate_invocation(payload: dict) -> bool:
+    """True when another registration of this hook already handled THIS prompt
+    (plugin + `ygg hooks` double-registration would inject recall twice).
+    Keyed by session + prompt hash with a short TTL, so the same prompt
+    re-submitted later in the session still gets its recall."""
+    sid = str(payload.get("session_id") or "")
+    if not sid:
+        return False
+    import hashlib
+    import tempfile
+    import time
+    key = hashlib.sha1((payload.get("prompt") or "").encode("utf-8", "replace")).hexdigest()[:10]
+    lock = Path(tempfile.gettempdir()) / f"ygg-user-prompt-{sid}-{key}.lock"
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        return False
+    except FileExistsError:
+        try:
+            if time.time() - lock.stat().st_mtime < 15:
+                return True
+            lock.touch()  # stale lock from an earlier identical prompt — restamp
+            return False
+        except OSError:
+            return False
+    except OSError:
+        return False  # can't lock -> better to risk a duplicate than inject nothing
+
+
 def _relevant(item: dict) -> bool:
     """Absolute relevance gate so off-topic prompts inject nothing. Prefer the raw
     cosine (vector_score); fall back to the fused score for lexical-only setups."""
@@ -57,6 +85,8 @@ def main() -> int:
     prompt = (payload.get("prompt") or "").strip()
     # Skip trivial / command prompts — no useful recall, not worth the latency.
     if len(prompt) < MIN_PROMPT_CHARS or prompt.startswith("/"):
+        return 0
+    if duplicate_invocation(payload):
         return 0
 
     try:
