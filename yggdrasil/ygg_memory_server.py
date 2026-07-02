@@ -36,6 +36,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -1121,7 +1122,20 @@ def main() -> int:
                       f"(could not write {token_path})", flush=True)
     Handler.token = tok
 
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as exc:
+        # Almost always "address already in use" — the daemon is likely already
+        # running, or another process holds the port. Give an actionable hint
+        # instead of a bare traceback.
+        print(
+            f"ygg-memory: cannot bind {args.host}:{args.port} ({exc}).\n"
+            f"  • already running? check:  ygg status   (or curl http://{args.host}:{args.port}/health)\n"
+            f"  • port taken by something else? pick another:  YGG_MEMORY_PORT=42169 ygg serve …  "
+            f"(and set YGG_PORT to match)",
+            file=sys.stderr, flush=True,
+        )
+        return 1
     print(
         f"ygg-memory: listening on http://{args.host}:{args.port}  db={args.db}  "
         f"fts5={'on' if store.use_fts else 'off (python fallback)'}  "

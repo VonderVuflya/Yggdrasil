@@ -190,6 +190,8 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | `ygg pin --id ID` · `ygg unpin --id ID` | Pin a memory so it reliably surfaces |
 | `ygg supersede --id ID` | Archive an outdated memory a newer one replaces |
 | `ygg materialize --id ID --project P` | Export one memory to an Obsidian note |
+| `ygg export-native --project P` | Write a curated digest into `AGENTS.md`/`MEMORY.md` — feed Claude Code & Codex's native memory |
+| `ygg delete --id ID` · `ygg reset …` | Hard-delete one memory · bulk-undo a bad seed (confirms first) |
 
 **Cold start**
 
@@ -225,7 +227,7 @@ Heavy seeding, weak laptop? Point distillation at a beefier box on your LAN: `yg
 <details>
 <summary><b>Claude Code already has built-in memory — why Yggdrasil?</b></summary>
 
-Built-in memories are per-vendor, per-repo, per-machine, and retrieved by literal text match. Yggdrasil is the layer above: the *same* memory in Claude Code, Codex, and any MCP host, recall *across* projects, optional semantic search — still 100% local. They compose: keep the native memory, and let `ygg seed` distill your existing history into the shared brain.
+Built-in memories are per-vendor, per-repo, per-machine, and retrieved by literal text match. Yggdrasil is the layer above: the *same* memory in Claude Code, Codex, and any MCP host, recall *across* projects, optional semantic search — still 100% local. It bridges them **both ways**: `ygg seed` distills your existing native memory + transcripts into the shared brain, and `ygg export-native` writes a curated digest back into `AGENTS.md`/`MEMORY.md` — so even a fresh clone or a tool without Yggdrasil still gets your curated memory.
 </details>
 
 <details>

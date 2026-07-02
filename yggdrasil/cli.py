@@ -107,6 +107,13 @@ def _install(rest: list[str]) -> int:
         sys.argv = ["ygg", "wizard"]
         rc = ygg_setup.main()  # wizard collects models, then calls service.install
     else:
+        if not embed and not bg:
+            # Non-TTY (piped / CI / `YGG_NONINTERACTIVE=1`) with no model flags:
+            # we can't run the model-picker wizard, so this is a zero-config,
+            # lexical-only install. Say so, so it isn't a silent surprise.
+            print("ygg install: non-interactive — setting up zero-config, lexical-only "
+                  "(no embedding model).\n  Add semantic search later with:  ygg setup   "
+                  "(or:  ygg install --embed-model paraphrase-multilingual)")
         rc = service.install(embed, bg)
     print("\n--- ygg doctor ---")
     _doctor()  # always end install with the diagnostic checklist
