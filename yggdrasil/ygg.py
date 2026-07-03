@@ -638,6 +638,110 @@ def review(args: argparse.Namespace) -> None:
     print(f"\nreview done — {', '.join(parts)}. Archives are reversible (nothing hard-deleted).")
 
 
+# ---- ygg import: one-command migration FROM another memory tool -------------
+# Zero switching cost: point at another tool's local store, pull everything into
+# Yggdrasil (deduped, secret-guarded), then you can delete the old tool. `ygg
+# seed` already covers Claude Code / Codex / Obsidian / CLAUDE.md; this covers
+# dedicated memory tools with their own stores.
+
+def _import_mcp_memory(path: Path, project: str) -> list[tuple[str, str]]:
+    """Read the reference MCP memory server's store (`@modelcontextprotocol/
+    server-memory` — the most-installed memory MCP). It's newline-delimited JSON:
+    {"type":"entity","name":..,"entityType":..,"observations":[..]} and
+    {"type":"relation","from":..,"to":..,"relationType":..}. Returns
+    (content, memory_type) pairs — one memory per entity, its relations folded in."""
+    entities: dict[str, dict[str, Any]] = {}
+    relations: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") == "entity" and obj.get("name"):
+            entities[obj["name"]] = obj
+        elif obj.get("type") == "relation":
+            relations.append(obj)
+    rel_by_from: dict[str, list[str]] = {}
+    for r in relations:
+        frm, to, kind = r.get("from"), r.get("to"), r.get("relationType")
+        if frm and to and kind:
+            rel_by_from.setdefault(frm, []).append(f"{kind} {to}")
+    out: list[tuple[str, str]] = []
+    for name, e in entities.items():
+        obs = "; ".join(o for o in (e.get("observations") or []) if isinstance(o, str) and o.strip())
+        rels = "; ".join(rel_by_from.get(name, []))
+        label = name.replace("_", " ")
+        etype = e.get("entityType") or "entity"
+        content = f"{label} ({etype})" + (f": {obs}" if obs else "")
+        if rels:
+            content += f" — {rels}"
+        if content.strip():
+            out.append((content.strip(), "reference"))
+    return out
+
+
+def _import_basic_memory(path: Path, project: str) -> list[tuple[str, str]]:
+    """Basic Memory keeps plain-Markdown notes (files-as-truth). Import each note
+    verbatim as a reference memory — no LLM, since they're already curated."""
+    base = path if path.is_dir() else path.parent
+    out: list[tuple[str, str]] = []
+    for md in sorted(base.rglob("*.md"))[:2000]:
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if text:
+            out.append((f"[{md.stem}] {text}"[:4000], "reference"))
+    return out
+
+
+_IMPORTERS = {
+    "mcp-memory": (_import_mcp_memory,
+                   "the reference MCP memory server (@modelcontextprotocol/server-memory) — "
+                   "point --path at its memory.json"),
+    "basic-memory": (_import_basic_memory,
+                     "Basic Memory's Markdown notes — point --path at the vault directory"),
+}
+
+
+def import_cmd(args: argparse.Namespace) -> None:
+    """Migrate memories FROM another tool's local store into Yggdrasil."""
+    importer, _ = _IMPORTERS[args.source]
+    path = Path(args.path).expanduser()
+    if not path.exists():
+        raise YggError(f"no such path: {path}")
+    project = args.project or "imported"
+    items = importer(path, project)
+    if not items:
+        print(f"nothing to import from {args.source} at {path}")
+        return
+    if args.dry_run:
+        print(f"{args.source}: would import {len(items)} memories into project '{project}'. Examples:")
+        for content, mtype in items[:5]:
+            print(f"  [{mtype}] {' '.join(content.split())[:120]}")
+        print("(dry run — nothing written. Drop --dry-run to import.)")
+        return
+    added = dup = errors = 0
+    for content, mtype in items:
+        try:
+            status, _ = write_memory(
+                content=content, project=project, memory_type=mtype,
+                source=f"import:{args.source}", user_id=args.user_id,
+                namespace=args.namespace, confidence=0.7, tags=["imported", args.source],
+            )
+            added += status == "added"
+            dup += status == "duplicate"
+        except YggError:
+            errors += 1
+    print(f"imported from {args.source}: +{added} new, {dup} duplicate-skipped, "
+          f"{errors} error(s) → project '{project}'.")
+    print("Verify:  ygg search --project " + project + " --query \"…\"   "
+          "· then you can remove the old tool.")
+
+
 def bootstrap(args: argparse.Namespace) -> None:
     # Query-stuffing with the CANONICAL type names (the enum agents write with),
     # so bootstrap ranks typed memories up — legacy names matched nothing.
@@ -749,6 +853,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", action="store_true", help="non-interactive: auto-consolidate duplicates, flag the rest")
     p.add_argument("--limit", type=int, default=1000)
     p.set_defaults(func=review)
+
+    p = sub.add_parser("import", parents=[common])
+    p.add_argument("--from", dest="source", required=True, choices=sorted(_IMPORTERS),
+                   help="which tool to migrate FROM")
+    p.add_argument("--path", required=True, help="path to that tool's store (file or dir)")
+    p.add_argument("--project", help="project to file the imported memories under (default: imported)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=import_cmd)
 
     p = sub.add_parser("export-native", parents=[common])
     p.add_argument("--project", required=True)

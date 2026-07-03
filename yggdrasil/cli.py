@@ -77,7 +77,7 @@ SERVICE_CMDS = {
     "consolidate", "unconsolidate",
 }
 MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize",
-               "pin", "unpin", "supersede", "delete", "reset", "export-native", "review"}
+               "pin", "unpin", "supersede", "delete", "reset", "export-native", "review", "import"}
 
 
 def _port() -> int:
