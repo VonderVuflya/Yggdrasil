@@ -265,6 +265,63 @@ def _lang_directive(text: str) -> str:
             "translate. Keep code identifiers, commands and names verbatim.")
 
 
+def _salvage_lessons(raw: str) -> list:
+    """Pull lesson objects out of malformed JSON. Scans for every balanced
+    `{…}` at ANY nesting depth (a stack of open positions; braces inside strings
+    are ignored) and parses each on its own, keeping dicts that carry content —
+    so a missing comma or a truncated tail no longer discards the whole file."""
+    out: list = []
+    stack: list[int] = []
+    in_str = esc = False
+    for i, ch in enumerate(raw):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append(i)
+        elif ch == "}" and stack:
+            start = stack.pop()
+            try:
+                obj = json.loads(raw[start:i + 1])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(obj, dict) and (obj.get("content") or obj.get("text")):
+                out.append(obj)
+    return out
+
+
+def _lessons_from_raw(raw: str) -> list | None:
+    """Parse the model's JSON into a list of lesson items, tolerantly.
+
+    Returns a list (possibly empty = the model validly found no lessons), or
+    None when the output was UNPARSEABLE (empty / malformed with nothing to
+    salvage) — the caller treats None as a failure to retry, so the file is
+    re-distilled next run rather than silently marked done with zero lessons."""
+    raw = _strip_fences(raw)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("lessons"), list):
+                return parsed["lessons"]
+            if parsed.get("content") or parsed.get("text"):
+                return [parsed]
+            return []  # valid JSON, no lessons — done, not a failure
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        pass
+    salvaged = _salvage_lessons(raw)
+    return salvaged if salvaged else None
+
+
 def _strip_fences(text: str) -> str:
     """Unwrap a ```json … ``` (or bare ```) markdown fence. Servers that ignore
     strict format=json (e.g. phone/on-device LLM apps) fence their JSON; plain
@@ -439,27 +496,22 @@ def distill_text(text: str, *, project: str, source: str, model: str,
     if not text:
         return {"added": 0, "dup": 0, "errors": 0, "timed_out": False}
     text = text[-MAX_CHARS_PER_FILE:]  # keep the most recent window
+    prompt = DISTILL_PROMPT.replace("{LANG}", _lang_directive(text)).replace("{TEXT}", text)
     try:
-        prompt = DISTILL_PROMPT.replace("{LANG}", _lang_directive(text)).replace("{TEXT}", text)
-        raw = _ollama_generate(model, prompt)
-        parsed = json.loads(raw)
-        # The local model is loose: it may return {"lessons": [...]}, a bare list,
-        # a bare single lesson object, or list items that are dicts OR plain strings.
-        if isinstance(parsed, dict):
-            if isinstance(parsed.get("lessons"), list):
-                lessons = parsed["lessons"]
-            elif parsed.get("content") or parsed.get("text"):
-                lessons = [parsed]  # a bare single lesson object
-            else:
-                lessons = []
-        elif isinstance(parsed, list):
-            lessons = parsed
-        else:
-            lessons = []
+        lessons = _lessons_from_raw(_ollama_generate(model, prompt))
+        # Unparseable output → retry ONCE (these models are non-deterministic;
+        # a re-roll usually parses clean). Salvage already recovered partial JSON.
+        if lessons is None:
+            lessons = _lessons_from_raw(_ollama_generate(model, prompt))
+        if lessons is None:
+            print(f"    distill skipped {project}: model returned malformed JSON twice "
+                  "— will retry on the next `ygg seed`", file=sys.stderr)
+            return {"added": 0, "dup": 0, "errors": 1, "timed_out": False}
     except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
         timed_out = _is_timeout(exc)
-        why = "timed out (file too big for the limit)" if timed_out else str(exc)
-        print(f"    distill failed for {project}: {why}", file=sys.stderr)
+        why = ("timed out (file too big / model slow — raise --timeout)" if timed_out
+               else f"model call failed ({exc}); will retry on the next `ygg seed`")
+        print(f"    distill skipped {project}: {why}", file=sys.stderr)
         return {"added": 0, "dup": 0, "errors": 1, "timed_out": timed_out}
     added = dup = errors = 0
     for item in lessons:

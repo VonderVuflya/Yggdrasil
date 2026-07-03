@@ -91,6 +91,40 @@ class IncrementalSeedTest(unittest.TestCase):
         self.assertEqual((r["added"], r["skipped"]), (1, 0))     # force re-processes
 
 
+class LessonsFromRawTest(unittest.TestCase):
+    """The distill parser must tolerate the malformed JSON small models emit."""
+
+    def test_clean_wrapped(self):
+        out = ygg_seed._lessons_from_raw('{"lessons":[{"type":"fix","content":"a"},{"content":"b"}]}')
+        self.assertEqual([l["content"] for l in out], ["a", "b"])
+
+    def test_missing_comma_between_objects_salvaged(self):
+        # the real failure: two lesson objects with no comma between them
+        bad = '{"lessons":[{"type":"fix","content":"first"}{"type":"lesson","content":"second"}]}'
+        with self.assertRaises(Exception):
+            json.loads(bad)   # confirms it's genuinely invalid JSON
+        out = ygg_seed._lessons_from_raw(bad)
+        self.assertEqual({l["content"] for l in out}, {"first", "second"})
+
+    def test_truncated_tail_keeps_complete_objects(self):
+        bad = '{"lessons":[{"type":"fix","content":"kept"},{"type":"lesson","content":"cut off he'
+        out = ygg_seed._lessons_from_raw(bad)
+        self.assertEqual([l["content"] for l in out], ["kept"])
+
+    def test_braces_inside_string_content_not_confused(self):
+        out = ygg_seed._lessons_from_raw('{"lessons":[{"content":"use {curly} braces in code"}]}')
+        self.assertEqual(out[0]["content"], "use {curly} braces in code")
+
+    def test_valid_but_empty_is_a_list_not_a_failure(self):
+        # the model correctly found nothing -> [] (done), NOT None (retry)
+        self.assertEqual(ygg_seed._lessons_from_raw('{"lessons":[]}'), [])
+
+    def test_empty_and_garbage_are_none(self):
+        # unparseable -> None so the caller retries / errors (file not lost)
+        self.assertIsNone(ygg_seed._lessons_from_raw(""))
+        self.assertIsNone(ygg_seed._lessons_from_raw("not json at all"))
+
+
 class StripFencesTest(unittest.TestCase):
     """Phone/on-device LLM servers ignore strict format=json and fence their
     JSON in markdown; plain Ollama output must pass through untouched."""
