@@ -87,6 +87,8 @@ Dann arbeite einfach: Bitte deinen Agent *„ruf ab, was wir über dieses Projek
 ygg seed --dry-run    # see what it would import; drop the flag to distill for real
 ```
 
+**Du verlässt ein anderes Memory-Tool?** `ygg import --from mcp-memory --path memory.json` zieht dessen gesamten Speicher in Yggdrasil (dedupliziert, geheimnisgeschützt) — danach kannst du es löschen.
+
 ## Warum
 
 - 🧠 **Persistent** — Entscheidungen, Erkenntnisse und Projektstatus überdauern jede Session.
@@ -102,7 +104,7 @@ ygg seed --dry-run    # see what it would import; drop the flag to distill for r
 Yggdrasil ist **Gedächtnis + Tools** — die *Intelligenz* ist dein LLM. Es sorgt nur dafür, dass das richtige Gedächtnis im richtigen Moment vor dem richtigen Agent liegt.
 
 - 🛎️ **Immer aktiver Daemon** — ein winziger lokaler Dienst (~21 MB RAM), den deine Agents über MCP-Tools erreichen (`ygg_search`, `ygg_recall`, `ygg_remember` …).
-- 🪝 **Session-Start** — ein Hook injiziert automatisch Identität, Projektstatus und offene Follow-ups (~300 Tokens).
+- 🪝 **Hooks** — der Session-Start injiziert automatisch Identität, Projektstatus und offene Follow-ups (~300 Tokens); ein optionaler Hook pro Prompt ruft automatisch das für *jede Anfrage* relevante Gedächtnis ab.
 - 📌 **Ranking** — angepinnte und häufig abgerufene Erinnerungen erscheinen zuerst.
 - 🧹 **Governance** — Duplikate und Konflikte landen zur Überprüfung in einer Queue; Änderungen sind nicht-destruktiv (archivieren, nie löschen).
 - 📓 **Obsidian** — jede Erinnerung ist zugleich eine einfache Markdown-Notiz, die du lesen, bearbeiten und greppen kannst.
@@ -189,6 +191,10 @@ Agents sehen sechs MCP-Tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_
 | `ygg pin --id ID` · `ygg unpin --id ID` | Eine Erinnerung anpinnen, damit sie zuverlässig erscheint |
 | `ygg supersede --id ID` | Eine veraltete Erinnerung archivieren, die von einer neueren ersetzt wird |
 | `ygg materialize --id ID --project P` | Eine Erinnerung als Obsidian-Notiz exportieren |
+| `ygg export-native --project P` | Einen kuratierten Digest nach `AGENTS.md`/`MEMORY.md` schreiben — natives Gedächtnis von Claude Code und Codex damit versorgen |
+| `ygg import --from TOOL --path P` | Den Speicher eines anderen Memory-Tools nach Yggdrasil migrieren (`mcp-memory`, `basic-memory`; zuerst `--dry-run`) |
+| `ygg review [--apply]` | Die Governance-Queue abarbeiten — Duplikate zusammenführen, veraltete/widersprüchliche Erinnerungen markieren (nur archivieren, umkehrbar) |
+| `ygg delete --id ID` · `ygg reset …` | Eine Erinnerung endgültig löschen · einen missglückten `ygg seed` gesammelt rückgängig machen (fragt zuerst nach Bestätigung) |
 
 **Kaltstart**
 
@@ -215,7 +221,7 @@ Gib ihm eine Persönlichkeit — bearbeite `~/.yggdrasil/identity.json`:
 { "name": "Jarvis", "persona": "concise, proactive, dry wit", "user_facts": ["prefers TypeScript", "ships small PRs"] }
 ```
 
-Schweres Seeding, schwaches Laptop? Richte die Destillation auf eine stärkere Maschine in deinem LAN: `ygg config set distill_url http://<box>:11434` — Details in [docs/ygg-cli.md](../docs/ygg-cli.md).
+Schweres Seeding, schwaches Laptop? Richte die Destillation auf *jede beliebige* Maschine in deinem LAN — einen Desktop mit Ollama, LM Studio, llama.cpp, **sogar ein iPhone mit einer lokalen LLM-Server-App**: `ygg config set distill_url http://<box>:11434`. Yggdrasil erkennt den API-Dialekt automatisch (Ollama oder OpenAI-kompatibel); deine Daten verlassen weiterhin nie dein Netzwerk — Details in [docs/ygg-cli.md](../docs/ygg-cli.md).
 
 </details>
 

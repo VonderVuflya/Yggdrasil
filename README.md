@@ -88,6 +88,8 @@ Then just work: ask your agent *"recall what we decided about this project"*, te
 ygg seed --dry-run    # see what it would import; drop the flag to distill for real
 ```
 
+**Leaving another memory tool?** `ygg import --from mcp-memory --path memory.json` pulls its whole store into Yggdrasil (deduped, secret-guarded) — then you can delete it.
+
 ## Why
 
 - 🧠 **Persistent** — decisions, lessons, and project status survive across sessions.
@@ -103,7 +105,7 @@ ygg seed --dry-run    # see what it would import; drop the flag to distill for r
 Yggdrasil is **memory + tools** — the *intelligence* is your LLM. It just makes sure the right memory is in front of the right agent at the right moment.
 
 - 🛎️ **Always-on daemon** — a tiny local service (~21 MB RAM) your agents reach over MCP tools (`ygg_search`, `ygg_recall`, `ygg_remember` …).
-- 🪝 **Session start** — a hook auto-injects identity, project status, and open follow-ups (~300 tokens).
+- 🪝 **Hooks** — session start auto-injects identity, project status, and open follow-ups (~300 tokens); an optional per-prompt hook auto-recalls memory relevant to *each request*.
 - 📌 **Ranking** — pinned and frequently-recalled memories surface first.
 - 🧹 **Governance** — duplicates and conflicts are queued for review; changes are non-destructive (archive, never delete).
 - 📓 **Obsidian** — every memory doubles as a plain-Markdown note you can read, edit, and grep.
@@ -191,6 +193,8 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | `ygg supersede --id ID` | Archive an outdated memory a newer one replaces |
 | `ygg materialize --id ID --project P` | Export one memory to an Obsidian note |
 | `ygg export-native --project P` | Write a curated digest into `AGENTS.md`/`MEMORY.md` — feed Claude Code & Codex's native memory |
+| `ygg import --from TOOL --path P` | Migrate another memory tool's store into Yggdrasil (`mcp-memory`, `basic-memory`; `--dry-run` first) |
+| `ygg review [--apply]` | Work the governance queue — consolidate duplicates, flag stale/conflicting memories (archive-only, reversible) |
 | `ygg delete --id ID` · `ygg reset …` | Hard-delete one memory · bulk-undo a bad seed (confirms first) |
 
 **Cold start**
@@ -218,7 +222,7 @@ Give it a personality — edit `~/.yggdrasil/identity.json`:
 { "name": "Jarvis", "persona": "concise, proactive, dry wit", "user_facts": ["prefers TypeScript", "ships small PRs"] }
 ```
 
-Heavy seeding, weak laptop? Point distillation at a beefier box on your LAN: `ygg config set distill_url http://<box>:11434` — details in [docs/ygg-cli.md](./docs/ygg-cli.md).
+Heavy seeding, weak laptop? Point distillation at *any* box on your LAN — a desktop with Ollama, LM Studio, llama.cpp, **even an iPhone running a local-LLM server app**: `ygg config set distill_url http://<box>:11434`. Yggdrasil auto-detects the API dialect (Ollama or OpenAI-compatible); your data still never leaves your network — details in [docs/ygg-cli.md](./docs/ygg-cli.md).
 
 </details>
 
