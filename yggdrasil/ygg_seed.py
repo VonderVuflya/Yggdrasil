@@ -243,12 +243,26 @@ Return STRICT JSON: {"lessons":[{"type":"...","content":"..."}]}.
 - content is ONE self-contained fact a future session would want: a decision and
   its rationale, a non-obvious fix, a convention, a gotcha, current status.
 - Keep each under 280 chars. 0 to 6 lessons. Skip chit-chat and anything
-  derivable from the code. NEVER include secrets/tokens/keys.
+  derivable from the code. NEVER include secrets/tokens/keys.{LANG}
 Work log follows:
 ---
 {TEXT}
 ---
 Return only the JSON object."""
+
+# Small distill models (e.g. qwen2.5:3b) have a strong bias toward translating
+# non-English content into Chinese. A soft "keep the source language" rule isn't
+# enough; naming the target language EXPLICITLY is. Detect a Cyrillic-dominant
+# log deterministically in code and inject a hard directive.
+def _lang_directive(text: str) -> str:
+    sample = text[:4000]
+    cyr = sum(1 for c in sample if "а" <= c.lower() <= "я" or c.lower() == "ё")
+    lat = sum(1 for c in sample if "a" <= c.lower() <= "z")
+    if cyr > 40 and cyr >= lat:
+        return ('\n- IMPORTANT: write every "content" value in RUSSIAN. Do NOT translate '
+                "to English or Chinese. Keep code identifiers, commands and names verbatim.")
+    return ('\n- Write each "content" in the SAME language as the work log — do NOT '
+            "translate. Keep code identifiers, commands and names verbatim.")
 
 
 def _strip_fences(text: str) -> str:
@@ -426,7 +440,8 @@ def distill_text(text: str, *, project: str, source: str, model: str,
         return {"added": 0, "dup": 0, "errors": 0, "timed_out": False}
     text = text[-MAX_CHARS_PER_FILE:]  # keep the most recent window
     try:
-        raw = _ollama_generate(model, DISTILL_PROMPT.replace("{TEXT}", text))
+        prompt = DISTILL_PROMPT.replace("{LANG}", _lang_directive(text)).replace("{TEXT}", text)
+        raw = _ollama_generate(model, prompt)
         parsed = json.loads(raw)
         # The local model is loose: it may return {"lessons": [...]}, a bare list,
         # a bare single lesson object, or list items that are dicts OR plain strings.
