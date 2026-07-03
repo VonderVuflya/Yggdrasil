@@ -19,8 +19,10 @@ from typing import Any
 
 try:
     from .ygg_core import RestMemoryBackend, YggConfig, YggError, metadata_of, record_is_archived
+    from . import ygg_ui
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
     from ygg_core import RestMemoryBackend, YggConfig, YggError, metadata_of, record_is_archived
+    import ygg_ui
 
 
 DEFAULT_URL = "http://127.0.0.1:42069"
@@ -355,27 +357,60 @@ def search(args: argparse.Namespace) -> None:
         else:
             print("(no matches)")
         return
-    for item in hits:
-        _print_hit(item)
+    _print_hits(hits)
 
 
-def _print_hit(item: dict[str, Any]) -> None:
-    """Render one search/recall hit with provenance (source, confidence, usage, pin)."""
+def _print_hits(hits: list[dict[str, Any]]) -> None:
+    p = ygg_ui.palette()
+    mx = max((h.get("score") for h in hits if isinstance(h.get("score"), (int, float))), default=0.0) or 1.0
+    for i, item in enumerate(hits, 1):
+        _print_hit(item, rank=i, max_score=mx, p=p)
+
+
+def _print_hit(item: dict[str, Any], *, rank: int | None = None,
+               max_score: float = 1.0, p: "ygg_ui.Palette | None" = None) -> None:
+    """Render one search/recall hit. On a TTY: content-first, with a type badge,
+    a relevance bar and relative time. Piped/agent output keeps the STABLE
+    id-first provenance format (parsers + the MCP facade rely on it)."""
     md = item.get("metadata") or {}
-    pin = " 📌" if (item.get("pinned") or md.get("pinned")) else ""
-    src = md.get("source") or item.get("source") or "?"
-    conf = item.get("confidence")
-    conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "?"
+    if p is None:
+        p = ygg_ui.palette()
+
+    if not p.on:  # ---- stable, byte-for-byte unchanged (non-TTY / agents / gates)
+        pin = " 📌" if (item.get("pinned") or md.get("pinned")) else ""
+        src = md.get("source") or item.get("source") or "?"
+        conf = item.get("confidence")
+        conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "?"
+        used = item.get("access_count") or 0
+        score = item.get("score")
+        score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
+        near = " ~nearest" if item.get("nearest") else ""
+        preview = " ".join((item.get("memory") or "").split())[:160]
+        tags = md.get("tags") or []
+        tag_s = f"  tags={','.join(map(str, tags))}" if tags else ""
+        print(f"{item.get('id')}  score={score_s}{near}{pin}  project={md.get('project')}  type={md.get('type')}")
+        print(f"  src={src}  conf={conf_s}  used={used}x{tag_s}")
+        print(textwrap.indent(preview, "  "))
+        return
+
+    # ---- pretty (TTY): lead with what the memory IS and how relevant it is
+    mtype = md.get("type") or item.get("memory_type")
+    score = item.get("score") if isinstance(item.get("score"), (int, float)) else 0.0
+    meta_bits = [ygg_ui.badge(mtype, p), p.cyan(md.get("project") or "global")]
+    when = ygg_ui.ago(item.get("created_at"))
+    if when:
+        meta_bits.append(p.dim(when))
+    meta_bits.append(ygg_ui.bar(score / max_score, p) + ("" if not item.get("nearest") else p.dim(" ~near")))
     used = item.get("access_count") or 0
-    score = item.get("score")
-    score_s = f"{score:.4f}" if isinstance(score, (int, float)) else "?"
-    near = " ~nearest" if item.get("nearest") else ""
-    preview = " ".join((item.get("memory") or "").split())[:160]
-    tags = md.get("tags") or []
-    tag_s = f"  tags={','.join(map(str, tags))}" if tags else ""
-    print(f"{item.get('id')}  score={score_s}{near}{pin}  project={md.get('project')}  type={md.get('type')}")
-    print(f"  src={src}  conf={conf_s}  used={used}x{tag_s}")
-    print(textwrap.indent(preview, "  "))
+    if used:
+        meta_bits.append(p.dim(f"used {used}×"))
+    if item.get("pinned") or md.get("pinned"):
+        meta_bits.append("📌")
+    num = p.bold(f"{rank}. ") if rank else ""
+    print(num + p.dim(" · ").join(meta_bits))
+    preview = " ".join((item.get("memory") or "").split())[:200]
+    sid = p.dim(ygg_ui.short_id(item.get("id")))
+    print("   " + preview + "  " + sid)
 
 
 def recall(args: argparse.Namespace) -> None:
@@ -396,8 +431,11 @@ def recall(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(result["data"], indent=2, sort_keys=True))
         return
-    for item in result["data"]:
-        _print_hit(item)
+    hits = result["data"]
+    if not hits:
+        print("(no matches across any project)")
+        return
+    _print_hits(hits)
 
 
 def yaml_scalar(value: Any) -> str:
