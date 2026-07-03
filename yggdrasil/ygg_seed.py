@@ -351,9 +351,23 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
+# urllib's default agent is "Python-urllib/3.x", which bot-filters in front of
+# proxied endpoints (Cloudflare on runpod.net proxies, for one) reject with 403.
+# Identify honestly instead — any real product string passes.
+try:
+    from __init__ import __version__ as _VERSION  # flat deploy (~/.yggdrasil/scripts)
+except ImportError:
+    try:
+        from yggdrasil import __version__ as _VERSION
+    except ImportError:
+        _VERSION = "dev"
+_HTTP_HEADERS = {"Content-Type": "application/json",
+                 "User-Agent": f"yggdrasil/{_VERSION}"}
+
+
 def _post_json(url: str, body: dict, timeout: int) -> dict:
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers=dict(_HTTP_HEADERS), method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -382,7 +396,7 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
     the total deadline. `total` is a belt-and-suspenders overall wall cap.
     Returns (text, finish_reason)."""
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers=dict(_HTTP_HEADERS), method="POST")
     parts: list[str] = []
     finish: str | None = None
     start = time.monotonic()
