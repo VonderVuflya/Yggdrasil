@@ -785,7 +785,7 @@ class _Progress:
             sys.stdout.write("\r\033[K")
             sys.stdout.flush()
 
-    def summary(self, *, interrupted: bool = False) -> None:
+    def summary(self, *, interrupted: bool = False, up_to_date: tuple[int, int] = (0, 0)) -> None:
         self.close()
         el = time.time() - self.start
         rate = self.done / (el / 60) if el > 0 else 0.0
@@ -794,7 +794,12 @@ class _Progress:
         print(f"   distilled : {self.c.bold(str(self.done))}/{self.total} files "
               f"{self.c.dim(f'({rate:.1f}/min)')}")
         print(f"   lessons   : {self.c.green('+' + str(self.added))} new "
-              f"{self.c.dim(f'· {self.dup} dup · {self.errors} err')}")
+              f"{self.c.dim(f'· {self.dup} merged · {self.errors} to retry')}")
+        # One line instead of dozens of '+0 new … unchanged' project rows.
+        up_proj, up_files = up_to_date
+        if up_proj:
+            print(f"   unchanged : {self.c.dim(f'{up_proj} projects already up to date '
+                                               f'({up_files} files skipped, no re-distill)')}")
         print(f"   elapsed   : {_fmt_dur(el)}")
         if self.db_path:
             now = self._db_size()
@@ -844,12 +849,26 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
                 state[str(f)] = {"mtime": st.st_mtime, "size": st.st_size, "distilled_at": time.time()}
             except OSError:
                 pass
-    summary = (f"  {project}: +{agg['added']} new, {agg['dup']} dup-skipped, "
-               f"{agg['skipped']} unchanged, {agg['errors']} error(s)")
-    if progress is not None:
-        progress.log(summary)
+    stable = (f"  {project}: +{agg['added']} new, {agg['dup']} dup-skipped, "
+              f"{agg['skipped']} unchanged, {agg['errors']} error(s)")
+    if progress is not None and not progress.tty:
+        progress.log(stable)          # non-TTY (agents/pipes): keep the stable line
+    elif progress is not None:
+        # TTY: only surface a project where something actually happened — an
+        # all-unchanged project stays silent (the bar already moved past it).
+        if agg["added"] or agg["errors"] or agg["timed_out"]:
+            c = progress.c
+            bits = []
+            if agg["added"]:
+                bits.append(c.green(f"+{agg['added']} lessons"))
+            if agg["dup"]:
+                bits.append(c.dim(f"{agg['dup']} merged"))
+            if agg["errors"]:
+                bits.append(c.yellow(f"{agg['errors']} to retry"))
+            mark = c.yellow("•") if agg["errors"] else c.green("✓")
+            progress.log(f"  {mark} {c.bold(project)}  " + c.dim(" · ").join(bits))
     else:
-        print(f"  " + summary.strip())
+        print(stable.strip())         # `ygg distill` path (no progress object)
     return agg
 
 
@@ -916,18 +935,23 @@ def seed(args: argparse.Namespace) -> int:
 
     progress = _Progress(len(new_files), db_path=str(YGG_HOME / "data" / "memory.sqlite"))
     interrupted = False
+    up_to_date_projects = up_to_date_files = 0  # projects that had nothing new to do
     try:
         for s in sources:
             try:
-                distill_source(s, model=model, user_id=args.user_id, namespace=args.namespace,
-                               state=state, force=force, progress=progress)
+                agg = distill_source(s, model=model, user_id=args.user_id, namespace=args.namespace,
+                                     state=state, force=force, progress=progress)
+                if not (agg["added"] or agg["errors"] or agg["timed_out"]) and agg["skipped"]:
+                    up_to_date_projects += 1
+                    up_to_date_files += agg["skipped"]
             except Exception as exc:  # noqa: BLE001 — one bad source must never abort the seed
                 progress.log(f"  skipped {s.get('project')}: {exc}")
             _save_seed_state(state)  # persist progress after each source (crash-safe)
     except KeyboardInterrupt:  # Ctrl-C: stop cleanly and still show the summary
         interrupted = True
         _save_seed_state(state)
-    progress.summary(interrupted=interrupted)
+    progress.summary(interrupted=interrupted,
+                     up_to_date=(up_to_date_projects, up_to_date_files))
     if progress.timed_out:
         n = progress.timed_out
         higher = max(180, DISTILL_TIMEOUT * 2)
