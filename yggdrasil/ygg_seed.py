@@ -353,57 +353,132 @@ _TRUNCATED_MSG = ("model output truncated (ran out of output tokens) — nothing
 _ENDPOINT_CACHE: dict[str, str] = {}
 
 
+# How long a STREAMING generation may go silent (no token) before we treat the
+# connection as dead. A live model streams tokens continuously, so real silence
+# this long means the peer vanished (phone locked, Wi-Fi dropped) — abort in
+# ~this window instead of blocking the full DISTILL_TIMEOUT. Prefill of the
+# capped 14k-char prompt stays well under it even on a phone.
+STREAM_IDLE_TIMEOUT = int(os.environ.get("YGG_DISTILL_IDLE", "90"))
+
+
+def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> tuple[str, str | None]:
+    """POST a streaming request and assemble the text token-by-token.
+
+    The socket timeout is the IDLE window: each read blocks at most `idle`
+    seconds, so a stalled connection raises promptly rather than hanging until
+    the total deadline. `total` is a belt-and-suspenders overall wall cap.
+    Returns (text, finish_reason)."""
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    parts: list[str] = []
+    finish: str | None = None
+    start = time.monotonic()
+    with urllib.request.urlopen(req, timeout=idle) as resp:  # connect + each read bounded by idle
+        for raw in resp:
+            if time.monotonic() - start > total:
+                raise TimeoutError("exceeded total distill deadline")
+            line = raw.strip()
+            if not line:
+                continue
+            if mode == "openai":
+                if not line.startswith(b"data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == b"[DONE]":
+                    break
+                try:
+                    obj = json.loads(payload)
+                except ValueError:
+                    continue
+                ch = (obj.get("choices") or [{}])[0]
+                parts.append((ch.get("delta") or {}).get("content") or "")
+                if ch.get("finish_reason"):
+                    finish = ch["finish_reason"]
+            else:  # ollama generate / chat: newline-delimited JSON objects
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if mode == "ollama_generate":
+                    parts.append(obj.get("response") or "")
+                else:
+                    parts.append((obj.get("message") or {}).get("content") or "")
+                if obj.get("done"):
+                    finish = obj.get("done_reason") or finish
+                    break
+    return "".join(parts), finish
+
+
 def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str:
-    """Call the distill endpoint — speaking whichever dialect it implements.
+    """Call the distill endpoint — speaking whichever dialect it implements,
+    STREAMING so a dead connection is caught within STREAM_IDLE_TIMEOUT instead
+    of hanging the full timeout.
 
     Tries, in order: Ollama's classic /api/generate, Ollama's /api/chat, and
     OpenAI-style /v1/chat/completions — falling through on 404 only. This makes
     `--ollama-url` work against anything on the LAN: Ollama, LM Studio,
-    llama.cpp-server, exo, and phone LLM-server apps (found live: an iPhone
-    'Local LLM Server' implements /api/chat + /v1 but not /api/generate).
+    llama.cpp-server, exo, and phone LLM-server apps.
 
     num_ctx is sent EXPLICITLY on the Ollama dialects: without it Ollama applies
     its server default (often 4096), silently truncating long transcripts."""
-    timeout = timeout or DISTILL_TIMEOUT
-    order = ["generate", "chat", "openai"]
+    total = timeout or DISTILL_TIMEOUT
+    idle = min(total, STREAM_IDLE_TIMEOUT)
+
+    def base(kind: str) -> tuple[str, str, dict]:
+        if kind == "generate":
+            return (f"{OLLAMA_URL}/api/generate", "ollama_generate",
+                    {"model": model, "prompt": prompt, "format": "json",
+                     "options": {"num_ctx": DISTILL_NUM_CTX}})
+        if kind == "chat":
+            return (f"{OLLAMA_URL}/api/chat", "ollama_chat",
+                    {"model": model, "messages": [{"role": "user", "content": prompt}],
+                     "format": "json", "options": {"num_ctx": DISTILL_NUM_CTX}})
+        return (f"{OLLAMA_URL}/v1/chat/completions", "openai",
+                {"model": model, "messages": [{"role": "user", "content": prompt}]})
+
+    def extract(mode: str, data: dict) -> tuple[str, str | None]:
+        if mode == "ollama_generate":
+            return data.get("response", ""), data.get("done_reason")
+        if mode == "ollama_chat":
+            return (data.get("message") or {}).get("content", ""), data.get("done_reason")
+        ch = (data.get("choices") or [{}])[0]
+        return (ch.get("message") or {}).get("content", "") or "", ch.get("finish_reason")
+
+    # (dialect, streaming?) pairs. Streaming FIRST — a real Ollama/LM Studio
+    # streams tokens so a dead peer is caught within `idle`, and big files can run
+    # for `total`. Non-streaming SECOND for servers that don't stream (found live:
+    # ai.local answers stream=True with an empty body, only works non-streamed) —
+    # capped at `idle`, not `total`, so a phone that vanishes mid-request is caught
+    # in ~90s instead of hanging the full timeout.
+    attempts = [(k, True) for k in ("generate", "chat", "openai")] \
+        + [(k, False) for k in ("generate", "chat", "openai")]
     cached = _ENDPOINT_CACHE.get(OLLAMA_URL)
-    if cached in order:
-        order.remove(cached)
-        order.insert(0, cached)
+    if cached in attempts:
+        attempts.remove(cached)
+        attempts.insert(0, cached)
+
     last_404: Exception | None = None
-    for kind in order:
+    for kind, stream in attempts:
+        url, mode, body = base(kind)
         try:
-            if kind == "generate":
-                data = _post_json(f"{OLLAMA_URL}/api/generate",
-                                  {"model": model, "prompt": prompt, "stream": False, "format": "json",
-                                   "options": {"num_ctx": DISTILL_NUM_CTX}}, timeout)
-                if data.get("done_reason") == "length":
-                    raise ValueError(_TRUNCATED_MSG)
-                out = data.get("response", "")
-            elif kind == "chat":
-                data = _post_json(f"{OLLAMA_URL}/api/chat",
-                                  {"model": model, "messages": [{"role": "user", "content": prompt}],
-                                   "stream": False, "format": "json",
-                                   "options": {"num_ctx": DISTILL_NUM_CTX}}, timeout)
-                if data.get("done_reason") == "length":
-                    raise ValueError(_TRUNCATED_MSG)
-                out = (data.get("message") or {}).get("content", "")
-            else:  # openai
-                data = _post_json(f"{OLLAMA_URL}/v1/chat/completions",
-                                  {"model": model, "messages": [{"role": "user", "content": prompt}],
-                                   "stream": False}, timeout)
-                choice = (data.get("choices") or [{}])[0]
-                if choice.get("finish_reason") == "length":
-                    raise ValueError(_TRUNCATED_MSG)
-                out = ((choice.get("message") or {}).get("content")) or ""
-            _ENDPOINT_CACHE[OLLAMA_URL] = kind
-            return _strip_fences(out)
+            if stream:
+                out, finish = _stream_collect(url, {**body, "stream": True}, mode, idle, total)
+            else:
+                data = _post_json(url, {**body, "stream": False}, idle)
+                out, finish = extract(mode, data)
+            if finish == "length":
+                raise ValueError(_TRUNCATED_MSG)
+            if _strip_fences(out):  # only cache a combo that actually produced text
+                _ENDPOINT_CACHE[OLLAMA_URL] = (kind, stream)
+                return _strip_fences(out)
         except urllib.error.HTTPError as exc:
-            if exc.code == 404:  # dialect not implemented here — try the next one
+            if exc.code == 404:  # dialect not implemented here — try the next
                 last_404 = exc
                 continue
             raise
-    raise last_404 if last_404 else ValueError("no usable distill endpoint")
+    if last_404:
+        raise last_404
+    return ""  # every attempt returned empty -> caller retries, then errors
 
 
 def _is_timeout(exc: BaseException) -> bool:
