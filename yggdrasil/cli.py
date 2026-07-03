@@ -166,40 +166,51 @@ def _mcp_registered(agent: str) -> bool:
 
 
 def _doctor() -> int:
+    try:
+        from . import ygg_ui
+    except ImportError:  # flat layout
+        import ygg_ui
+    import time as _time
+    p = ygg_ui.palette()
     ok = True
     url = f"http://127.0.0.1:{_port()}"
-    print("Yggdrasil doctor\n")
 
+    def check(state, label, detail="", fix=""):
+        mark = (ygg_ui.mark_ok(p) if state is True
+                else ygg_ui.mark_fail(p) if state is False else ygg_ui.mark_warn(p))
+        print(f"  {mark} {label.ljust(16)}  {p.dim(detail)}".rstrip())
+        if fix:
+            print(f"     {p.dim('→ fix: ' + fix)}")
+
+    t0 = _time.monotonic()
     try:
         with urllib.request.urlopen(f"{url}/health", timeout=3) as r:
             h = json.load(r)
-        print(f"  [ok] engine up on {url} — {h}")
-        if h.get("scale_hint"):
-            print(f"  [!!] scale: {h['scale_hint']}")
+        ms = int((_time.monotonic() - t0) * 1000)
+        print(f"🌳 {p.bold('Yggdrasil doctor')}   {p.dim(f'{__version__} · engine {ms}ms')}\n")
+        check(True, "engine", f"{url} · {h.get('memory_count', '?')} memories · {h.get('storage', '?')}")
         if h.get("embeddings_missing"):
             ok = False
-            print(f"  [!!] {h['embeddings_missing']} memories have no embedding — dense recall misses them")
-            print("       → fix: ygg reindex")
+            check(False, "dense", f"{h['embeddings_missing']} memories have no current embedding", "ygg reindex")
+        elif h.get("dense", "").startswith("active"):
+            check(True, "dense", h["dense"])
+        if h.get("scale_hint"):
+            check(None, "scale", h["scale_hint"])
     except Exception as exc:  # noqa: BLE001
         ok = False
-        print(f"  [!!] engine not reachable on {url} ({exc})")
-        print("       → fix: ygg start")
+        print(f"🌳 {p.bold('Yggdrasil doctor')}\n")
+        check(False, "engine", f"not reachable on {url} ({exc})", "ygg start")
 
     tok = YGG_HOME / "token"
-    if tok.exists():
-        print(f"  [ok] auth token: {tok}")
-    else:
-        print("  [--] auth token: not generated")
-        print("       → fix: ygg install")
+    check(tok.exists(), "token", str(tok) if tok.exists() else "not generated",
+          "" if tok.exists() else "ygg install")
 
     cfg = _config()
     embed, bg = cfg.get("embed_model") or "", cfg.get("bg_model") or ""
-    print(f"  [{'ok' if embed else '--'}] embedding model: {embed or 'none (lexical-only)'}")
-    if not embed:
-        print("       → enable semantic search: ygg setup")
-    print(f"  [{'ok' if bg else '--'}] background model: {bg or 'none (manual write-path)'}")
-    if not bg:
-        print("       → enable background write-path: ygg setup")
+    check(bool(embed), "embedding model", embed or "none (lexical-only)",
+          "" if embed else "ygg setup")
+    check(bool(bg), "background model", bg or "none (manual write-path)",
+          "" if bg else "ygg setup")
 
     if embed or bg:
         if which("ollama"):
@@ -207,34 +218,27 @@ def _doctor() -> int:
             for m in (embed, bg):
                 if not m:
                     continue
-                have = any(p.split(":")[0] == m.split(":")[0] for p in pulled)
+                have = any(x.split(":")[0] == m.split(":")[0] for x in pulled)
                 ok = ok and have
-                if have:
-                    print(f"  [ok] ollama model '{m}': present")
-                else:
-                    print(f"  [!!] ollama model '{m}': NOT pulled")
-                    print(f"       → fix: ollama pull {m}")
+                check(have, f"model {m}", "present" if have else "NOT pulled",
+                      "" if have else f"ollama pull {m}")
         else:
             ok = False
-            print("  [!!] a model is configured but `ollama` is missing")
-            print("       → fix: install Ollama — https://ollama.com")
+            check(False, "ollama", "a model is configured but `ollama` is missing",
+                  "install Ollama — https://ollama.com")
 
     claude_reg = _mcp_registered("claude")
     codex_reg = _mcp_registered("codex")
-    print(f"  [{'ok' if claude_reg else '--'}] Claude Code MCP registration")
-    if not claude_reg:
-        print("       → fix: ygg register")
-    print(f"  [{'ok' if codex_reg else '--'}] Codex MCP registration")
-    if not codex_reg:
-        print("       → fix: ygg register")
+    check(claude_reg, "Claude Code MCP", "registered" if claude_reg else "not registered",
+          "" if claude_reg else "ygg register")
+    check(codex_reg, "Codex MCP", "registered" if codex_reg else "not registered",
+          "" if codex_reg else "ygg register")
     if not claude_reg and not codex_reg:
-        # No registration anywhere means no agent has the ygg_* tools — that is
-        # a failed install, not "All good."
-        ok = False
-        print("       (or install the plugin: /plugin marketplace add VonderVuflya/Yggdrasil"
-              " then /plugin install yggdrasil)")
+        ok = False  # no agent has the ygg_* tools -> a failed install, not "All good."
+        print(f"     {p.dim('(or install the plugin: /plugin marketplace add VonderVuflya/Yggdrasil → /plugin install yggdrasil)')}")
 
-    print("\n" + ("All good." if ok else "Some checks need attention (see [!!] above)."))
+    verdict = p.green("✓ All good.") if ok else p.yellow("Some checks need attention (see above).")
+    print("\n" + verdict)
     return 0 if ok else 1
 
 

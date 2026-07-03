@@ -80,20 +80,33 @@ def stats(user_id: str, namespace: str) -> int:
 
     db = YGG_HOME / "data" / "memory.sqlite"
     size = db.stat().st_size if db.exists() else 0
-    print(f"Yggdrasil memory: {len(live)} live records "
-          f"({len(data) - len(live)} archived) · db {size / 1024:.0f} KB\n")
+    try:
+        from . import ygg_ui
+    except ImportError:
+        import ygg_ui
+    p = ygg_ui.palette()
+    head = (f"🌳 {p.bold('Yggdrasil memory')} — {p.bold(str(len(live)))} live "
+            f"{p.dim(f'· {len(data) - len(live)} archived · db {size / 1024:.0f} KB')}")
+    print(head + "\n")
     if not live:
         print("Memory is empty. Seed it from your existing work:  ygg seed")
         return 0
 
-    def _table(title: str, counts: dict[str, int]) -> None:
-        print(title)
-        for k, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-            print(f"  {n:>4}  {k}")
+    def _table(title: str, counts: dict[str, int], *, typed: bool = False) -> None:
+        items = sorted(counts.items(), key=lambda kv: -kv[1])
+        mx = max((n for _, n in items), default=1)
+        print(p.dim(title) if p.on else title)
+        for k, n in items:
+            label = ygg_ui.badge(k, p) if typed else k
+            if p.on:
+                w = max(1, round(12 * n / mx)) if n else 0
+                print(f"  {n:>4}  {p.cyan('█' * w)}{' ' * (12 - w)}  {label}")
+            else:
+                print(f"  {n:>4}  {k}")
         print()
-    _table("by project:", by_project)
-    _table("by type:", by_type)
-    _table("by scope:", by_scope)
+    _table("by project", by_project)
+    _table("by type", by_type, typed=True)
+    _table("by scope", by_scope)
     print("retrieve:  ygg recall --query \"…\"  (cross-project) · "
           "ygg bootstrap --project P  (one project)")
     hint = _scale_hint()
