@@ -14,6 +14,7 @@ incremental — no jump from 0.5.4 straight to 0.7.0):
 | `v0.6.0` | after P1 (`a090651`) | robustness, DX & CI | 0.6.0 |
 | `v0.7.0` | `main` HEAD | performance, benchmark honesty, native-memory bridge | 0.7.0 |
 | `v0.7.1` | `main` HEAD | seeding hardening (any endpoint · language · robustness · readable output) | 0.7.1 |
+| `v0.8.0` | `main` HEAD | migrate in (`ygg import`) + a visual CLI | 0.8.0 |
 
 Each tag's `CHANGELOG.md` only documents up to its own version, and its version
 string is consistent across `pyproject.toml`, `__init__.py`, `server.json`,
@@ -22,7 +23,7 @@ manifests. Verified.
 
 **DAG note:** `v0.5.5` and `v0.6.0` are commits that branch off their boundary
 commit (they are not ancestors of `main`), because each carries only its own
-version bump + changelog. `main` ends at `Release 0.7.1` (`v0.7.1`); `v0.7.0` is one release commit back. When you
+version bump + changelog. `main` ends at `Release 0.8.0` (`v0.8.0`); earlier release commits (0.7.0/0.7.1) are behind it on the same line. When you
 push tags, GitHub will show the two intermediate tags as points off the main
 line — normal for backfilled releases; PyPI/GitHub Releases build fine from any
 tag.
@@ -52,7 +53,7 @@ You also need a GitHub remote and `gh auth` for Releases, and (optional)
 
 ```bash
 git push origin main
-git push origin v0.5.5 v0.6.0 v0.7.0 v0.7.1
+git push origin v0.5.5 v0.6.0 v0.7.0 v0.7.1 v0.8.0
 ```
 
 **2. Publish each version from its tag, oldest first.** `--skip-git` because the
@@ -72,8 +73,12 @@ git checkout v0.7.0
 bash scripts/release.sh 0.7.0 --skip-git --yes
 
 # 0.7.1
-git checkout main            # main HEAD == v0.7.1
+git checkout v0.7.1
 bash scripts/release.sh 0.7.1 --skip-git --yes
+
+# 0.8.0
+git checkout main            # main HEAD == v0.8.0
+bash scripts/release.sh 0.8.0 --skip-git --yes
 
 git checkout main            # return to the branch
 ```

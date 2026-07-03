@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.8.0] — 2026-07-03
+
+Migrate in, and a CLI you can actually read.
+
+### Added
+- **`ygg import` — one-command migration FROM another memory tool.** Point it at
+  another tool's local store and pull everything into Yggdrasil (deduped,
+  secret-guarded), then delete the old tool. Adapters: `--from mcp-memory`
+  (the reference MCP memory server, `@modelcontextprotocol/server-memory` — the
+  most-installed memory MCP; entities become memories with their relations folded
+  in) and `--from basic-memory` (Basic Memory's Markdown notes, verbatim). An
+  adapter registry makes more tools drop-in; `--dry-run` previews; imports are
+  tagged so a whole migration rolls back with `ygg reset --source import:<tool>`.
+- **A visual CLI** (new `ygg_ui` module, zero-dependency ANSI). `ygg search` /
+  `ygg recall` render content-first with colour-coded type badges, a `▰▰▰▱▱`
+  relevance bar and relative time instead of a `score=… src=… conf=…` wall;
+  `ygg doctor` shows green ✓ / red ✗ marks with the engine version + round-trip
+  latency; `ygg stats` draws histogram bars. Colour turns on ONLY for a real TTY
+  — piped / agent / MCP-facade / gate output stays byte-for-byte identical, and
+  `--json` is untouched.
+- **A readable `ygg seed` preamble.** The old wall of one-line-per-source (50+
+  rows with full paths) is replaced by a coverage meter (`██████░░ 54% · 273 / 506
+  files`) and a *busiest sources* mini-histogram, so it's obvious how much is left
+  and where the work is — regardless of whether you have 5 sources or 150. The
+  full per-source list with paths moves behind `ygg seed --verbose`. Also
+  clarifies the input/output gap ("one chat → several lessons") that made the
+  file counts confusing.
+
 ## [0.7.1] — 2026-07-03
 
 Seeding hardening — found and fixed on a live multi-hour `ygg seed` run.
