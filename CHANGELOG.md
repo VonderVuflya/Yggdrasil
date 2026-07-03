@@ -3,6 +3,36 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.7.1] — 2026-07-03
+
+Seeding hardening — found and fixed on a live multi-hour `ygg seed` run.
+
+### Added
+- **Distill on any LAN box or phone.** `--ollama-url` now speaks three dialects
+  — Ollama `/api/generate`, Ollama `/api/chat`, and OpenAI `/v1/chat/completions`
+  (auto-probed, working combo cached) — so LM Studio, llama.cpp-server, exo, and
+  on-device iPhone LLM-server apps all work as distill endpoints, not just Ollama.
+- **iCloud Obsidian vaults are discovered** (`~/Library/Mobile Documents/iCloud~md~obsidian/Documents`)
+  — for many users that's THE vault, and it was silently invisible before. The
+  per-vault note cap is now 500 most-recent (was 50 alphabetical, which dropped an
+  arbitrary A–G slice of larger vaults).
+
+### Fixed
+- **Distilled lessons keep the source language.** A small model (qwen2.5:3b) would
+  randomly translate Russian logs into Chinese; the target language is now named
+  explicitly for Cyrillic-dominant logs. Affects every endpoint, not just phones.
+- **A flaky lesson no longer loses a whole file.** Malformed model JSON (missing
+  comma, truncated tail, empty) is salvaged object-by-object and retried once;
+  only truly-unparseable output errors out (and is retried on the next run).
+- **A dead distill peer is caught in ~90 s, not the full timeout.** Streaming with
+  an idle window (`YGG_DISTILL_IDLE`, default 90 s) means a phone that locks or a
+  Wi-Fi drop no longer hangs a request for the whole `distill_timeout`; servers
+  that don't stream fall back to a non-streaming call capped at the idle window.
+- **`ygg seed` output is readable.** Only projects where something happened are
+  logged (`✓ demo +1 lessons`); all-unchanged projects collapse into one summary
+  line instead of a wall of `+0 new … unchanged` rows. Non-TTY/agent output is
+  unchanged (byte-stable).
+
 ## [0.7.0] — 2026-07-03
 
 Performance, benchmark honesty, and the native-memory bridge.

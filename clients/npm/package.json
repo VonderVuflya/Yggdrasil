@@ -1,6 +1,6 @@
 {
   "name": "yggdrasil-memory",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Installer/launcher for Yggdrasil — one shared, durable memory for your AI coding agents (MCP, local-first). Bootstraps the Python core via uv, so `npx yggdrasil-memory` works even without a preinstalled Python.",
   "bin": {
     "ygg": "bin/ygg.js"
