@@ -917,7 +917,8 @@ def main() -> int:
     try:
         args.func(args)
     except YggError as exc:
-        print(f"ygg: {exc}", file=sys.stderr)
+        p = ygg_ui.palette(sys.stderr)
+        print(f"{p.red('✗')} {exc}", file=sys.stderr)
         return 2
     return 0
 
