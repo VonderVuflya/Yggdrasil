@@ -901,15 +901,21 @@ def seed(args: argparse.Namespace) -> int:
         return 0
     force = getattr(args, "force", False)
     state = {} if force else _load_seed_state()
-    print("Found sources to seed memory from:\n")
-    for i, s in enumerate(sources):
-        print(f"  [{i}] {s['kind']:8} {s['project']:<28} {_fmt_mb(s['bytes']):>9}  {s['detail']}")
-        print(f"      {s['path']}")
 
-    # Incremental estimate — only NEW/CHANGED files cost anything.
-    all_files = [f for s in sources for f in _source_files(s) if f.exists()]
-    new_files = [f for f in all_files if force or not _is_unchanged(f, state)]
-    unchanged = len(all_files) - len(new_files)
+    # Per-source new/total counts (incremental: only NEW/CHANGED files cost
+    # anything). We keep the per-source breakdown so the summary can show WHERE
+    # the work is, not just a grand total.
+    src_stats: list[dict[str, Any]] = []
+    all_files: list[Path] = []
+    for s in sources:
+        files = [f for f in _source_files(s) if f.exists()]
+        new = files if force else [f for f in files if not _is_unchanged(f, state)]
+        all_files.extend(files)
+        src_stats.append({"kind": s["kind"], "project": s["project"],
+                          "files": len(files), "new": len(new), "new_paths": new})
+    new_files = [f for st in src_stats for f in st["new_paths"]]
+    total = len(all_files)
+    unchanged = total - len(new_files)
     new_bytes = 0
     for f in new_files:
         try:
@@ -920,16 +926,50 @@ def seed(args: argparse.Namespace) -> int:
     tokens_in = capped // 4
     minutes = max(1, round(len(new_files) * 6 / 60 + tokens_in / 9000))
     model = args.model or _bg_model()
-    skipped_note = f" ({unchanged} unchanged — skipped)" if unchanged else ""
-    print(f"\nEstimate: {len(new_files)} new/changed file(s) to distill{skipped_note}, "
-          f"~{tokens_in:,} input tokens, ≈{minutes} min.")
     _local = OLLAMA_URL in ("http://127.0.0.1:11434", "http://localhost:11434")
-    _where = "LOCALLY" if _local else f"on {OLLAMA_URL}"
-    _priv = "nothing leaves your machine" if _local else "stays on your own Ollama box"
-    print(f"Distill runs {_where} via Ollama model '{model}' — free, {_priv}.")
-    if not force:
-        print("Incremental: already-distilled files are skipped (re-run picks up only new/edited "
-              "chats). Use --force to redo everything.")
+    verbose = getattr(args, "verbose", False)
+
+    try:
+        from . import ygg_ui
+    except ImportError:
+        import ygg_ui
+    p = ygg_ui.palette()
+
+    if verbose:
+        print("Sources to seed memory from:\n")
+        for i, s in enumerate(sources):
+            print(f"  [{i}] {s['kind']:8} {s['project']:<28} {_fmt_mb(s['bytes']):>9}  {s['detail']}")
+            print(f"      {s['path']}")
+        print()
+
+    print(f"🌳 {p.bold('Yggdrasil seed')}\n")
+    # Coverage meter — how much of the whole corpus is already distilled.
+    pct = round(100 * unchanged / total) if total else 100
+    cw = 26
+    fill = round(cw * pct / 100)
+    covbar = p.green("█" * fill) + p.dim("░" * (cw - fill))
+    print(f"   {p.dim('distilled ')}  {covbar}  {p.bold(f'{pct}%')}   {p.dim(f'· {unchanged} / {total} files')}")
+    where = "local" if _local else OLLAMA_URL
+    print(f"   {p.dim('to distill')}  {p.bold(str(len(new_files)))} files  "
+          f"{p.dim(f'· ≈{minutes} min · ~{tokens_in:,} tokens · {model} · {where}')}")
+
+    # Busiest sources — a mini-histogram so it's obvious WHERE the time goes.
+    busiest = sorted((s for s in src_stats if s["new"] > 0), key=lambda s: -s["new"])
+    if busiest and not verbose:
+        mxnew = busiest[0]["new"] or 1
+        print(f"\n   {p.dim('busiest sources (new work)')}")
+        for s in busiest[:6]:
+            bw = max(1, round(18 * s["new"] / mxnew))
+            bar_field = p.cyan("█" * bw) + " " * (18 - bw)  # colour bar, pad plainly
+            print(f"     {s['project'][:17].ljust(17)} {bar_field}  "
+                  f"{p.bold(str(s['new']).rjust(3))}   {p.dim(s['kind'])}")
+        if len(busiest) > 6:
+            print(f"     {p.dim(f'… and {len(busiest) - 6} more')}")
+
+    tail = "nothing leaves your machine" if _local else "stays on your own box"
+    print(f"\n  {p.dim(f'one chat → several lessons · {tail}')}")
+    if not verbose:
+        print(f"  {p.dim('(ygg seed --verbose to list every source + path)')}")
     print()
 
     if args.dry_run:
@@ -1033,6 +1073,7 @@ def main(cmd: str, rest: list[str]) -> int:
         p.add_argument("--dry-run", action="store_true", help="discover + estimate only, write nothing")
         p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
         p.add_argument("--force", action="store_true", help="re-distill everything (ignore the incremental seed state)")
+        p.add_argument("--verbose", "-v", action="store_true", help="list every source with its path (default: a grouped summary)")
     if cmd == "distill":
         p.add_argument("--source", required=True, help="dir or file to distill")
         p.add_argument("--project", help="project label for the lessons (default: source name)")
