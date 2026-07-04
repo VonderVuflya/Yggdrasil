@@ -135,6 +135,13 @@ ok "found ## [$VERSION]"
 # 3. Tests + gates.
 step "Tests + gates"
 if [ -z "$NO_TESTS" ]; then
+  # syntax-check on the OLDEST supported python — local 3.12 happily accepts
+  # PEP 701 f-strings that break every 3.10/3.11 user at import time
+  if command -v uv >/dev/null; then
+    run uv run --python 3.10 --no-project python -m compileall -q yggdrasil tests \
+      && ok "syntax OK on python 3.10 (oldest supported)" \
+      || die "does not compile on python 3.10 — fix before releasing"
+  fi
   run python3 -m unittest discover -s tests
   [ -x scripts/run_gates.sh ] && run env YGG_MEMORY_PORT=42070 bash scripts/run_gates.sh || true
 else

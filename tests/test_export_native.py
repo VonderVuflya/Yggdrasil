@@ -44,20 +44,20 @@ class UpsertTest(unittest.TestCase):
         # a different block updates in place
         block2 = ygg._render_native_block("checkout", [_rec("lesson", "second lesson")])
         self.assertEqual(ygg._upsert_managed_block(self.path, block2), "updated")
-        self.assertIn("second lesson", self.path.read_text())
-        self.assertNotIn("first lesson", self.path.read_text())
+        self.assertIn("second lesson", self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("first lesson", self.path.read_text(encoding="utf-8"))
 
     def test_preserves_user_content_around_block(self):
-        self.path.write_text("# My AGENTS.md\n\nHand-written rules I care about.\n")
+        self.path.write_text("# My AGENTS.md\n\nHand-written rules I care about.\n", encoding="utf-8")
         block = ygg._render_native_block("checkout", [_rec("decision", "ship small PRs")])
         ygg._upsert_managed_block(self.path, block)
-        text = self.path.read_text()
+        text = self.path.read_text(encoding="utf-8")
         self.assertIn("Hand-written rules I care about.", text)   # user content kept
         self.assertIn("ship small PRs", text)                     # block added
         # updating again must NOT duplicate or eat the user's content
         block2 = ygg._render_native_block("checkout", [_rec("decision", "ship small PRs v2")])
         ygg._upsert_managed_block(self.path, block2)
-        text2 = self.path.read_text()
+        text2 = self.path.read_text(encoding="utf-8")
         self.assertEqual(text2.count("Hand-written rules I care about."), 1)
         self.assertEqual(text2.count(ygg._YGG_BEGIN), 1)          # exactly one managed block
         self.assertIn("ship small PRs v2", text2)

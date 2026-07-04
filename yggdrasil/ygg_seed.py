@@ -829,8 +829,9 @@ class _Progress:
         # One line instead of dozens of '+0 new … unchanged' project rows.
         up_proj, up_files = up_to_date
         if up_proj:
-            print(f"   unchanged : {self.c.dim(f'{up_proj} projects already up to date '
-                                               f'({up_files} files skipped, no re-distill)')}")
+            # single-line f-string nesting only — multi-line fields need py3.12 (PEP 701)
+            detail = f"{up_proj} projects already up to date ({up_files} files skipped, no re-distill)"
+            print(f"   unchanged : {self.c.dim(detail)}")
         print(f"   elapsed   : {_fmt_dur(el)}")
         if self.db_path:
             now = self._db_size()

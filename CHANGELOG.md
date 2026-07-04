@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.9.1] — 2026-07-04
+
+### Fixed
+- **`ygg seed` crashed at import on Python 3.10/3.11** — the 0.8.0 seed summary
+  used a multi-line f-string replacement field (PEP 701, python 3.12+ only), so
+  the module didn't even parse on older interpreters. 0.8.0 and 0.9.0 on PyPI
+  are affected; upgrade.
+- The release pipeline now syntax-checks the package on the oldest supported
+  Python (3.10 via uv) before publishing, so a 3.12-only construct can't ship
+  again.
+
 ## [0.9.0] — 2026-07-04
 
 One memory across your machines, and a store that answers "why".
