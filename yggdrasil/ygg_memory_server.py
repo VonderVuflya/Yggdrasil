@@ -678,6 +678,96 @@ class MemoryStore:
             })
         return out
 
+    # ------------------------------------------------------------------ #
+    # git-backed sync — stable export + id-preserving upsert. The MERGE
+    # policy lives in ygg_sync (pure, unit-tested); the engine only reads
+    # and writes exactly what it's told.
+    # ------------------------------------------------------------------ #
+
+    SYNC_FIELDS = ("id", "user_id", "namespace", "scope", "project", "type", "content",
+                   "content_hash", "source", "confidence", "importance", "created_at",
+                   "archived", "metadata_json")
+
+    def sync_export(self) -> dict[str, Any]:
+        """Everything another machine needs to reproduce this store: all memories
+        (stable fields only — no access counters, no vectors: those are per-machine)
+        plus all relation edges. Ordered, so exports are byte-deterministic."""
+        with self._lock:
+            mems = [dict(r) for r in self._conn.execute(
+                f"SELECT {','.join(self.SYNC_FIELDS)} FROM memories ORDER BY id")]
+            rels = [dict(r) for r in self._conn.execute(
+                "SELECT from_id, to_id, rel_type, user_id, source FROM relations "
+                "ORDER BY from_id, to_id, rel_type")]
+        return {"memories": mems, "relations": rels}
+
+    def sync_upsert(self, memories: list[dict[str, Any]],
+                    relations: list[dict[str, Any]] | None = None) -> dict[str, int]:
+        """Write already-merged records under their ORIGINAL ids. New rows are
+        inserted (embedding left empty — `ygg reindex` backfills locally);
+        changed rows update content/flags + FTS; identical rows are skipped.
+        Edges import idempotently; ones pointing at locally-deleted memories are
+        skipped, not an error."""
+        added = updated = unchanged = rel_added = rel_skipped = 0
+        with self._lock:
+            with self._conn:
+                for rec in memories:
+                    mid = rec.get("id")
+                    if not mid or not rec.get("content"):
+                        continue
+                    row = self._conn.execute("SELECT * FROM memories WHERE id=?", (mid,)).fetchone()
+                    if row is None:
+                        cur = self._conn.execute(
+                            """
+                            INSERT INTO memories
+                                (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)
+                            """,
+                            (mid, rec.get("user_id") or "global_user", rec.get("namespace"),
+                             rec.get("scope"), rec.get("project"), rec.get("type"),
+                             rec["content"], rec.get("content_hash"), rec.get("source"),
+                             rec.get("confidence"),
+                             rec.get("importance") if rec.get("importance") is not None else 0.5,
+                             rec.get("created_at") or time.time(),
+                             1 if rec.get("archived") else 0, rec.get("metadata_json")))
+                        if self.use_fts:
+                            self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)",
+                                               (cur.lastrowid, expand_identifiers(rec["content"])))
+                        added += 1
+                        continue
+                    same = all((dict(row).get(f) == rec.get(f)) for f in self.SYNC_FIELDS)
+                    if same:
+                        unchanged += 1
+                        continue
+                    content_changed = row["content"] != rec["content"]
+                    self._conn.execute(
+                        "UPDATE memories SET scope=?, project=?, type=?, content=?, content_hash=?, "
+                        "source=?, confidence=?, importance=?, archived=?, metadata_json=?"
+                        + (", embedding_blob=NULL, embed_model=NULL" if content_changed else "")
+                        + " WHERE seq=?",
+                        (rec.get("scope"), rec.get("project"), rec.get("type"), rec["content"],
+                         rec.get("content_hash"), rec.get("source"), rec.get("confidence"),
+                         rec.get("importance") if rec.get("importance") is not None else 0.5,
+                         1 if rec.get("archived") else 0, rec.get("metadata_json"), row["seq"]))
+                    if content_changed:
+                        if self.use_fts:
+                            self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
+                            self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)",
+                                               (row["seq"], expand_identifiers(rec["content"])))
+                        self._vec_cache.pop(row["seq"], None)
+                    updated += 1
+        for rel in relations or []:
+            try:
+                r = self.relate(from_id=str(rel.get("from_id") or ""),
+                                to_id=str(rel.get("to_id") or ""),
+                                rel_type=str(rel.get("rel_type") or ""),
+                                user_id=str(rel.get("user_id") or "global_user"),
+                                source=rel.get("source") or "sync")
+                rel_added += 1 if r["created"] else 0
+            except ValueError:
+                rel_skipped += 1
+        return {"added": added, "updated": updated, "unchanged": unchanged,
+                "relations_added": rel_added, "relations_skipped": rel_skipped}
+
     def count(self) -> int:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -1141,6 +1231,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"success": False, "error": "memory_id is required"})
                 return
             self._send(200, {"success": True, "data": self.store.relations_for(str(memory_id))})
+            return
+        if parsed.path == "/sync_export":
+            self._send(200, {"success": True, "data": self.store.sync_export()})
+            return
+        if parsed.path == "/sync_upsert":
+            mems = body.get("memories") if isinstance(body.get("memories"), list) else []
+            rels = body.get("relations") if isinstance(body.get("relations"), list) else []
+            self._send(200, {"success": True, "data": self.store.sync_upsert(mems, rels)})
             return
         if parsed.path == "/search":
             data = self.store.search(

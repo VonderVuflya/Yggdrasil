@@ -54,7 +54,9 @@ Run components directly:
 Cold start (seed memory from your existing work):
   ygg stats              Overview of what's in memory (project × type × scope)
   ygg seed [--dry-run|--force]  Distill new/edited chats into memory (incremental, local)
+  ygg seed --schedule 03:30     Nightly auto-distill (off/status to manage)
   ygg distill --source P Distill one dir/file into atomic lessons (local Ollama model)
+  ygg sync [--repo R]    Sync memory across machines through YOUR git repo (no cloud)
 
 Memory ops:
   ygg health
@@ -488,6 +490,11 @@ def main() -> int:
         service.ensure_running()  # cold-start onboarding needs the engine up
         from . import ygg_seed
         return ygg_seed.main(cmd, rest)
+    if cmd == "sync":
+        from . import service
+        service.ensure_running()
+        from . import ygg_sync
+        return ygg_sync.main(cmd, rest)
     if cmd in MEMORY_CMDS:
         from . import ygg as m
         sys.argv = ["ygg", cmd, *rest]

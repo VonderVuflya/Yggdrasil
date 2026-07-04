@@ -41,6 +41,9 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
                   "Embeddings endpoint — keep local (daemon-level; needs `ygg redeploy`)."),
     "user_id": (("YGG_USER_ID",), "demo-user", "Identity stored memories are written under."),
     "namespace": (("YGG_NAMESPACE",), "yggdrasil-demo", "Memory namespace."),
+    "sync_repo": (("YGG_SYNC_REPO",), "",
+                  "YOUR git repo (local path or clone URL) used by `ygg sync` — "
+                  "cross-machine memory sync with no cloud in the loop."),
 }
 
 
