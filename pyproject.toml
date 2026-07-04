@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yggdrasil-memory"
-version = "0.9.0"
+version = "0.9.1"
 description = "One shared, durable memory for all your AI coding agents — MCP, local-first, zero-dependency."
 readme = "README.md"
 requires-python = ">=3.10"
