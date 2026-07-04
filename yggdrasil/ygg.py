@@ -198,9 +198,57 @@ def _warn_related(args: argparse.Namespace, content: str, project: str,
 
 
 def supersede(args: argparse.Namespace) -> None:
-    """Archive an outdated memory that a newer one replaces (non-destructive)."""
+    """Archive an outdated memory that a newer one replaces (non-destructive).
+    With --by the replacement is recorded as a SUPERSEDES edge, so `ygg
+    relations` can answer 'what replaced this and why is it archived'."""
+    if getattr(args, "by", None):
+        data = request_json("POST", "/relate", {
+            "from_id": args.by, "to_id": args.id, "rel_type": "SUPERSEDES",
+            "user_id": args.user_id, "source": "ygg-cli"})["data"]
+        backend().archive_memory(args.id, {"superseded": True, "status": "superseded",
+                                           "superseded_by": args.by})
+        note = "" if data["created"] else " (edge already existed)"
+        print(f"superseded (archived) {args.id} ← replaced by {args.by}{note}")
+        return
     backend().archive_memory(args.id, {"superseded": True, "status": "superseded"})
     print(f"superseded (archived) {args.id}")
+
+
+_REL_GLYPH = {"SOLVES": "⚑ solves", "SUPERSEDES": "⇒ supersedes", "CONTRADICTS": "✗ contradicts"}
+
+
+def relate(args: argparse.Namespace) -> None:
+    """Link two memories with a typed edge: SOLVES / SUPERSEDES / CONTRADICTS.
+    SUPERSEDES also archives the target (reversible, like `ygg supersede`)."""
+    data = request_json("POST", "/relate", {
+        "from_id": args.from_id, "to_id": args.to_id, "rel_type": args.rel,
+        "user_id": args.user_id, "source": "ygg-cli"})["data"]
+    verb = "linked" if data["created"] else "already linked"
+    print(f"{verb}: {args.from_id}  {data['rel_type']}  {args.to_id}")
+    if data["rel_type"] == "SUPERSEDES":
+        print(f"  target archived (reversible — nothing is ever hard-deleted)")
+
+
+def relations(args: argparse.Namespace) -> None:
+    """Show a memory's edges, both directions — why it exists, what it replaced,
+    what disputes it."""
+    try:
+        from . import ygg_ui
+    except ImportError:
+        import ygg_ui
+    p = ygg_ui.palette()
+    data = request_json("POST", "/relations", {"memory_id": args.id})["data"]
+    if not data["outgoing"] and not data["incoming"]:
+        print(f"no relations for {args.id} — create one: "
+              f"ygg relate --from <id> --rel solves|supersedes|contradicts --to <id>")
+        return
+    for direction, arrow in (("outgoing", "→"), ("incoming", "←")):
+        for e in data[direction]:
+            label = _REL_GLYPH.get(e["rel_type"], e["rel_type"].lower())
+            flag = p.dim(" [archived]") if e["other_archived"] else ""
+            preview = (e["other_content"] or "").replace("\n", " ")[:90]
+            print(f"  {arrow} {p.cyan(label):<24} {ygg_ui.short_id(e['other_id'])}{flag}")
+            print(f"      {p.dim(preview)}")
 
 
 def delete(args: argparse.Namespace) -> None:
@@ -318,6 +366,18 @@ def remember(args: argparse.Namespace) -> None:
             print(json.dumps({"event": "YGG_DUPLICATE_SKIP", "id": record.get("id"),
                               "content_hash": content_hash(content)}, indent=2, sort_keys=True))
         return
+    # Optional relation-on-write: link the fresh memory to what it solves /
+    # replaces / disputes, so the graph grows at the moment the knowledge does.
+    edges = []
+    for rel in ("solves", "supersedes", "contradicts"):
+        target = getattr(args, rel, None)
+        if target and record.get("id"):
+            request_json("POST", "/relate", {
+                "from_id": record["id"], "to_id": target, "rel_type": rel.upper(),
+                "user_id": args.user_id, "source": "ygg-cli"})
+            edges.append({"rel_type": rel.upper(), "to_id": target})
+    if edges:
+        record = {**record, "relations": edges}
     print(json.dumps(record, indent=2, sort_keys=True))
     _warn_related(args, content, project, memory_type, record.get("id"))
 
@@ -652,8 +712,14 @@ def review(args: argparse.Namespace) -> None:
             if ans in ("", "k", "y", "keep"):
                 for mid in dups:
                     backend().archive_memory(mid, {"review": "duplicate", "status": "archived"})
+                    try:  # record WHY it left the active set (older engines: archive still stands)
+                        request_json("POST", "/relate",
+                                     {"from_id": keep, "to_id": mid, "rel_type": "SUPERSEDES",
+                                      "user_id": args.user_id, "source": "ygg-review"})
+                    except Exception:
+                        pass
                     archived += 1
-                print(f"    archived {len(dups)}, kept {keep}")
+                print(f"    archived {len(dups)}, kept {keep} (SUPERSEDES edges recorded)")
             else:
                 skipped += 1
         else:  # stale/conflict marker — needs human verification, NEVER auto-archived
@@ -825,6 +891,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json-file")
     p.add_argument("--extract", action="store_true", help="Allow server-side extraction. Default skips extraction for deterministic agent writeback.")
     p.add_argument("--tag", action="append", help="tag(s) to attach (repeatable)")
+    p.add_argument("--solves", metavar="ID", help="link: this memory SOLVES that one (e.g. a fix for an open follow_up)")
+    p.add_argument("--supersedes", metavar="ID", help="link: this memory SUPERSEDES that one (archives it, reversibly)")
+    p.add_argument("--contradicts", metavar="ID", help="link: this memory CONTRADICTS that one (both stay active, dispute recorded)")
     p.set_defaults(func=remember)
 
     p = sub.add_parser("search", parents=[common])
@@ -871,7 +940,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("supersede", parents=[common])
     p.add_argument("--id", required=True)
+    p.add_argument("--by", help="id of the memory that replaces it (records a SUPERSEDES edge)")
     p.set_defaults(func=supersede)
+
+    p = sub.add_parser("relate", parents=[common])
+    p.add_argument("--from", dest="from_id", required=True, metavar="ID")
+    p.add_argument("--rel", required=True, choices=["solves", "supersedes", "contradicts"])
+    p.add_argument("--to", dest="to_id", required=True, metavar="ID")
+    p.set_defaults(func=relate)
+
+    p = sub.add_parser("relations", parents=[common])
+    p.add_argument("--id", required=True)
+    p.set_defaults(func=relations)
 
     p = sub.add_parser("delete", parents=[common])
     p.add_argument("--id", required=True)

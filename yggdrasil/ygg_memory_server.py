@@ -247,6 +247,25 @@ class MemoryStore:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_created ON memories(user_id, namespace, created_at)")
         # Indexed dedup lookup — O(log n) content-hash check at any store size (no 1000-row cap).
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mem_hash ON memories(user_id, project, type, content_hash)")
+        # Relation graph: typed edges between memories (SOLVES / SUPERSEDES /
+        # CONTRADICTS). UNIQUE makes relate() idempotent; edges are hard-deleted
+        # with their endpoints (an edge without a node answers no question).
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relations (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_id    TEXT NOT NULL,
+                to_id      TEXT NOT NULL,
+                rel_type   TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                source     TEXT,
+                created_at REAL NOT NULL,
+                UNIQUE(from_id, to_id, rel_type)
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rel_from ON relations(from_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rel_to ON relations(to_id)")
         # Lazy migration for pre-existing DBs created before these columns.
         existing_cols = {r[1] for r in cur.execute("PRAGMA table_info(memories)").fetchall()}
         if "embedding" not in existing_cols:
@@ -552,6 +571,8 @@ class MemoryStore:
                 if self.use_fts:
                     self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
                 self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
+                self._conn.execute("DELETE FROM relations WHERE from_id=? OR to_id=?",
+                                   (memory_id, memory_id))
             self._vec_cache.pop(row["seq"], None)
         return True
 
@@ -570,10 +591,11 @@ class MemoryStore:
                 params.append(value)
         where_sql = " AND ".join(where)
         with self._lock:
-            rows = self._conn.execute(f"SELECT seq FROM memories WHERE {where_sql}", params).fetchall()
+            rows = self._conn.execute(f"SELECT seq, id FROM memories WHERE {where_sql}", params).fetchall()
             seqs = [r["seq"] for r in rows]
             if dry_run or not seqs:
                 return len(seqs)
+            ids = [r["id"] for r in rows]
             with self._conn:
                 for i in range(0, len(seqs), 500):  # stay under SQLite's variable cap
                     chunk = seqs[i:i + 500]
@@ -581,9 +603,80 @@ class MemoryStore:
                     if self.use_fts:
                         self._conn.execute(f"DELETE FROM mem_fts WHERE rowid IN ({marks})", chunk)
                     self._conn.execute(f"DELETE FROM memories WHERE seq IN ({marks})", chunk)
+                for i in range(0, len(ids), 250):   # 2 params per id below
+                    chunk = ids[i:i + 250]
+                    marks = ",".join("?" for _ in chunk)
+                    self._conn.execute(
+                        f"DELETE FROM relations WHERE from_id IN ({marks}) OR to_id IN ({marks})",
+                        chunk + chunk)
             for s in seqs:
                 self._vec_cache.pop(s, None)
         return len(seqs)
+
+    # ------------------------------------------------------------------ #
+    # relation graph — typed edges: why a memory exists / what replaced it
+    # ------------------------------------------------------------------ #
+
+    REL_TYPES = ("SOLVES", "SUPERSEDES", "CONTRADICTS")
+
+    def relate(self, *, from_id: str, to_id: str, rel_type: str,
+               user_id: str, source: str | None = None) -> dict[str, Any]:
+        """Create one edge. Idempotent (UNIQUE); SUPERSEDES archives the target —
+        the edge records WHY it left the active set. Raises ValueError on bad input."""
+        rel = (rel_type or "").upper()
+        if rel not in self.REL_TYPES:
+            raise ValueError(f"unknown rel_type {rel_type!r}: use one of {', '.join(self.REL_TYPES)}")
+        if from_id == to_id:
+            raise ValueError("a memory cannot relate to itself")
+        with self._lock:
+            found = {r["id"] for r in self._conn.execute(
+                "SELECT id FROM memories WHERE id IN (?, ?)", (from_id, to_id))}
+            missing = {from_id, to_id} - found
+            if missing:
+                raise ValueError(f"memory not found: {', '.join(sorted(missing))}")
+            with self._conn:
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO relations (from_id, to_id, rel_type, user_id, source, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (from_id, to_id, rel, user_id, source, time.time()))
+                created = cur.rowcount > 0
+                if rel == "SUPERSEDES":
+                    self._conn.execute(
+                        "UPDATE memories SET archived=1 WHERE id=? AND archived=0", (to_id,))
+        return {"from_id": from_id, "to_id": to_id, "rel_type": rel, "created": created}
+
+    def unrelate(self, *, from_id: str, to_id: str, rel_type: str) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM relations WHERE from_id=? AND to_id=? AND rel_type=?",
+                (from_id, to_id, (rel_type or "").upper()))
+        return cur.rowcount > 0
+
+    def relations_for(self, memory_id: str) -> dict[str, list[dict[str, Any]]]:
+        """Both directions, each edge carrying the other end's content preview —
+        one call answers 'why is this here / what did it replace / what disputes it'."""
+        out: dict[str, list[dict[str, Any]]] = {"outgoing": [], "incoming": []}
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT r.from_id, r.to_id, r.rel_type, r.created_at,
+                       m.content AS other_content, m.archived AS other_archived
+                FROM relations r
+                LEFT JOIN memories m
+                  ON m.id = CASE WHEN r.from_id=? THEN r.to_id ELSE r.from_id END
+                WHERE r.from_id=? OR r.to_id=?
+                ORDER BY r.created_at
+                """, (memory_id, memory_id, memory_id)).fetchall()
+        for r in rows:
+            direction = "outgoing" if r["from_id"] == memory_id else "incoming"
+            other = r["to_id"] if direction == "outgoing" else r["from_id"]
+            out[direction].append({
+                "rel_type": r["rel_type"], "other_id": other,
+                "other_content": (r["other_content"] or "")[:200],
+                "other_archived": bool(r["other_archived"]),
+                "created_at": r["created_at"],
+            })
+        return out
 
     def count(self) -> int:
         with self._lock:
@@ -1020,6 +1113,34 @@ class Handler(BaseHTTPRequestHandler):
                 dry_run=bool(body.get("dry_run")),
             )
             self._send(200, {"success": True, "data": {"deleted": deleted, "dry_run": bool(body.get("dry_run"))}})
+            return
+        if parsed.path == "/relate":
+            try:
+                data = self.store.relate(
+                    from_id=str(body.get("from_id") or ""),
+                    to_id=str(body.get("to_id") or ""),
+                    rel_type=str(body.get("rel_type") or ""),
+                    user_id=str(body.get("user_id") or "global_user"),
+                    source=body.get("source"),
+                )
+            except ValueError as exc:
+                self._send(400, {"success": False, "error": str(exc)})
+                return
+            self._send(200, {"success": True, "data": data})
+            return
+        if parsed.path == "/unrelate":
+            removed = self.store.unrelate(
+                from_id=str(body.get("from_id") or ""),
+                to_id=str(body.get("to_id") or ""),
+                rel_type=str(body.get("rel_type") or ""))
+            self._send(200, {"success": True, "data": {"removed": removed}})
+            return
+        if parsed.path == "/relations":
+            memory_id = body.get("memory_id")
+            if not memory_id:
+                self._send(400, {"success": False, "error": "memory_id is required"})
+                return
+            self._send(200, {"success": True, "data": self.store.relations_for(str(memory_id))})
             return
         if parsed.path == "/search":
             data = self.store.search(

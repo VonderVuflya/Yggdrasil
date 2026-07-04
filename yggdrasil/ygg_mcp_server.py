@@ -236,6 +236,18 @@ def tool_schema() -> list[dict[str, Any]]:
                         "maximum": 1.0,
                         "description": "Optional confidence 0.0–1.0; higher ranks the memory more strongly in recall. Defaults to the engine's standard for tool writes.",
                     },
+                    "solves": {
+                        "type": "string",
+                        "description": "Optional id of a memory this one SOLVES (e.g. this fix resolves that open follow_up) — links them in the relation graph.",
+                    },
+                    "supersedes": {
+                        "type": "string",
+                        "description": "Optional id of a memory this one REPLACES — records a SUPERSEDES edge and archives the old memory (reversible).",
+                    },
+                    "contradicts": {
+                        "type": "string",
+                        "description": "Optional id of a memory this one CONTRADICTS — both stay active, the dispute is recorded for review.",
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -364,6 +376,9 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str:
         ]
         if arguments.get("confidence") is not None:
             args.extend(["--confidence", str(arguments["confidence"])])
+        for rel in ("solves", "supersedes", "contradicts"):
+            if arguments.get(rel):
+                args.extend([f"--{rel}", str(arguments[rel])])
         return run_ygg(args)
     if name == "ygg_materialize":
         return run_ygg(

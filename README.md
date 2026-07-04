@@ -190,7 +190,8 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | `ygg remember --project P --type lesson --content "…"` | Save a durable memory (secret-guarded, deduped) |
 | `ygg bootstrap --project P` | Pull a project's memory before starting work |
 | `ygg pin --id ID` · `ygg unpin --id ID` | Pin a memory so it reliably surfaces |
-| `ygg supersede --id ID` | Archive an outdated memory a newer one replaces |
+| `ygg relate --from A --rel solves --to B` · `ygg relations --id ID` | Link memories (`solves`/`supersedes`/`contradicts`) · see why a memory exists / what replaced it |
+| `ygg supersede --id OLD --by NEW` | Archive an outdated memory — `--by` records what replaced it |
 | `ygg materialize --id ID --project P` | Export one memory to an Obsidian note |
 | `ygg export-native --project P` | Write a curated digest into `AGENTS.md`/`MEMORY.md` — feed Claude Code & Codex's native memory |
 | `ygg import --from TOOL --path P` | Migrate another memory tool's store into Yggdrasil (`mcp-memory`, `basic-memory`; `--dry-run` first) |
