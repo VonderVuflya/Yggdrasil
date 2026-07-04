@@ -21,8 +21,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
+import re
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -900,6 +903,114 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
 
 
 # --------------------------------------------------------------------------- #
+# scheduled seed — `ygg seed --schedule 03:30` keeps memory fresh by itself
+# (macOS launchd today; Linux/Windows land with the service GA)
+# --------------------------------------------------------------------------- #
+
+SEED_LABEL = os.environ.get("YGG_SEED_LABEL", "com.yggdrasil.seed")
+
+
+def parse_hhmm(spec: str) -> tuple[int, int] | None:
+    """"03:30" -> (3, 30) · "on" -> the 03:30 default · anything else -> None."""
+    if spec == "on":
+        return (3, 30)
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", spec or "")
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    return (h, mi) if h < 24 and mi < 60 else None
+
+
+def seed_schedule_plist(argv: list[str], hour: int, minute: int, log_path: str) -> str:
+    """launchd plist for a nightly seed: calendar-fired, no KeepAlive — it runs,
+    distills what changed since yesterday (incremental state), and exits."""
+    args_xml = "".join(f"    <string>{a}</string>\n" for a in argv)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n<dict>\n'
+        f"  <key>Label</key><string>{SEED_LABEL}</string>\n"
+        "  <key>ProgramArguments</key>\n  <array>\n" + args_xml + "  </array>\n"
+        "  <key>StartCalendarInterval</key>\n"
+        f"  <dict><key>Hour</key><integer>{hour}</integer>"
+        f"<key>Minute</key><integer>{minute}</integer></dict>\n"
+        f"  <key>StandardOutPath</key><string>{log_path}</string>\n"
+        f"  <key>StandardErrorPath</key><string>{log_path}</string>\n"
+        "  <key>RunAtLoad</key><false/>\n"
+        "</dict>\n</plist>\n"
+    )
+
+
+def _schedule_runtime():  # -> (plist_path, argv, log_path, domain)
+    try:
+        from . import service
+    except ImportError:
+        import service
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{SEED_LABEL}.plist"
+    cli = service.SCRIPTS / "cli.py"
+    argv = [sys.executable, str(cli), "seed", "--yes"]
+    log = str(service.LOGS / "seed-scheduled.log")
+    return plist, argv, log, f"gui/{os.getuid()}"
+
+
+def schedule_cmd(spec: str) -> int:
+    """Handle `ygg seed --schedule <spec>`: HH:MM/on installs, off removes,
+    status reports. Returns an exit code."""
+    try:
+        from . import ygg_ui
+    except ImportError:
+        import ygg_ui
+    p = ygg_ui.palette()
+    if platform.system() != "Darwin":
+        print("Scheduled seed ships with the Linux/Windows service GA. Meanwhile, cron works:\n"
+              f"  30 3 * * *  {sys.executable} ~/.yggdrasil/scripts/cli.py seed --yes "
+              ">> ~/.yggdrasil/logs/seed-scheduled.log 2>&1")
+        return 2
+    plist, argv, log, domain = _schedule_runtime()
+
+    if spec == "status":
+        if plist.exists():
+            m = re.search(r"<key>Hour</key><integer>(\d+)</integer>"
+                          r"<key>Minute</key><integer>(\d+)</integer>", plist.read_text())
+            when = f"{int(m.group(1)):02d}:{int(m.group(2)):02d}" if m else "?"
+            print(f"{ygg_ui.mark_ok(p)} scheduled daily at {when}   (log: {log})")
+        else:
+            print(f"{ygg_ui.mark_warn(p)} not scheduled — enable with: ygg seed --schedule 03:30")
+        return 0
+
+    if spec == "off":
+        subprocess.run(["launchctl", "bootout", f"{domain}/{SEED_LABEL}"], capture_output=True)
+        existed = plist.exists()
+        plist.unlink(missing_ok=True)
+        print(f"{ygg_ui.mark_ok(p)} nightly seed removed" if existed
+              else f"{ygg_ui.mark_warn(p)} nothing was scheduled")
+        return 0
+
+    hhmm = parse_hhmm(spec)
+    if not hhmm:
+        print(f"bad --schedule value {spec!r}: use HH:MM (e.g. 03:30), 'off' or 'status'",
+              file=sys.stderr)
+        return 2
+    hour, minute = hhmm
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["launchctl", "bootout", f"{domain}/{SEED_LABEL}"], capture_output=True)
+    plist.write_text(seed_schedule_plist(argv, hour, minute, log))
+    ok = subprocess.run(["launchctl", "bootstrap", domain, str(plist)],
+                        capture_output=True).returncode == 0
+    if not ok:  # older macOS fallback, same as the engine service does
+        subprocess.run(["launchctl", "load", "-w", str(plist)], capture_output=True)
+    print(f"{ygg_ui.mark_ok(p)} nightly seed scheduled at {hour:02d}:{minute:02d} — distills only "
+          f"what changed since the last run (incremental), fully local.\n"
+          f"  log:     {log}\n"
+          f"  check:   ygg seed --schedule status\n"
+          f"  disable: ygg seed --schedule off\n"
+          f"  note:    distillation uses your configured endpoint (`ygg config get distill_url`) —\n"
+          f"           keep Ollama running, or the run just retries those files next night.")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # seed orchestrator
 # --------------------------------------------------------------------------- #
 
@@ -1088,6 +1199,9 @@ def main(cmd: str, rest: list[str]) -> int:
         p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
         p.add_argument("--force", action="store_true", help="re-distill everything (ignore the incremental seed state)")
         p.add_argument("--verbose", "-v", action="store_true", help="list every source with its path (default: a grouped summary)")
+        p.add_argument("--schedule", metavar="HH:MM|off|status", default="",
+                       help="run seed nightly by itself: HH:MM installs (e.g. 03:30), "
+                            "'off' removes, 'status' reports")
     if cmd == "distill":
         p.add_argument("--source", required=True, help="dir or file to distill")
         p.add_argument("--project", help="project label for the lessons (default: source name)")
@@ -1102,6 +1216,8 @@ def main(cmd: str, rest: list[str]) -> int:
     if cmd == "stats":
         return stats(args.user_id, args.namespace)
     if cmd == "seed":
+        if getattr(args, "schedule", ""):
+            return schedule_cmd(args.schedule)
         return seed(args)
     if cmd == "distill":
         return distill_cmd(args)

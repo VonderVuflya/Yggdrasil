@@ -203,6 +203,7 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | --- | --- |
 | `ygg seed` | Distill Claude Code + Codex transcripts, Obsidian vaults, `CLAUDE.md` repos — incremental, deduped, fully local |
 | `ygg seed --dry-run` · `--force` | Discover + estimate only · re-distill everything |
+| `ygg seed --schedule 03:30` | Nightly auto-distill (launchd) — memory keeps itself fresh; `off` / `status` |
 | `ygg distill --source PATH` | Distill one dir/file into lessons |
 | `ygg reindex` | Backfill missing embeddings (restores dense recall) |
 
