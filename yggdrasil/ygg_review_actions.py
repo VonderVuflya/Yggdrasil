@@ -23,7 +23,7 @@ AUDIT_LOG = REPORTS / "review-action-audit.jsonl"
 
 
 def utc_now() -> str:
-    return dt.datetime.now(tz=dt.UTC).isoformat()
+    return dt.datetime.now(tz=dt.timezone.utc).isoformat()
 
 
 def load_json(path: Path) -> dict[str, Any]:

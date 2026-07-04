@@ -84,8 +84,8 @@ def classify(bg_model: str, a: str, b: str) -> dict | None:
 
 def audit(entry: dict) -> None:
     REPORTS.mkdir(parents=True, exist_ok=True)
-    entry["at"] = dt.datetime.now(tz=dt.UTC).isoformat()
-    with AUDIT.open("a") as fh:
+    entry["at"] = dt.datetime.now(tz=dt.timezone.utc).isoformat()
+    with AUDIT.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
 
 

@@ -225,7 +225,7 @@ def main() -> int:
             )
             note_path = ROOT / materialize.stdout.strip()
             results["materialized_note"] = str(note_path)
-            note_text = note_path.read_text()
+            note_text = note_path.read_text(encoding="utf-8")
             results["checks"]["materialize_frontmatter"] = all(
                 key in note_text.split("---", 2)[1] for key in ["id:", "type:", "project:", "scope:", "confidence:", "created_at:", "source:"]
             )

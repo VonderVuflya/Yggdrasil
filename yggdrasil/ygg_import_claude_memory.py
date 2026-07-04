@@ -97,7 +97,7 @@ def main() -> int:
     for path in sorted(source.glob("*.md")):
         if path.name.upper() == "MEMORY.md".upper():
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         fm = parse_frontmatter(text)
         mem_type = TYPE_MAP.get(fm.get("type", ""), "debugging_lesson")
 

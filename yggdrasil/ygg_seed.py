@@ -535,7 +535,7 @@ def _extract_codex_text(path: Path) -> str:
     """
     out: list[str] = []
     try:
-        for line in path.read_text(errors="replace").splitlines():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -567,14 +567,15 @@ def _extract_text(path: Path) -> str:
     """Pull human-readable text out of a source file (.jsonl transcript or .md)."""
     if path.suffix == ".md":
         try:
-            return path.read_text(errors="replace")
+            return path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
-    if ".codex/sessions" in str(path) or "/.codex/" in str(path):
+    # as_posix(): on Windows str(path) uses backslashes and would never match
+    if ".codex/sessions" in path.as_posix() or "/.codex/" in path.as_posix():
         return _extract_codex_text(path)
     out: list[str] = []
     try:
-        for line in path.read_text(errors="replace").splitlines():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue

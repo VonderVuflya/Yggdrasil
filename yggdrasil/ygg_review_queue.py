@@ -193,7 +193,7 @@ def main() -> int:
     severity_order = {"high": 0, "medium": 1, "low": 2}
     issues.sort(key=lambda issue: (severity_order.get(issue["severity"], 9), issue["kind"], issue.get("project") or ""))
 
-    created_at = dt.datetime.now(tz=dt.UTC).isoformat()
+    created_at = dt.datetime.now(tz=dt.timezone.utc).isoformat()
     report = {
         "created_at": created_at,
         "status": "review_needed" if issues else "clean",

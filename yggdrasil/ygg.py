@@ -157,13 +157,13 @@ def render_value(value: Any, indent: int = 0) -> str:
 def load_content(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     metadata: dict[str, Any] = {}
     if args.json_file:
-        data = json.loads(Path(args.json_file).read_text())
+        data = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise YggError("--json-file must contain a JSON object.")
         metadata.update({k: data[k] for k in ("type", "confidence", "source") if k in data})
         return render_value(data), metadata
     if args.file:
-        return Path(args.file).read_text(), metadata
+        return Path(args.file).read_text(encoding="utf-8"), metadata
     if args.content:
         return args.content, metadata
     raise YggError("Provide one of --content, --file, or --json-file.")
@@ -519,9 +519,9 @@ def note_for_record(record: dict[str, Any]) -> str:
     metadata = record.get("metadata") or {}
     created_at = record.get("created_at") or metadata.get("created_at")
     if isinstance(created_at, (int, float)):
-        created_at = dt.datetime.fromtimestamp(created_at, tz=dt.UTC).isoformat()
+        created_at = dt.datetime.fromtimestamp(created_at, tz=dt.timezone.utc).isoformat()
     elif not created_at:
-        created_at = dt.datetime.now(tz=dt.UTC).isoformat()
+        created_at = dt.datetime.now(tz=dt.timezone.utc).isoformat()
     frontmatter = {
         "id": record.get("id"),
         "type": metadata.get("type") or record.get("memory_type") or "memory",
@@ -561,7 +561,7 @@ def materialize(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = slugify(f"{metadata.get('project', 'global')}-{metadata.get('type', record.get('memory_type', 'memory'))}-{record.get('id', '')[:8]}")
     output_path = output_dir / f"{stem}.md"
-    output_path.write_text(note_for_record(record))
+    output_path.write_text(note_for_record(record), encoding="utf-8")
     print(output_path)
 
 
@@ -605,7 +605,7 @@ def _render_native_block(project: str, records: list[dict[str, Any]]) -> str:
 def _upsert_managed_block(path: Path, block: str) -> str:
     """Insert/replace the ygg-managed block in `path`, preserving all other
     content. Returns 'created' | 'updated' | 'unchanged'."""
-    existing = path.read_text() if path.exists() else ""
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
     if _YGG_BEGIN in existing and _YGG_END in existing:
         pre = existing[: existing.index(_YGG_BEGIN)]
         post = existing[existing.index(_YGG_END) + len(_YGG_END):]
@@ -617,7 +617,7 @@ def _upsert_managed_block(path: Path, block: str) -> str:
         status = "created" if not existing.strip() else "updated"
     if new != existing:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(new)
+        path.write_text(new, encoding="utf-8")
     return status
 
 
