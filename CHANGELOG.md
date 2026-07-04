@@ -3,6 +3,42 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.9.0] — 2026-07-04
+
+One memory across your machines, and a store that answers "why".
+
+### Added
+- **`ygg sync --repo <your-git-repo>` — cross-machine memory sync through a repo
+  YOU own** (GitHub private, Gitea, even a bare repo on a USB stick). The store
+  travels as one byte-deterministic JSON file per memory plus a `relations.jsonl`
+  (git union-merge driver); no relay, no account, no cloud in the loop. One
+  command converges both machines: export → commit → pull → import with a
+  deterministic merge policy (archive-anywhere-holds-everywhere, longer content
+  wins, confidence max, pinned OR) → re-export → push. Counters and vectors stay
+  per-machine by design.
+- **Relation graph — memories can SOLVE, SUPERSEDE, or CONTRADICT each other.**
+  Typed, idempotent edges answer *why* a memory exists and what replaced it:
+  `ygg remember --solves/--supersedes/--contradicts` links at write time (also
+  exposed on the `ygg_remember` MCP tool, so an agent saving a fix can close the
+  follow-up it resolves); `ygg supersede --by` records the replacement;
+  `ygg review` dup consolidation now leaves SUPERSEDES edges instead of bare
+  archives. Inspect with `ygg relations --id` (both directions, with previews).
+- **`ygg seed --schedule HH:MM` — nightly auto-distill.** Installs a
+  calendar-fired LaunchAgent that distills what changed since the last run and
+  exits; `off` removes it, `status` reports. Incremental state + dedup keep the
+  nightly run cheap; a dead Ollama just means those files retry the next night.
+
+### Fixed
+- **Python 3.10 crash in `ygg review` / reports / `materialize`** — the code used
+  `datetime.UTC`, an alias that only exists on Python 3.11+. 0.8.0 on PyPI is
+  affected on 3.10; upgrade.
+- **Windows: explicit UTF-8 everywhere.** Text IO carrying memory content relied
+  on the locale encoding (cp1252), which crashed `ygg export-native` on the 🌳 in
+  the managed block; Codex session routing compared against `str(path)` and never
+  matched Windows backslash paths (`as_posix()` now).
+- The release pipeline itself: publishing from a detached HEAD (e.g. a checked-out
+  tag) no longer fails with "not a full refname" — pushes name the target branch.
+
 ## [0.8.0] — 2026-07-03
 
 Migrate in, and a CLI you can actually read.
