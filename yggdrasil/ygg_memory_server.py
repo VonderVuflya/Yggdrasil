@@ -49,6 +49,61 @@ try:
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
     from ygg_embeddings import OllamaEmbedder, cosine
 
+try:
+    from . import ygg_config as _cfg
+except ImportError:
+    import ygg_config as _cfg
+
+
+# Identity migration: rebrand legacy demo memory to the configured default once.
+# Version-guarded via `PRAGMA user_version` so it runs exactly once per DB.
+IDENTITY_MIGRATION_VERSION = 1
+
+
+def rebrand_legacy_identity(user_id: str | None, ns: str | None) -> tuple[str | None, str | None]:
+    """Map the legacy demo (user_id, namespace) pair to the configured default;
+    pass anything else through unchanged. Used by both the one-time DB migration
+    and the sync-import path, so a lagging demo-keyed peer auto-adopts on pull."""
+    if user_id == _cfg.DEMO_USER_ID and ns == _cfg.DEMO_NAMESPACE:
+        return _cfg.DEFAULT_USER_ID, _cfg.DEFAULT_NAMESPACE
+    return user_id, ns
+
+
+def migrate_identity(conn: sqlite3.Connection, *, dry_run: bool = False,
+                     backup_path: str | None = None) -> dict[str, Any]:
+    """Idempotent, user_version-guarded rebrand of legacy demo identity
+    (demo-user / yggdrasil-demo) to the configured default. Only touches rows
+    matching the exact legacy PAIR, so a user's custom identity is never moved.
+    FTS mirrors content, not identity, so it needs no update. Returns a summary."""
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    if ver >= IDENTITY_MIGRATION_VERSION:
+        return {"migrated": 0, "already": True, "backup": None}
+    n = conn.execute("SELECT COUNT(*) FROM memories WHERE user_id=? AND namespace=?",
+                     (_cfg.DEMO_USER_ID, _cfg.DEMO_NAMESPACE)).fetchone()[0]
+    if dry_run:
+        return {"migrated": n, "already": False, "backup": None, "dry_run": True}
+    used_backup = None
+    if n and backup_path:
+        conn.commit()  # VACUUM INTO must run outside a transaction
+        conn.execute("VACUUM INTO ?", (backup_path,))
+        used_backup = backup_path
+    with conn:  # one transaction: relabel + version bump commit or roll back together
+        if n:
+            conn.execute(
+                "UPDATE memories SET user_id=?, namespace=? WHERE user_id=? AND namespace=?",
+                (_cfg.DEFAULT_USER_ID, _cfg.DEFAULT_NAMESPACE, _cfg.DEMO_USER_ID, _cfg.DEMO_NAMESPACE))
+            conn.execute("UPDATE relations SET user_id=? WHERE user_id=?",
+                         (_cfg.DEFAULT_USER_ID, _cfg.DEMO_USER_ID))
+        conn.execute(f"PRAGMA user_version={IDENTITY_MIGRATION_VERSION}")
+    if n:
+        # Convert the implicit default into an explicit config pin so no FUTURE
+        # default change can ever strand this machine's memories again.
+        try:
+            _cfg.pin_default_identity()
+        except OSError:
+            pass
+    return {"migrated": n, "already": False, "backup": used_backup}
+
 
 DEFAULT_HOST = os.environ.get("YGG_MEMORY_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("YGG_MEMORY_PORT", "42069"))
@@ -203,6 +258,21 @@ class MemoryStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self.use_fts = self._init_schema()
+        # One-time identity migration: rebrand legacy demo memory to the default.
+        # Guarded by user_version, backup-first; must never crash the engine, so a
+        # failure just leaves user_version=0 and is retried on the next start.
+        try:
+            res = migrate_identity(
+                self._conn,
+                backup_path=f"{self.db_path}.pre-identity-v{IDENTITY_MIGRATION_VERSION}.{int(time.time())}.bak")
+            if res.get("migrated"):
+                sys.stderr.write(
+                    f"[yggdrasil] identity migration: rebranded {res['migrated']} memories "
+                    f"{_cfg.DEMO_USER_ID}/{_cfg.DEMO_NAMESPACE} -> "
+                    f"{_cfg.DEFAULT_USER_ID}/{_cfg.DEFAULT_NAMESPACE}"
+                    + (f" (backup: {res['backup']})" if res.get("backup") else "") + "\n")
+        except sqlite3.Error as exc:
+            sys.stderr.write(f"[yggdrasil] identity migration skipped (retried next start): {exc}\n")
         # Name of the embedding model this process produces vectors with — stored
         # per row so a model switch can be detected and reindexed (item: model
         # versioning), and so mixed-model rows are never silently cosine-compared.
@@ -796,6 +866,10 @@ class MemoryStore:
                     mid = rec.get("id")
                     if not mid or not rec.get("content"):
                         continue
+                    # A lagging peer may still push demo-keyed records; adopt them
+                    # to the default identity on import so machines converge.
+                    rec["user_id"], rec["namespace"] = rebrand_legacy_identity(
+                        rec.get("user_id"), rec.get("namespace"))
                     row = self._conn.execute("SELECT * FROM memories WHERE id=?", (mid,)).fetchone()
                     if row is None:
                         cur = self._conn.execute(
@@ -839,10 +913,11 @@ class MemoryStore:
                     updated += 1
         for rel in relations or []:
             try:
+                rel_uid, _ = rebrand_legacy_identity(rel.get("user_id"), _cfg.DEMO_NAMESPACE)
                 r = self.relate(from_id=str(rel.get("from_id") or ""),
                                 to_id=str(rel.get("to_id") or ""),
                                 rel_type=str(rel.get("rel_type") or ""),
-                                user_id=str(rel.get("user_id") or "global_user"),
+                                user_id=str(rel_uid or "global_user"),
                                 source=rel.get("source") or "sync")
                 rel_added += 1 if r["created"] else 0
             except ValueError:

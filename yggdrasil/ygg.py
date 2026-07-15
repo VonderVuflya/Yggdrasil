@@ -20,14 +20,18 @@ from typing import Any
 try:
     from .ygg_core import RestMemoryBackend, YggConfig, YggError, metadata_of, record_is_archived
     from . import ygg_ui
+    from . import ygg_config as _cfg
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
     from ygg_core import RestMemoryBackend, YggConfig, YggError, metadata_of, record_is_archived
     import ygg_ui
+    import ygg_config as _cfg
 
 
 DEFAULT_URL = "http://127.0.0.1:42069"
-DEFAULT_NAMESPACE = "yggdrasil-demo"
-DEFAULT_USER = "demo-user"  # unified identity — same store the MCP agent reads/writes
+# Unified identity — same store the MCP agent reads/writes — resolved through the
+# single config source of truth (env > config.json > default), never a literal.
+DEFAULT_NAMESPACE = _cfg.namespace()
+DEFAULT_USER = _cfg.user_id()
 
 # Cosine >= this (when dense is on) means a near-duplicate of an existing memory —
 # the write is skipped. High by default so only genuinely-redundant lessons drop.
@@ -1038,6 +1042,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=1000)
     p.set_defaults(func=export_native)
 
+    p = sub.add_parser("migrate", help="one-time: rebrand legacy demo identity "
+                                       "(demo-user/yggdrasil-demo) to the default")
+    p.add_argument("--dry-run", action="store_true", help="report what would change, write nothing")
+    p.set_defaults(func=migrate_cmd)
+
     p = sub.add_parser("quality", parents=[common],
                        help="store health: duplicates, cross-project leakage, truncated records")
     p.add_argument("--threshold", type=float, default=0.95,
@@ -1046,6 +1055,50 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=quality)
 
     return parser
+
+
+def migrate_cmd(args: argparse.Namespace) -> None:
+    """Rebrand legacy demo-identity memory to the configured default. The engine
+    also does this automatically on startup (version-guarded); this command is for
+    a backup-first, dry-run-able manual run when the daemon isn't the one you want.
+    Opens the store file directly — no engine required."""
+    import sqlite3
+    import time
+    try:
+        from . import ygg_memory_server as _srv
+    except ImportError:  # flat layout
+        import ygg_memory_server as _srv
+    p = ygg_ui.palette()
+    db = Path(os.environ.get("YGG_HOME", str(Path.home() / ".yggdrasil"))) / "data" / "memory.sqlite"
+    if not db.exists():
+        print(f"no memory store at {db} — nothing to migrate.")
+        return
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA busy_timeout=5000")  # don't fight a running daemon's brief writes
+    try:
+        if args.dry_run:
+            res = _srv.migrate_identity(conn, dry_run=True)
+            if res.get("already"):
+                print(f"{ygg_ui.mark_ok(p)} identity already migrated "
+                      f"(schema v{_srv.IDENTITY_MIGRATION_VERSION}).")
+            else:
+                print(f"{res['migrated']} memories under {_cfg.DEMO_USER_ID}/{_cfg.DEMO_NAMESPACE} "
+                      f"would become {_cfg.DEFAULT_USER_ID}/{_cfg.DEFAULT_NAMESPACE}. "
+                      "Re-run without --dry-run to apply.")
+            return
+        backup = f"{db}.pre-identity-v{_srv.IDENTITY_MIGRATION_VERSION}.{int(time.time())}.bak"
+        res = _srv.migrate_identity(conn, backup_path=backup)
+        if res.get("already"):
+            print(f"{ygg_ui.mark_ok(p)} identity already migrated — nothing to do.")
+        elif res.get("migrated"):
+            backup_note = p.dim("(backup: " + str(res["backup"]) + ")")
+            print(f"{ygg_ui.mark_ok(p)} rebranded {res['migrated']} memories to "
+                  f"{_cfg.DEFAULT_USER_ID}/{_cfg.DEFAULT_NAMESPACE}  {backup_note}")
+        else:
+            print(f"{ygg_ui.mark_ok(p)} no legacy demo memories; "
+                  f"marked schema v{_srv.IDENTITY_MIGRATION_VERSION}.")
+    finally:
+        conn.close()
 
 
 def main() -> int:
