@@ -3,6 +3,36 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased — 0.11.0] — identity migration (BREAKING)
+
+Retire the demo-heritage identity so real memory no longer lives under a
+throwaway "demo" name (roadmap #16).
+
+### Changed (BREAKING)
+- **Default identity is now `local` / `personal`** (was `demo-user` /
+  `yggdrasil-demo`). On the first engine start after upgrade, existing memory is
+  **auto-migrated once** — a version-guarded (`PRAGMA user_version`) SQL relabel
+  that only touches the exact legacy demo pair, so a custom identity is never
+  moved. A timestamped `*.pre-identity-v1.*.bak` backup is written first, and the
+  resolved identity is pinned explicitly into `config.json` so **no future
+  default change can ever strand memory again**. FTS is untouched (it indexes
+  content, not identity).
+- **⚠ `ygg sync` users: upgrade every synced machine together.** The sync key
+  format changes with the identity; a lagging demo-keyed peer is auto-adopted to
+  the default on import, but mixed versions briefly diverge.
+
+### Added
+- **`ygg migrate [--dry-run]`** — preview or run the identity migration manually
+  (backup-first), for when the daemon isn't the one you want to drive it.
+- Identity now resolves through a single source of truth (`ygg_config.user_id()`
+  / `namespace()`); ~15 hardcoded `demo-user` fallbacks were routed through it, so
+  the default can no longer diverge across the codebase. The demo/eval gates pin
+  the demo identity explicitly via `ygg_config.DEMO_*` constants.
+
+### Cleanup
+- Dedup the copy-pasted `YGG_ENGINE_TOKEN or YGG_ENGINE_TOKEN` env lookup in four
+  gates; drop stale "MVP" wording and `engine.s`→`engine's` typos (roadmap #14/#17).
+
 ## [0.10.0] — 2026-07-15
 
 Honest hardware, multilingual-safe models, no truncated stubs, memory-quality
