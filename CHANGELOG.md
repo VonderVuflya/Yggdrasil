@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [0.11.0] — 2026-07-16 — identity migration + dense-search fixes (BREAKING)
+## [0.11.0] — 2026-07-15 — identity migration + dense-search fixes (BREAKING)
 
 Retire the demo-heritage identity so real memory no longer lives under a
 throwaway "demo" name (roadmap #16), and fix dense search against remote /
