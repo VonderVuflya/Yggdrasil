@@ -7,7 +7,7 @@
   <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
   <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
   <a href="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil"><img src="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil/badges/score.svg" alt="Glama quality score"></a>
-  <a href="../BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.93%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
+  <a href="../BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.94%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
   <a href="../LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -116,7 +116,7 @@ Yggdrasil — это **память + инструменты**, а *интелл
 | Уровень | Что добавляете | Что получаете |
 | --- | --- | --- |
 | **0 · по умолчанию** | ничего — SQLite + FTS5 | поиск по ключевым словам, ноль зависимостей, мгновенно — recall@1 = **0.77** |
-| **1 · семантический** | модель **эмбеддингов** (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | поиск по **смыслу**, в том числе между языками — recall@1 = **0.93**, recall@3 **1.00** |
+| **1 · семантический** | модель **эмбеддингов** (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | поиск по **смыслу**, в том числе между языками — recall@1 = **0.94**, recall@3 **1.00** |
 | **2 · самоподдержание** | небольшая **LLM** (`qwen2.5:1.5b` ~1 GB) | фоновая дедупликация/слияние памяти (только предложения) |
 
 Ollama только *вычисляет* векторы и запускает фоновую модель — каждое воспоминание и каждый вектор остаются в той же локальной SQLite. `ygg install` определяет ваше железо и рекомендует подходящий вариант (`ygg recommend` показывает полный каталог).
@@ -147,14 +147,14 @@ Ollama только *вычисляет* векторы и запускает ф
 
 ## 📊 Цифры
 
-Замерено скриптом [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 размеченных запросов, веса ранжирования настроены только на *dev*-разбиении, поэтому **holdout — это несмещённая цифра** (recall@1, с моделью `paraphrase-multilingual`):
+Замерено скриптом [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 232 памяти, 110 размеченных запросов, веса ранжирования настроены только на *dev*-разбиении, поэтому **holdout — это несмещённая цифра** (recall@1, с моделью `paraphrase-multilingual`):
 
 | Режим поиска | holdout recall@1 | recall@3 | лексический без зависимостей |
 | --- | --- | --- | --- |
-| **Внутри проекта** (реальный путь, пул ~6) | **0.93** | **1.00** | 0.77 |
-| **Всё хранилище** (без фильтра, пул 35) | 0.80 | **1.00** | 0.77 |
+| **Внутри проекта** (реальный путь, пул ~11) | **0.94** | **1.00** | 0.76 |
+| **Всё хранилище** (без фильтра, пул 232) | 0.72 | **0.87** | 0.69 |
 
-**recall@3 = 1.00 в обоих режимах** — с локальной моделью нужное воспоминание *всегда* в топ-3, даже при поиске по всему хранилищу; в 0.93 случаев оно #1 внутри проекта. Лексический режим без зависимостей уже закрывает запросы по ключевым словам и идентификаторам кода (1.00). Корпус маленький (n=35), поэтому [полный разбор в BENCHMARKS.md](../BENCHMARKS.md) показывает 95% доверительные интервалы, размеры пулов и разбивку по классам — и перепроверить можно примерно за минуту: `python3 eval/ygg_eval.py --report`.
+**Внутри проекта — по пути, которым вы пользуетесь — нужное воспоминание стоит на #1 в 0.94 запросов и каждый раз попадает в топ-3 (recall@3 = 1.00).** Поиск по всему хранилищу без фильтра сложнее (recall@1 0.72, recall@3 0.87 по всем 232). Лексический режим без зависимостей уже закрывает запросы по ключевым словам и идентификаторам кода (1.00); локальная модель добавляет смысл и межъязыковой поиск (crosslingual 0.25 → 0.95). [Полный разбор в BENCHMARKS.md](../BENCHMARKS.md) показывает 95% доверительные интервалы, размеры пулов и разбивку по классам — и перепроверить можно примерно за минуту: `python3 eval/ygg_eval.py --report`.
 
 ## 🆚 Yggdrasil против остальных
 

@@ -7,7 +7,7 @@ Une seule mémoire locale pour Claude Code, Codex et tous les agents MCP — par
   <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
   <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
   <a href="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil"><img src="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil/badges/score.svg" alt="Glama quality score"></a>
-  <a href="../BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.93%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
+  <a href="../BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.94%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
   <a href="../LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -116,7 +116,7 @@ Dès le départ, Yggdrasil fonctionne sur **SQLite + FTS5 sans aucune dépendanc
 | Niveau | Ce que vous ajoutez | Ce que vous gagnez |
 | --- | --- | --- |
 | **0 · par défaut** | rien — SQLite + FTS5 | recherche par mots-clés, zéro dépendance, instantanée — recall@1 = **0.77** |
-| **1 · sémantique** | un modèle d'**embedding** (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | recherche par **sens**, entre les langues — recall@1 = **0.93**, recall@3 **1.00** |
+| **1 · sémantique** | un modèle d'**embedding** (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | recherche par **sens**, entre les langues — recall@1 = **0.94**, recall@3 **1.00** |
 | **2 · auto-entretenu** | un petit **LLM** (`qwen2.5:1.5b` ~1 GB) | dédup/fusion de la mémoire en arrière-plan (proposition seule) |
 
 Ollama se contente de *calculer* les vecteurs et d'exécuter le modèle d'arrière-plan — chaque mémoire et chaque vecteur reste dans la même base SQLite locale. `ygg install` détecte votre matériel et recommande un modèle adapté (`ygg recommend` affiche le catalogue complet).
@@ -147,14 +147,14 @@ Le moteur lui-même est interchangeable — n'importe quel service respectant le
 
 ## 📊 Les chiffres
 
-Mesuré par [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 requêtes étiquetées, poids de classement ajustés uniquement sur le split *dev*, donc **le holdout est le chiffre non biaisé** (recall@1, avec le modèle `paraphrase-multilingual`) :
+Mesuré par [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 232 mémoires, 110 requêtes étiquetées, poids de classement ajustés uniquement sur le split *dev*, donc **le holdout est le chiffre non biaisé** (recall@1, avec le modèle `paraphrase-multilingual`) :
 
 | Mode de recherche | holdout recall@1 | recall@3 | lexical zéro dépendance |
 | --- | --- | --- | --- |
-| **Au sein d'un projet** (le vrai chemin, pool ~6) | **0.93** | **1.00** | 0.77 |
-| **Base entière** (sans filtre, pool 35) | 0.80 | **1.00** | 0.77 |
+| **Au sein d'un projet** (le vrai chemin, pool ~11) | **0.94** | **1.00** | 0.76 |
+| **Base entière** (sans filtre, pool 232) | 0.72 | **0.87** | 0.69 |
 
-**recall@3 = 1.00 dans les deux modes** — avec le modèle local, la bonne mémoire est *toujours* dans le top 3, même en cherchant dans toute la base ; elle est en position #1 dans 0.93 des cas au sein d'un projet. Le mode lexical zéro dépendance résout déjà les requêtes par mots-clés et par identifiants de code (1.00). Petit corpus (n=35), donc le [détail complet dans BENCHMARKS.md](../BENCHMARKS.md) présente les IC à 95 %, les tailles de pool et les scores par classe — et vous pouvez tout relancer en une minute : `python3 eval/ygg_eval.py --report`.
+**Au sein d'un projet — le chemin que vous utilisez — la bonne mémoire est en position #1 dans 0.94 des requêtes et toujours dans le top 3 (recall@3 = 1.00).** Chercher dans toute la base sans filtre est plus difficile (recall@1 0.72, recall@3 0.87 sur les 232). Le mode lexical zéro dépendance résout déjà les requêtes par mots-clés et par identifiants de code (1.00) ; le modèle local ajoute le sens et le multilingue (crosslingual 0.25 → 0.95). Le [détail complet dans BENCHMARKS.md](../BENCHMARKS.md) présente les IC à 95 %, les tailles de pool et les scores par classe — et vous pouvez tout relancer en une minute : `python3 eval/ygg_eval.py --report`.
 
 ## 🆚 Yggdrasil face aux autres
 

@@ -7,7 +7,7 @@ Ein lokales Gedächtnis für Claude Code, Codex und jeden MCP-Agent — geteilt 
   <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
   <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
   <a href="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil"><img src="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil/badges/score.svg" alt="Glama quality score"></a>
-  <a href="../BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.93%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
+  <a href="../BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.94%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
   <a href="../LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -116,7 +116,7 @@ Von Haus aus läuft Yggdrasil auf **SQLite + FTS5 mit null Abhängigkeiten** —
 | Tier | Du fügst hinzu | Du gewinnst |
 | --- | --- | --- |
 | **0 · Standard** | nichts — SQLite + FTS5 | Stichwortsuche, null Abhängigkeiten, sofort — recall@1 = **0.77** |
-| **1 · semantisch** | ein **Embedding**-Modell (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | Suche nach **Bedeutung**, über Sprachen hinweg — recall@1 = **0.93**, recall@3 **1.00** |
+| **1 · semantisch** | ein **Embedding**-Modell (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | Suche nach **Bedeutung**, über Sprachen hinweg — recall@1 = **0.94**, recall@3 **1.00** |
 | **2 · selbstpflegend** | ein kleines **LLM** (`qwen2.5:1.5b` ~1 GB) | Dedup/Merge des Gedächtnisses im Hintergrund (nur Vorschläge) |
 
 Ollama *berechnet* nur Vektoren und führt das Hintergrundmodell aus — jede Erinnerung und jeder Vektor bleibt in derselben lokalen SQLite. `ygg install` erkennt deine Hardware und empfiehlt eine passende Wahl (`ygg recommend` zeigt den vollständigen Katalog).
@@ -147,14 +147,14 @@ Die Engine selbst ist austauschbar — jeder Dienst, der den `MemoryBackend`-Ver
 
 ## 📊 Die Zahlen
 
-Gemessen mit [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 35 gelabelte Anfragen, die Ranking-Gewichte werden nur auf dem *dev*-Split abgestimmt, deshalb ist **holdout die unverzerrte Zahl** (recall@1, mit dem `paraphrase-multilingual`-Modell):
+Gemessen mit [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 232 Erinnerungen, 110 gelabelte Anfragen, die Ranking-Gewichte werden nur auf dem *dev*-Split abgestimmt, deshalb ist **holdout die unverzerrte Zahl** (recall@1, mit dem `paraphrase-multilingual`-Modell):
 
 | Suchansicht | holdout recall@1 | recall@3 | Null-Abh. lexikalisch |
 | --- | --- | --- | --- |
-| **Innerhalb eines Projekts** (der reale Pfad, Pool ~6) | **0.93** | **1.00** | 0.77 |
-| **Gesamter Speicher** (kein Filter, Pool 35) | 0.80 | **1.00** | 0.77 |
+| **Innerhalb eines Projekts** (der reale Pfad, Pool ~11) | **0.94** | **1.00** | 0.76 |
+| **Gesamter Speicher** (kein Filter, Pool 232) | 0.72 | **0.87** | 0.69 |
 
-**recall@3 = 1.00 in beiden Ansichten** — mit dem lokalen Modell liegt die richtige Erinnerung *immer* in den Top 3, selbst bei der Suche im gesamten Speicher; innerhalb eines Projekts ist sie in 0.93 der Fälle auf Platz 1. Der lexikalische Modus ohne Abhängigkeiten löst Stichwort- und Code-Identifier-Anfragen bereits vollständig (1.00). Kleiner Korpus (n=35), daher zeigt die [vollständige Aufschlüsselung in BENCHMARKS.md](../BENCHMARKS.md) 95-%-Konfidenzintervalle, Pool-Größen und Werte je Klasse — und du kannst sie in einer Minute neu ausführen: `python3 eval/ygg_eval.py --report`.
+**Innerhalb eines Projekts — dem Pfad, den du nutzt — ist die richtige Erinnerung bei 0.94 der Anfragen auf Platz 1 und jedes Mal in den Top 3 (recall@3 = 1.00).** Die Suche im gesamten Speicher ohne Filter ist schwieriger (recall@1 0.72, recall@3 0.87 über alle 232). Der lexikalische Modus ohne Abhängigkeiten löst Stichwort- und Code-Identifier-Anfragen bereits (1.00); das lokale Modell fügt Bedeutung und Sprachübergreifendes hinzu (crosslingual 0.25 → 0.95). Die [vollständige Aufschlüsselung in BENCHMARKS.md](../BENCHMARKS.md) zeigt 95-%-Konfidenzintervalle, Pool-Größen und Werte je Klasse — und du kannst sie in einer Minute neu ausführen: `python3 eval/ygg_eval.py --report`.
 
 ## 🆚 Yggdrasil im Vergleich
 
