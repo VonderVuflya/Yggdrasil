@@ -172,5 +172,35 @@ class DistillTruncationTest(unittest.TestCase):
         self.assertEqual(self.writes, [])
 
 
+class TruncatedLessonTest(unittest.TestCase):
+    """A per-lesson stub that parses fine but ends mid-thought (the wild case:
+    a list intro '…следующие действия:' whose items never arrived) must be
+    dropped, not persisted — while valid short lessons still save."""
+
+    def setUp(self):
+        self._orig = ygg_seed._ygg.write_memory
+        self.writes = []
+        ygg_seed._ygg.write_memory = lambda **kw: (self.writes.append(kw) or ("added", {"id": "x"}))
+
+    def tearDown(self):
+        ygg_seed._ygg.write_memory = self._orig
+
+    def test_looks_truncated_flags_stubs_keeps_valid(self):
+        for stub in ("Сделайте следующее:", "use the flag,", "open (paren", 'say "hi', "step —"):
+            self.assertTrue(ygg_seed._looks_truncated(stub), stub)
+        for ok in ("x", "ok", "lesson a", "Fixed the update() bug.",
+                   "Use qwen2.5:3b for RU.", 'call it "json" mode', "done…"):
+            self.assertFalse(ygg_seed._looks_truncated(ok), ok)
+
+    def test_distill_drops_stub_keeps_good_lesson(self):
+        ygg_seed._ollama_generate = lambda *a, **k: json.dumps(
+            {"lessons": [{"content": "Чтобы починить, сделайте следующее:"},
+                         {"content": "Валидный завершённый урок."}]})
+        r = ygg_seed.distill_text("log", project="t", source="seed",
+                                  model="m", user_id="u", namespace="n")
+        self.assertEqual((r["added"], r["truncated"]), (1, 1))
+        self.assertEqual([w["content"] for w in self.writes], ["Валидный завершённый урок."])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -313,6 +313,30 @@ def _salvage_lessons(raw: str) -> list:
     return out
 
 
+# A distilled lesson whose text was cut off mid-thought — the canonical case
+# found in the wild is a list intro ("…выполнить следующие действия:") whose
+# items never arrived, persisted as a 132-char stub. We DISCARD these rather
+# than store a stub. Length is deliberately NOT a signal (lessons are meant to
+# be short); the tell is the ENDING and unbalanced delimiters.
+_TRUNCATION_TAILS = (":", ",", ";", "—", "–", "-", "(", "[", "{")
+
+
+def _looks_truncated(content: str) -> bool:
+    """True if a lesson's text looks cut off (dangling connector / open bracket
+    / odd quote count), so the caller can drop the stub instead of persisting it.
+    Conservative: an intentional ellipsis is complete, and a terminal '.'/'!'/'?'
+    or closing bracket/quote always passes."""
+    t = (content or "").strip()
+    if not t or t.endswith("…") or t.endswith("..."):
+        return False
+    if t[-1] in _TRUNCATION_TAILS:
+        return True
+    for op, cl in (("(", ")"), ("[", "]"), ("{", "}")):
+        if t.count(op) > t.count(cl):
+            return True
+    return t.count('"') % 2 == 1  # an unclosed quote => cut mid-token
+
+
 def _lessons_from_raw(raw: str) -> list | None:
     """Parse the model's JSON into a list of lesson items, tolerantly.
 
@@ -619,7 +643,7 @@ def distill_text(text: str, *, project: str, source: str, model: str,
                else f"model call failed ({exc}); will retry on the next `ygg seed`")
         print(f"    distill skipped {project}: {why}", file=sys.stderr)
         return {"added": 0, "dup": 0, "errors": 1, "timed_out": timed_out}
-    added = dup = errors = 0
+    added = dup = errors = truncated = 0
     for item in lessons:
         if isinstance(item, str):
             content, mtype = item.strip(), "lesson"
@@ -629,6 +653,9 @@ def distill_text(text: str, *, project: str, source: str, model: str,
         else:
             continue
         if not content:
+            continue
+        if _looks_truncated(content):  # a mid-sentence stub — drop it, don't persist
+            truncated += 1
             continue
         try:
             status, _ = _ygg.write_memory(
@@ -640,7 +667,8 @@ def distill_text(text: str, *, project: str, source: str, model: str,
             dup += status == "duplicate"
         except _ygg.YggError:
             errors += 1
-    return {"added": added, "dup": dup, "errors": errors, "timed_out": False}
+    return {"added": added, "dup": dup, "errors": errors,
+            "truncated": truncated, "timed_out": False}
 
 
 # --------------------------------------------------------------------------- #
@@ -736,7 +764,7 @@ class _Progress:
     def __init__(self, total: int, *, db_path: str | None = None):
         self.total = max(0, total)
         self.done = 0
-        self.added = self.dup = self.errors = self.timed_out = 0
+        self.added = self.dup = self.errors = self.timed_out = self.truncated = 0
         self.start = time.time()
         self.label = "starting…"
         self.db_path = db_path
@@ -796,6 +824,7 @@ class _Progress:
             self.added += res.get("added", 0)
             self.dup += res.get("dup", 0)
             self.errors += res.get("errors", 0)
+            self.truncated += res.get("truncated", 0)
             self.timed_out += 1 if res.get("timed_out") else 0
             self._draw()
 
@@ -824,8 +853,9 @@ class _Progress:
         print(f"\n🌳 {self.c.bold('Yggdrasil seed')} — {head}")
         print(f"   distilled : {self.c.bold(str(self.done))}/{self.total} files "
               f"{self.c.dim(f'({rate:.1f}/min)')}")
+        trunc = f" · {self.truncated} truncated dropped" if self.truncated else ""
         print(f"   lessons   : {self.c.green('+' + str(self.added))} new "
-              f"{self.c.dim(f'· {self.dup} merged · {self.errors} to retry')}")
+              f"{self.c.dim(f'· {self.dup} merged · {self.errors} to retry{trunc}')}")
         # One line instead of dozens of '+0 new … unchanged' project rows.
         up_proj, up_files = up_to_date
         if up_proj:
@@ -846,7 +876,7 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
                    force: bool = False, progress: "_Progress | None" = None) -> dict[str, int]:
     project = project_override or src["project"]
     files = [f for f in _source_files(src) if f.exists()]
-    agg = {"added": 0, "dup": 0, "errors": 0, "skipped": 0, "timed_out": 0}
+    agg = {"added": 0, "dup": 0, "errors": 0, "skipped": 0, "truncated": 0, "timed_out": 0}
     if state is not None and not force:
         todo = []
         for f in files:
@@ -870,6 +900,7 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
             res = {"added": 0, "dup": 0, "errors": 1, "timed_out": _is_timeout(exc)}
         for k in ("added", "dup", "errors"):
             agg[k] += res[k]
+        agg["truncated"] += res.get("truncated", 0)
         agg["timed_out"] += 1 if res.get("timed_out") else 0
         if progress is not None:
             progress.file_done(res)
@@ -881,8 +912,9 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
                 state[str(f)] = {"mtime": st.st_mtime, "size": st.st_size, "distilled_at": time.time()}
             except OSError:
                 pass
+    trunc_note = f", {agg['truncated']} truncated-dropped" if agg["truncated"] else ""
     stable = (f"  {project}: +{agg['added']} new, {agg['dup']} dup-skipped, "
-              f"{agg['skipped']} unchanged, {agg['errors']} error(s)")
+              f"{agg['skipped']} unchanged, {agg['errors']} error(s){trunc_note}")
     if progress is not None and not progress.tty:
         progress.log(stable)          # non-TTY (agents/pipes): keep the stable line
     elif progress is not None:
