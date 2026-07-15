@@ -869,8 +869,58 @@ def unpin(args: argparse.Namespace) -> None:
     print(f"unpinned {args.id}")
 
 
+def quality(args: argparse.Namespace) -> None:
+    """Store health report: type/project mix, exact + near-duplicate pairs (cosine
+    gate), cross-project leakage, and likely-truncated records. Embeddings stay in
+    the engine — only the derived metrics come back."""
+    qs: dict[str, Any] = {"user_id": args.user_id, "threshold": str(args.threshold)}
+    if getattr(args, "namespace", None):
+        qs["namespace"] = args.namespace
+    data = request_json("GET", "/quality", query=qs).get("data", {})
+    if getattr(args, "json", False):
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    p = ygg_ui.palette()
+    total, archived, embedded = data.get("total", 0), data.get("archived", 0), data.get("embedded", 0)
+    sub = p.dim(f"· {archived} archived · {embedded} embedded")
+    print(f"🌳 {p.bold('Yggdrasil quality')} — {p.bold(str(total))} live {sub}\n")
+
+    def _dist(title: str, counts: dict) -> None:
+        if not counts:
+            return
+        print(p.dim(title))
+        for k, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>4}  {k}")
+        print()
+    _dist("by type", data.get("by_type", {}))
+    _dist("by project", data.get("by_project", {}))
+
+    thr = data.get("near_dup_threshold", args.threshold)
+    exact, near = data.get("exact_duplicate_pairs", 0), data.get("near_duplicate_pairs", 0)
+    leak, trunc = data.get("cross_project_leakage_pairs", 0), data.get("truncated_count", 0)
+    mark = lambda n: p.green("✓") if not n else p.yellow("•")  # noqa: E731
+    print(f"{mark(exact)} exact duplicates       {exact}")
+    print(f"{mark(near)} near-duplicates (≥{thr})  {near}")
+    print(f"{mark(leak)} cross-project leakage  {leak}")
+    print(f"{mark(trunc)} truncated records      {trunc}")
+
+    nd = data.get("near_duplicates", [])
+    if nd:
+        print(f"\n{p.dim('top near-duplicate pairs')}")
+        for pr in nd[:10]:
+            proj = "/".join(pr.get("projects", []))
+            tag = p.dim(proj) if pr.get("same_project") else p.yellow(proj + " (cross-project)")
+            print(f"  {pr['cosine']:.3f}  {pr['a']}  ~  {pr['b']}  {tag}")
+    if trunc:
+        ids = ", ".join(data.get("truncated_ids", [])[:8])
+        print(f"\n{p.dim('truncated (review / re-distill):')} {ids}")
+    if embedded == 0 and total:
+        print(f"\n{p.dim('(no embeddings — near-dup/leakage need a dense model; run ygg reindex)')}")
+    print(f"\n{p.dim('fix dupes:')}  ygg review --apply   ·   {p.dim('remove one:')}  ygg delete --id <id>")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Yggdrasil MVP CLI over the engine.s REST API")
+    parser = argparse.ArgumentParser(description="Yggdrasil CLI over the engine's REST API")
     parser.set_defaults(func=None)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--namespace", default=namespace_default())
@@ -987,6 +1037,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--type", help="only export one memory type")
     p.add_argument("--limit", type=int, default=1000)
     p.set_defaults(func=export_native)
+
+    p = sub.add_parser("quality", parents=[common],
+                       help="store health: duplicates, cross-project leakage, truncated records")
+    p.add_argument("--threshold", type=float, default=0.95,
+                   help="cosine >= this counts as a near-duplicate (default 0.95)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=quality)
 
     return parser
 

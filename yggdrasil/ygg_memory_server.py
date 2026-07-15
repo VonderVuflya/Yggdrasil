@@ -513,6 +513,88 @@ class MemoryStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    def quality_report(self, *, user_id: str, namespace: str | None = None,
+                       near_dup_threshold: float = 0.95, max_items: int = 50) -> dict[str, Any]:
+        """Hard health metrics for the store: type/project distribution, exact +
+        near-duplicate pairs (cosine >= threshold), cross-project leakage, and
+        likely-truncated records. Vectors never leave the engine — only the
+        derived report does. O(n^2) over embedded live memories; bounded and
+        on-demand, so fine for a personal store (thousands, not millions)."""
+        sql = ("SELECT id, project, type, content, content_hash, embedding_blob "
+               "FROM memories WHERE user_id=? AND archived=0")
+        params: list[Any] = [user_id]
+        if namespace:
+            sql += " AND namespace=?"
+            params.append(namespace)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+            arch_sql = "SELECT COUNT(*) FROM memories WHERE user_id=? AND archived=1"
+            arch_params: list[Any] = [user_id]
+            if namespace:
+                arch_sql += " AND namespace=?"
+                arch_params.append(namespace)
+            archived = self._conn.execute(arch_sql, arch_params).fetchone()[0]
+
+        # Reuse the write-path truncation heuristic so "truncated" means the same
+        # thing here as at ingest. Handle BOTH package and flat layouts (the daemon
+        # runs as a bare script), degrading gracefully only if seed is truly absent.
+        try:
+            try:
+                from . import ygg_seed as _seed
+            except ImportError:  # flat layout (deployed scripts dir / bare script)
+                import ygg_seed as _seed  # type: ignore
+            looks_trunc = _seed._looks_truncated
+        except Exception:  # noqa: BLE001
+            looks_trunc = lambda _s: False  # noqa: E731
+
+        by_type: dict[str, int] = {}
+        by_project: dict[str, int] = {}
+        seen_hash: dict[str, str] = {}
+        exact_dupes: list[dict[str, str]] = []
+        truncated: list[str] = []
+        embedded: list[tuple[str, str, Any]] = []  # (id, project, unit vector)
+        for r in rows:
+            proj, typ = r["project"] or "—", r["type"] or "—"
+            by_type[typ] = by_type.get(typ, 0) + 1
+            by_project[proj] = by_project.get(proj, 0) + 1
+            h = r["content_hash"]
+            if h:
+                if h in seen_hash:
+                    exact_dupes.append({"a": seen_hash[h], "b": r["id"]})
+                else:
+                    seen_hash[h] = r["id"]
+            if looks_trunc(r["content"] or ""):
+                truncated.append(r["id"])
+            if r["embedding_blob"]:
+                u = _unit(_blob_to_array(r["embedding_blob"]))
+                if u is not None:
+                    embedded.append((r["id"], proj, u))
+
+        near_dupes: list[dict[str, Any]] = []
+        leakage: list[dict[str, Any]] = []
+        for i in range(len(embedded)):
+            id_i, pi, ui = embedded[i]
+            for j in range(i + 1, len(embedded)):
+                id_j, pj, uj = embedded[j]
+                dot = sum(a * b for a, b in zip(ui, uj))  # unit vectors -> dot == cosine
+                if dot >= near_dup_threshold:
+                    pair = {"a": id_i, "b": id_j, "cosine": round(float(dot), 4),
+                            "projects": sorted({pi, pj}), "same_project": pi == pj}
+                    near_dupes.append(pair)
+                    if pi != pj:
+                        leakage.append(pair)
+        near_dupes.sort(key=lambda p: -p["cosine"])
+        leakage.sort(key=lambda p: -p["cosine"])
+        return {
+            "total": len(rows), "archived": archived, "embedded": len(embedded),
+            "by_type": by_type, "by_project": by_project,
+            "exact_duplicate_pairs": len(exact_dupes), "exact_duplicates": exact_dupes[:max_items],
+            "near_duplicate_pairs": len(near_dupes), "near_duplicates": near_dupes[:max_items],
+            "cross_project_leakage_pairs": len(leakage), "cross_project_leakage": leakage[:max_items],
+            "truncated_count": len(truncated), "truncated_ids": truncated[:max_items],
+            "near_dup_threshold": near_dup_threshold,
+        }
+
     def get_by_id(self, memory_id: str) -> dict[str, Any] | None:
         """Direct indexed lookup by memory id (any store size, archived included)."""
         with self._lock:
@@ -1129,6 +1211,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"success": False, "error": f"memory not found: {memory_id}"})
                 return
             self._send(200, {"success": True, "data": rec})
+            return
+        if parsed.path == "/quality":
+            qs = parse_qs(parsed.query)
+            data = self.store.quality_report(
+                user_id=(qs.get("user_id") or ["global_user"])[0],
+                namespace=(qs.get("namespace") or [None])[0],
+                near_dup_threshold=float((qs.get("threshold") or ["0.95"])[0]),
+            )
+            self._send(200, {"success": True, "data": data})
             return
         if parsed.path == "/find_hash":
             qs = parse_qs(parsed.query)

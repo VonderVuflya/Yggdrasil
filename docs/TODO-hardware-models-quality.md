@@ -1,7 +1,9 @@
 # TODO — Hardware-awareness, model catalog & memory quality
 
 > Captured 2026-06-30 from a working session on a CPU-only Intel Mac.
-> These are features/fixes to implement in Yggdrasil — not done yet.
+>
+> **Status (2026-07-14):** §1–§6 all ✅ done. This TODO is fully closed; the only
+> optional leftover is the TensorFlow-Projector `ygg export --tsv` recipe under §6.
 
 ## Reference: the machine that surfaced all this
 - Mac mini 2018 (`Macmini8,1`), Intel **i7-8700B** (6c/12t, AVX2), **32 GB RAM**.
@@ -12,7 +14,10 @@
 
 ---
 
-## 1. Hardware-aware warnings (`ygg install` / `recommend` / `doctor`)
+## 1. Hardware-aware warnings (`ygg install` / `recommend` / `doctor`) — ✅ DONE
+> `hw()` classifies an acceleration tier (`cpu`/`metal`/`cuda`/`rocm/vulkan`) and
+> emits `accel_warn` for the Intel-Mac + AMD case; `print_catalog` surfaces it.
+> (`doctor` effective-context reporting lives under §2.)
 Tell the user **plainly** when their GPU will NOT be used, and why — instead of silently running on CPU.
 
 - Detect **Intel Mac + (discrete/eGPU) AMD GPU** ⇒ warn:
@@ -39,7 +44,10 @@ Tell the user **plainly** when their GPU will NOT be used, and why — instead o
   - Or set it per-model via a generated Modelfile (`FROM <model>` + `PARAMETER num_ctx 16384`) during `ygg install`.
   - `ygg doctor`: report the **effective** loaded context (probe `ollama ps` after a load, or read `OLLAMA_CONTEXT_LENGTH`) and warn if `< ~16k` — don't assume 4096.
 
-## 3. Model catalog updates (`ygg recommend`)
+## 3. Model catalog updates (`ygg recommend`) — ✅ DONE
+> Catalog carries language/thinking tags; qwen2.5:3b / qwen3:4b-instruct-2507 /
+> gemma3:4b added; llama3.2:3b flagged `⚠ NO Russian/Chinese`; `recommend` no
+> longer picks Llama; dominant-language steer implemented (`_memory_language_hint`).
 - Catalog is **dated** and **language-blind**. It recommends `llama3.2:3b` as the quality upgrade, but **Llama 3.2 does NOT officially support Russian** (EN + 7 European langs only) → poor for non-English memory.
 - Prefer the **Qwen family** for multilingual (RU/ZH) memory:
   - **`qwen2.5:3b`** — best CPU balance, strong Russian, ~1.9 GB. *Recommended upgrade from 1.5b.* (now in use)
@@ -59,14 +67,27 @@ There is **no CLI way to delete memories or reset the store** today — this ses
   3. **VACUUM** afterwards.
 - **Why this matters:** re-distilling with a *different* `bg_model` creates **near-duplicates** (new wording → new `content_hash` → exact-dedup misses it). A clean model switch **requires deleting old `seed:%` memories first**. (Done manually this session: deleted 1070 `seed:%`, kept 57 manual, 20 MB → 1.4 MB.)
 
-## 5. Write-path quality: truncated lessons
+## 5. Write-path quality: truncated lessons — ✅ DONE (write-path guard)
+> `_looks_truncated` drops a mid-sentence stub at write time (trailing `:` /
+> dangling connector / unbalanced bracket or quote), counted as `truncated` and
+> surfaced in the seed summary — length is not used as a signal. (File-level
+> `finish=="length"` truncation was already raised.) A one-off backfill audit of
+> pre-existing stubs is still worth doing but needs no code here.
 - Found a memory **stored truncated at 132 chars** ("…выполнить следующие действия:" — the list never written). Likely a **write-path** bug (timeout / output cutoff), **not** the model.
 - TODO:
   - Audit: count likely-truncated memories (end with `:` / `—` / mid-sentence; short *for their type*). NB: lessons are intentionally `<280` chars, so short ≠ truncated — needs a smarter heuristic than length alone.
   - Harden distill: detect incomplete model output (no terminal punctuation / trailing colon) → retry or discard, don't persist a stub.
 - Swapping the model won't fix this — truncation can recur after re-seeding. Fix the write-path too.
 
-## 6. Embedding-space quality tooling (TensorFlow Embedding Projector)
+## 6. Embedding-space quality tooling — ✅ DONE (`ygg quality`)
+> Shipped `ygg quality` (engine `/quality` + `MemoryStore.quality_report`): type/
+> project distribution, exact-duplicate pairs (content_hash), near-duplicate pairs
+> (cosine ≥ threshold, default 0.95), cross-project leakage, and likely-truncated
+> records (reuses the write-path `_looks_truncated`). Vectors never leave the
+> engine — only derived metrics. Tests in `tests/test_quality.py`. The optional
+> TensorFlow-Projector `ygg export --tsv` remains a nice-to-have (docs recipe).
+
+## 6-orig. Embedding-space quality tooling (TensorFlow Embedding Projector)
 - Ship `ygg export --tsv` (or a docs recipe) to emit `vectors.tsv` + `metadata.tsv` for **projector.tensorflow.org** (data stays client-side in the browser).
 - 5 visual diagnostics: **clusters** (UMAP/t-SNE by project), **duplicates** (nearest neighbors), **outliers** (junk/truncated), **cross-project leakage**, **semantic-search sanity**.
 - Or a `ygg quality` report with hard metrics from the DB: near-duplicate pairs (cosine > 0.95), truncated/short records, per-project cohesion vs leakage, type distribution.
