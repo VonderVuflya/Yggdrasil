@@ -37,6 +37,11 @@ class OllamaEmbedder:
         payload_text = (text or "").strip()[:4000]
         if not payload_text:
             return None
+        # Primary: the legacy single endpoint /api/embeddings. On context overflow
+        # (500) shorten and retry; on ANY other failure fall through to the newer
+        # /api/embed, which some Ollama builds and hosted proxies (e.g. RunPod)
+        # serve INSTEAD of the legacy one. Without this fallback, dense search
+        # silently degrades to lexical against such a server.
         for _ in range(5):
             body = json.dumps({"model": self.model, "prompt": payload_text}).encode("utf-8")
             req = urllib.request.Request(
@@ -46,15 +51,18 @@ class OllamaEmbedder:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     vec = json.loads(resp.read()).get("embedding")
-                return vec if isinstance(vec, list) and vec else None
+                if isinstance(vec, list) and vec:
+                    return vec
+                break  # 200 but no usable vector → try /api/embed
             except urllib.error.HTTPError as exc:
                 if exc.code >= 500 and len(payload_text) > 200:
                     payload_text = payload_text[: len(payload_text) // 2]  # context overflow → shorten
                     continue
-                return None
+                break  # 404 (endpoint absent) / other 4xx → try /api/embed
             except (urllib.error.URLError, TimeoutError, ValueError):
-                return None
-        return None
+                break
+        batch = self.embed_batch([payload_text])  # newer /api/embed, single item
+        return batch[0] if batch else None
 
     def embed_batch(self, texts: Sequence[str]) -> list[list[float] | None] | None:
         """Embed many texts in ONE request via Ollama's /api/embed (newer API).
