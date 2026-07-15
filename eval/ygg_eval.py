@@ -337,6 +337,19 @@ def honest_report() -> None:
     os.close(fd)
     store = MemoryStore(db_path, embedder=get_embedder())
     label_to_id = seed(store, verbose=True)
+    # Guard: if a model was requested but nothing actually got embedded (endpoint
+    # unreachable / model not pulled), these numbers are LEXICAL, not dense — say
+    # so loudly instead of printing a lexical result under a dense label.
+    emb_model = os.environ.get("YGG_EMBED_MODEL")
+    if emb_model:
+        missing = store.missing_embeddings()
+        if missing:
+            scope = "ALL" if missing >= len(CORPUS) else str(missing)
+            print(f"\n⚠ WARNING: YGG_EMBED_MODEL={emb_model} but {scope} memories have NO embedding — "
+                  f"the endpoint returned nothing, so these results are effectively LEXICAL.\n"
+                  f"  Fix: on the box run `ollama pull {emb_model}`, and check YGG_EMBED_URL is reachable\n"
+                  f"  (test: curl $YGG_EMBED_URL/api/embed -d '{{\"model\":\"{emb_model}\",\"input\":\"hi\"}}').\n",
+                  flush=True)
     print(flush=True)
     try:
         for pf, scope_label in ((True, "project-scoped (real `ygg search --project P` path)"),
