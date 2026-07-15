@@ -35,7 +35,7 @@ curl -s http://127.0.0.1:42071/mcp -H "Authorization: Bearer $(ygg token)" \
 |---|---|---|
 | **A. Local + tunnel** | keep the engine local, expose `:42071` via a tunnel | data 100% local; **only works while your machine is awake** |
 | **B. Always-on node** | run the engine + facade on a cheap VPS / Raspberry Pi | reachable even when your laptop is off; data lives on your (self-hosted) node |
-| **C. Hosted sync** | a managed multi-tenant endpoint | zero-setup for users; the ELv2-monetizable layer; biggest build |
+| **C. Hosted sync** | a managed multi-tenant endpoint | zero-setup for users; biggest build |
 
 ### Tunnel (topology A, fastest)
 ```bash
