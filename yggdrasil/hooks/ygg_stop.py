@@ -37,12 +37,13 @@ def _worker(transcript: str, project: str) -> int:
     sys.path.insert(0, str(SCRIPTS))
     try:
         import ygg_seed  # type: ignore
+        import ygg_config  # type: ignore  (same scripts dir; identity source of truth)
         text = ygg_seed._extract_text(Path(transcript))
         res = ygg_seed.distill_text(
             text, project=project, source="stop-hook",
             model=ygg_seed._bg_model(),
-            user_id=os.environ.get("YGG_USER_ID", "demo-user"),
-            namespace=os.environ.get("YGG_NAMESPACE", "yggdrasil-demo"),
+            user_id=ygg_config.user_id(),
+            namespace=ygg_config.namespace(),
         )
         # leave a small breadcrumb for `ygg logs`-style debugging
         print(f"[ygg stop-hook] {project}: +{res['added']} lessons "

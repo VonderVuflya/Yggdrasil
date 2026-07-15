@@ -13,21 +13,26 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:  # package + flat-layout (deployed scripts dir) imports
+    from . import ygg_config as _cfg
+except ImportError:  # pragma: no cover
+    import ygg_config as _cfg
+
 
 ROOT = Path(__file__).resolve().parents[1]
 YGG = Path(__file__).resolve().parent / "ygg.py"
 YGG_MCP = Path(__file__).resolve().parent / "ygg_mcp_server.py"
 REPORTS = ROOT / "reports"
 DEFAULT_URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
-DEFAULT_TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_MEMORY_TOKEN") or "yggdrasil-demo-token"
+DEFAULT_TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_MEMORY_TOKEN") or _cfg.DEMO_TOKEN
 
 
 def run(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("YGG_ENGINE_URL", DEFAULT_URL)
     env.setdefault("YGG_ENGINE_TOKEN", DEFAULT_TOKEN)
-    env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
-    env.setdefault("YGG_USER_ID", "demo-user")
+    env.setdefault("YGG_NAMESPACE", _cfg.DEMO_NAMESPACE)
+    env.setdefault("YGG_USER_ID", _cfg.DEMO_USER_ID)
     return subprocess.run(args, cwd=ROOT, env=env, text=True, capture_output=True, check=check)
 
 
@@ -50,11 +55,11 @@ def post(path: str, body: dict[str, Any]) -> dict[str, Any]:
 def search(project: str, query: str) -> list[dict[str, Any]]:
     payload = {
         "query": query,
-        "user_id": "demo-user",
+        "user_id": _cfg.DEMO_USER_ID,
         "limit": 5,
         "rerank": False,
         "filters": {"project": project, "scope": "project"},
-        "namespaces": ["yggdrasil-demo"],
+        "namespaces": [_cfg.DEMO_NAMESPACE],
     }
     return post("/search", payload).get("data", [])
 
@@ -63,8 +68,8 @@ def mcp_smoke() -> dict[str, Any]:
     env = os.environ.copy()
     env.setdefault("YGG_ENGINE_URL", DEFAULT_URL)
     env.setdefault("YGG_ENGINE_TOKEN", DEFAULT_TOKEN)
-    env.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
-    env.setdefault("YGG_USER_ID", "demo-user")
+    env.setdefault("YGG_NAMESPACE", _cfg.DEMO_NAMESPACE)
+    env.setdefault("YGG_USER_ID", _cfg.DEMO_USER_ID)
     messages = [
         {
             "jsonrpc": "2.0",

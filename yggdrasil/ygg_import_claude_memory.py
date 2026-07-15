@@ -24,6 +24,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:  # package + flat-layout (deployed scripts dir) imports
+    from . import ygg_config as _cfg
+except ImportError:  # pragma: no cover
+    import ygg_config as _cfg
+
 
 ROOT = Path(__file__).resolve().parents[1]
 YGG = Path(__file__).resolve().parent / "ygg.py"
@@ -75,8 +80,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Import a Claude memory dir into Yggdrasil.")
     parser.add_argument("--source-dir", required=True)
     parser.add_argument("--project", required=True)
-    parser.add_argument("--namespace", default=os.environ.get("YGG_NAMESPACE", "yggdrasil-demo"))
-    parser.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "demo-user"))
+    parser.add_argument("--namespace", default=_cfg.namespace())
+    parser.add_argument("--user-id", default=_cfg.user_id())
     parser.add_argument("--materialize", action="store_true", help="Also write each memory to the Obsidian vault.")
     parser.add_argument("--output-dir", default="vault/04-learnings")
     parser.add_argument("--confidence", type=float, default=0.7, help="Confidence recorded on imported memories.")

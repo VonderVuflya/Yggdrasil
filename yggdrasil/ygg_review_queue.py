@@ -15,8 +15,10 @@ from typing import Any
 
 try:
     from .ygg_core import RestMemoryBackend, metadata_of, record_is_archived
+    from . import ygg_config as _cfg
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
     from ygg_core import RestMemoryBackend, metadata_of, record_is_archived
+    import ygg_config as _cfg
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,7 +179,7 @@ def markdown_queue(report: dict[str, Any]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "demo-user"))
+    parser.add_argument("--user-id", default=_cfg.user_id())
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--output-dir", default="vault/99-review")
     parser.add_argument("--json-only", action="store_true")

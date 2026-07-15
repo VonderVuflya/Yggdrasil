@@ -292,12 +292,11 @@ def tool_schema() -> list[dict[str, Any]]:
 
 
 def run_ygg(args: list[str]) -> str:
-    # No token default here: ygg_core resolves env -> ~/.yggdrasil/token itself.
-    # Forcing the demo constant used to short-circuit that file fallback and
-    # 401 every manually-launched facade despite a valid installed token.
+    # No token/identity defaults here: ygg_core resolves env -> config.json ->
+    # default itself. Forcing the demo constants used to (a) short-circuit the
+    # ~/.yggdrasil/token fallback → 401, and (b) pin the demo identity into the
+    # env so it would win over the config/default even after the migration.
     os.environ.setdefault("YGG_ENGINE_URL", "http://127.0.0.1:42069")
-    os.environ.setdefault("YGG_NAMESPACE", "yggdrasil-demo")
-    os.environ.setdefault("YGG_USER_ID", "demo-user")
     try:  # package + flat-layout imports
         from . import ygg as _ygg
     except ImportError:  # pragma: no cover

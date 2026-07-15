@@ -10,9 +10,14 @@ import urllib.parse
 import urllib.request
 from typing import Any, Protocol, runtime_checkable
 
+try:  # package + flat-layout (deployed scripts dir) imports
+    from . import ygg_config as _cfg
+except ImportError:  # pragma: no cover
+    import ygg_config as _cfg
+
 
 DEFAULT_ENGINE_URL = "http://127.0.0.1:42069"
-DEFAULT_DEMO_TOKEN = "yggdrasil-demo-token"
+DEFAULT_DEMO_TOKEN = _cfg.DEMO_TOKEN
 
 
 def _read_token_file() -> str | None:
@@ -45,8 +50,8 @@ class YggConfig:
 
     url: str = DEFAULT_ENGINE_URL
     token: str = DEFAULT_DEMO_TOKEN
-    namespace: str = "yggdrasil-demo"
-    user_id: str = "demo-user"
+    namespace: str = _cfg.DEFAULT_NAMESPACE
+    user_id: str = _cfg.DEFAULT_USER_ID
 
     @classmethod
     def from_env(cls) -> "YggConfig":
@@ -56,11 +61,13 @@ class YggConfig:
             or _read_token_file()
             or DEFAULT_DEMO_TOKEN
         )
+        # Identity resolves through the single config source of truth
+        # (env > config.json > default), never a bare literal.
         return cls(
             url=(os.environ.get("YGG_ENGINE_URL") or DEFAULT_ENGINE_URL).rstrip("/"),
             token=token,
-            namespace=os.environ.get("YGG_NAMESPACE") or "yggdrasil-demo",
-            user_id=os.environ.get("YGG_USER_ID") or "demo-user",
+            namespace=_cfg.namespace(),
+            user_id=_cfg.user_id(),
         )
 
 

@@ -1220,8 +1220,8 @@ def main(cmd: str, rest: list[str]) -> int:
     p = argparse.ArgumentParser(prog=f"ygg {cmd}")
     # Default to the SAME identity the MCP agent uses, so seeded memory is
     # immediately recallable by the agent (the MCP facade runs as demo-user).
-    p.add_argument("--namespace", default=os.environ.get("YGG_NAMESPACE", "yggdrasil-demo"))
-    p.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "demo-user"))
+    p.add_argument("--namespace", default=_cfg.namespace())
+    p.add_argument("--user-id", default=_cfg.user_id())
     p.add_argument("--model", default="", help="Ollama model for distillation (default: config bg_model)")
     if cmd in ("seed", "distill"):
         p.add_argument("--ollama-url", default="", dest="ollama_url",

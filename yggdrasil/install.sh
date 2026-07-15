@@ -175,8 +175,11 @@ PY
     CLABEL="com.yggdrasil.consolidate"
     CPLIST="$HOME/Library/LaunchAgents/${CLABEL}.plist"
     INTERVAL="${YGG_CONSOLIDATE_INTERVAL:-86400}"
-    CUSER="${YGG_CONS_USER:-demo-user}"
-    CNS="${YGG_CONS_NS:-yggdrasil-demo}"
+    # Identity fallbacks mirror ygg_config's defaults (local/personal); the
+    # writepath resolves the same values, so consolidation writes to the same
+    # store the rest of Yggdrasil uses — not the retired demo identity.
+    CUSER="${YGG_CONS_USER:-local}"
+    CNS="${YGG_CONS_NS:-personal}"
     # SAFE DEFAULT: propose only (detect + log candidates, archive nothing). A
     # small local model confidently mislabels distinct-but-similar lessons, so
     # auto-archiving is opt-in (YGG_CONSOLIDATE_APPLY=1) and best with a strong model.

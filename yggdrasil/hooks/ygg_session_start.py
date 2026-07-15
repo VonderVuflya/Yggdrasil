@@ -21,8 +21,26 @@ from pathlib import Path
 
 
 URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069").rstrip("/")
-NAMESPACE = os.environ.get("YGG_NAMESPACE", "yggdrasil-demo")
-USER_ID = os.environ.get("YGG_USER_ID", "demo-user")
+
+
+def _identity() -> tuple[str, str]:
+    """(namespace, user_id): env > ~/.yggdrasil/config.json > default. Read inline
+    (no package import) so the hook stays standalone; the 'personal'/'local'
+    fallbacks mirror ygg_config's defaults and are only hit before the first write
+    pins config.json (after which config is authoritative)."""
+    ns, uid = os.environ.get("YGG_NAMESPACE"), os.environ.get("YGG_USER_ID")
+    if not ns or not uid:
+        try:
+            home = os.environ.get("YGG_HOME") or os.path.join(os.path.expanduser("~"), ".yggdrasil")
+            cfg = json.loads(Path(home, "config.json").read_text())
+        except (OSError, ValueError):
+            cfg = {}
+        ns = ns or cfg.get("namespace") or "personal"
+        uid = uid or cfg.get("user_id") or "local"
+    return ns, uid
+
+
+NAMESPACE, USER_ID = _identity()
 LIMIT = int(os.environ.get("YGG_BOOTSTRAP_LIMIT", "5"))
 
 

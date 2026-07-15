@@ -91,8 +91,8 @@ def audit(entry: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Background semantic write-path consolidation.")
-    parser.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "demo-user"))
-    parser.add_argument("--namespace", default=os.environ.get("YGG_NAMESPACE", "yggdrasil-demo"))
+    parser.add_argument("--user-id", default=_cfg.user_id())
+    parser.add_argument("--namespace", default=_cfg.namespace())
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--apply", action="store_true", help="Apply archives. Default: dry-run.")
     parser.add_argument("--ollama-url", default="", dest="ollama_url",

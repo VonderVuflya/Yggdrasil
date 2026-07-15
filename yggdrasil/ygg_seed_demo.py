@@ -20,8 +20,10 @@ import os
 
 try:
     from .ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
+    from . import ygg_config as _cfg
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
     from ygg_core import RestMemoryBackend, YggConfig, metadata_of, record_is_archived
+    import ygg_config as _cfg
 
 
 # test-a: a debugging lesson that must be findable by the gate's bootstrap query
@@ -96,13 +98,16 @@ def already_present(records: list[dict], project: str, mem_type: str, digest: st
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed Yggdrasil demo fixtures (test-a / test-b).")
-    parser.add_argument("--namespace", default=os.environ.get("YGG_NAMESPACE", "yggdrasil-demo"))
-    parser.add_argument("--user-id", default=os.environ.get("YGG_USER_ID", "demo-user"))
+    # This is the DEMO fixture seeder: it pins the demo identity EXPLICITLY (never
+    # inherits the user-facing default) so it stays greppable and immune to the
+    # identity migration. It only ever runs against an isolated gate DB.
+    parser.add_argument("--namespace", default=_cfg.DEMO_NAMESPACE)
+    parser.add_argument("--user-id", default=_cfg.DEMO_USER_ID)
     args = parser.parse_args()
 
     backend = RestMemoryBackend(YggConfig(
         url=os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069").rstrip("/"),
-        token=os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token",
+        token=os.environ.get("YGG_ENGINE_TOKEN") or _cfg.DEMO_TOKEN,
         namespace=args.namespace,
         user_id=args.user_id,
     ))
