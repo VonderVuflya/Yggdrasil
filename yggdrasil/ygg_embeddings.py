@@ -20,6 +20,12 @@ import urllib.error
 import urllib.request
 from typing import Sequence
 
+# urllib's default User-Agent is "Python-urllib/3.x", which the bot filters in
+# front of proxied endpoints (Cloudflare on *.proxy.runpod.net, for one) reject
+# with 403 — silently killing dense search against a remote box. Identify as a
+# real product string instead; the same guard already lives in ygg_seed.
+_HTTP_HEADERS = {"Content-Type": "application/json", "User-Agent": "yggdrasil-embed"}
+
 
 class OllamaEmbedder:
     """Minimal embedding client for a local Ollama server (stdlib only)."""
@@ -46,7 +52,7 @@ class OllamaEmbedder:
             body = json.dumps({"model": self.model, "prompt": payload_text}).encode("utf-8")
             req = urllib.request.Request(
                 self.url + "/api/embeddings", data=body,
-                headers={"Content-Type": "application/json"}, method="POST",
+                headers=dict(_HTTP_HEADERS), method="POST",
             )
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -77,7 +83,7 @@ class OllamaEmbedder:
         body = json.dumps({"model": self.model, "input": items}).encode("utf-8")
         req = urllib.request.Request(
             self.url + "/api/embed", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers=dict(_HTTP_HEADERS), method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
