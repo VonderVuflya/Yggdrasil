@@ -22,6 +22,21 @@ from pathlib import Path
 YGG_HOME = Path(os.environ.get("YGG_HOME", str(Path.home() / ".yggdrasil")))
 CONFIG = YGG_HOME / "config.json"
 
+# Default identity that stored memories are written under. FIXED literals on
+# purpose: `ygg sync` keys memory by (user_id, namespace) across a user's
+# machines, and config.json is per-machine — so a generated-once id (or
+# getpass.getuser()) would differ per box and strand synced rows. Keep stable.
+DEFAULT_USER_ID = "local"
+DEFAULT_NAMESPACE = "personal"
+
+# The legacy "demo" identity. Real memory seeded before the identity migration
+# lands here and is auto-rebranded once to the defaults above (see
+# ygg_memory_server.migrate_identity). The demo/eval gates pin these EXPLICITLY
+# via these constants so they never inherit the new user-facing defaults.
+DEMO_USER_ID = "demo-user"
+DEMO_NAMESPACE = "yggdrasil-demo"
+DEMO_TOKEN = "yggdrasil-demo-token"
+
 # key -> (env var names in precedence order, default, one-line help)
 SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "distill_url": (("YGG_DISTILL_URL", "YGG_EMBED_URL"), "http://127.0.0.1:11434",
@@ -39,8 +54,8 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
                     "Embedding model (daemon-level; change needs `ygg redeploy`)."),
     "embed_url": (("YGG_EMBED_URL",), "http://127.0.0.1:11434",
                   "Embeddings endpoint — keep local (daemon-level; needs `ygg redeploy`)."),
-    "user_id": (("YGG_USER_ID",), "demo-user", "Identity stored memories are written under."),
-    "namespace": (("YGG_NAMESPACE",), "yggdrasil-demo", "Memory namespace."),
+    "user_id": (("YGG_USER_ID",), DEFAULT_USER_ID, "Identity stored memories are written under."),
+    "namespace": (("YGG_NAMESPACE",), DEFAULT_NAMESPACE, "Memory namespace."),
     "sync_repo": (("YGG_SYNC_REPO",), "",
                   "YOUR git repo (local path or clone URL) used by `ygg sync` — "
                   "cross-machine memory sync with no cloud in the loop."),
@@ -108,3 +123,31 @@ def distill_num_ctx(flag: str | int | None = None) -> int:
 
 def bg_model(flag: str | None = None) -> str:
     return resolve("bg_model", flag)
+
+
+def user_id(flag: str | None = None) -> str:
+    """The identity memories are written/read under (flag > env > config > default).
+    The single source of truth — every call site resolves through here instead of
+    hardcoding a literal, so the default can never diverge across the codebase."""
+    return resolve("user_id", flag)
+
+
+def namespace(flag: str | None = None) -> str:
+    return resolve("namespace", flag)
+
+
+def pin_default_identity() -> None:
+    """Write the resolved default identity EXPLICITLY into config.json (only the
+    fields not already set). Called once after the identity migration so an
+    implicit default becomes an explicit pin — no FUTURE default change can then
+    ever strand this machine's memories. No-op when the user already pinned."""
+    cfg = load()
+    changed = False
+    if not cfg.get("user_id"):
+        cfg["user_id"] = DEFAULT_USER_ID
+        changed = True
+    if not cfg.get("namespace"):
+        cfg["namespace"] = DEFAULT_NAMESPACE
+        changed = True
+    if changed:
+        save(cfg)
