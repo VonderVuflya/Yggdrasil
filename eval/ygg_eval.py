@@ -364,6 +364,11 @@ def honest_report() -> None:
                 lo, hi = r["recall@1_ci95"]
                 print(f"  {name:<30} n={r['n_cases']:<3} recall@1={r['recall@1']:.3f} "
                       f"[95% CI {lo:.2f}–{hi:.2f}]  recall@3={r['recall@3']:.3f}  mrr={r['mrr']:.3f}", flush=True)
+            # per-class (all splits): shows WHERE dense wins over lexical —
+            # paraphrase and crosslingual are the classes that need embeddings.
+            print("  by query class (all):")
+            for k, v in allr["by_class"].items():
+                print(f"    {k:<13} n={v['n']:<3} recall@1={v['recall@1']:.3f}  recall@3={v['recall@3']:.3f}")
             print(flush=True)
         print("Headline should be read as HOLDOUT recall@1 (the split the fusion weights were NOT tuned on).")
     finally:
