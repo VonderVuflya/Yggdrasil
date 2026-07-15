@@ -277,8 +277,8 @@ Robustness, DX and CI — the second slice of the audit plan.
 
 ## [0.5.5] — 2026-07-03
 
-The audit release — security & correctness fixes from a full technical audit
-(`docs/IMPROVEMENT-PLAN.md`), no behaviour changes for the happy path.
+The audit release — security & correctness fixes from a full technical audit,
+no behaviour changes for the happy path.
 
 ### Fixed
 - **Lexical search now works for non-Latin text** (Cyrillic, Greek, CJK …). The
