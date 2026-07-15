@@ -3,6 +3,43 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.10.0] — 2026-07-15
+
+Honest hardware, multilingual-safe models, no truncated stubs, memory-quality
+report (docs/TODO §1/§3/§5/§6).
+
+### Added
+- **`ygg quality` — a store health report.** Type/project distribution, exact
+  duplicate pairs (content-hash), near-duplicate pairs (cosine ≥ threshold,
+  default 0.95), cross-project leakage, and likely-truncated records (reuses the
+  write-path truncation heuristic). Computed server-side (`/quality`) so
+  embeddings never leave the engine; `--json` for scripting. Closes docs/TODO §6.
+
+### Added
+- **Hardware-aware acceleration tier + GPU warning (`ygg recommend` / `hw`).**
+  `hw()` now classifies inference as `cpu` / `metal` / `cuda` / `rocm/vulkan` and,
+  crucially, warns when a GPU is present but **won't** accelerate inference — the
+  Intel-Mac + AMD case, where macOS is Metal-only (Apple-Silicon oriented) and
+  ROCm doesn't exist, so stock inference runs on CPU regardless of the card. The
+  catalog surfaces the warning up top instead of silently running on CPU.
+- **Language-aware model catalog.** Every model now carries a language/thinking
+  tag (`EN/RU/ZH · non-thinking`, `⚠ NO Russian/Chinese`, …). Added the Qwen
+  upgrades `qwen2.5:3b`, `qwen3:4b-instruct-2507`, and `gemma3:4b`. If the local
+  store is dominantly Russian/Chinese, `recommend` prints a steer away from
+  English-only models.
+
+### Changed
+- **The recommended quality upgrade is now `qwen2.5:3b`, not `llama3.2:3b`** —
+  Llama 3.2 officially supports English + 7 European languages only, silently
+  degrading non-English memory. Llama stays in the catalog, clearly flagged.
+
+### Fixed
+- **Truncated lessons are dropped, not persisted.** A distilled lesson whose text
+  ends mid-thought (trailing `:` / dangling connector / unbalanced bracket or
+  quote — e.g. a list intro whose items never arrived) is now discarded at the
+  write path and counted separately, instead of being stored as a stub. Length
+  is deliberately not a signal (lessons are meant to be short).
+
 ## [0.9.1] — 2026-07-04
 
 ### Fixed
