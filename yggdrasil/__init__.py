@@ -1,3 +1,3 @@
 """Yggdrasil — one shared, durable memory for all your AI coding agents."""
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
