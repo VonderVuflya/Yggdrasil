@@ -3,10 +3,11 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased — 0.11.0] — identity migration (BREAKING)
+## [0.11.0] — 2026-07-16 — identity migration + dense-search fixes (BREAKING)
 
 Retire the demo-heritage identity so real memory no longer lives under a
-throwaway "demo" name (roadmap #16).
+throwaway "demo" name (roadmap #16), and fix dense search against remote /
+proxied Ollama endpoints.
 
 ### Changed (BREAKING)
 - **Default identity is now `local` / `personal`** (was `demo-user` /
@@ -28,6 +29,22 @@ throwaway "demo" name (roadmap #16).
   / `namespace()`); ~15 hardcoded `demo-user` fallbacks were routed through it, so
   the default can no longer diverge across the codebase. The demo/eval gates pin
   the demo identity explicitly via `ygg_config.DEMO_*` constants.
+
+### Fixed
+- **Dense search silently degraded to lexical against remote / proxied Ollama.**
+  Three independent causes, all fixed: the embedder only called the legacy
+  `/api/embeddings` (now falls back to the newer `/api/embed` that some builds and
+  hosted proxies serve instead); it sent no `User-Agent`, so the Cloudflare proxy
+  in front of `*.proxy.runpod.net` 403'd every request (now identifies as a
+  product string, like `ygg seed` already did); and a dropped request left a
+  memory permanently unembedded (now retries transient failures with backoff).
+
+### Benchmark
+- Grew the retrieval eval corpus from 35 to **232 memories / 110 labelled queries**
+  (docs/TODO #26) for statistical power — the candidate pool per query roughly
+  doubles and the recall CIs tighten. `ygg_eval.py` now seeds+embeds the corpus
+  once (not 6×), shows a progress heartbeat, prints per-query-class recall, and
+  warns loudly if a requested embedding model produced no vectors.
 
 ### Cleanup
 - Dedup the copy-pasted `YGG_ENGINE_TOKEN or YGG_ENGINE_TOKEN` env lookup in four
