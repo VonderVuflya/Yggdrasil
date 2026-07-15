@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Sequence
@@ -36,6 +37,18 @@ class OllamaEmbedder:
         self.timeout = timeout
 
     def embed(self, text: str) -> list[float] | None:
+        """Embed one text, riding out transient proxy hiccups. A remote endpoint
+        (e.g. RunPod) drops the occasional request; without a retry those become
+        permanently-unembedded memories that silently degrade dense recall. Retry
+        the whole attempt a few times with backoff before giving up."""
+        for attempt in range(3):
+            vec = self._embed_attempt(text)
+            if vec is not None:
+                return vec
+            time.sleep(0.4 * (attempt + 1))
+        return None
+
+    def _embed_attempt(self, text: str) -> list[float] | None:
         # Embedding models have a small context window (~512 tokens). Long
         # memories overflow it (HTTP 500), so cap the input and, on overflow,
         # halve and retry — the title/summary/opening carries the retrieval
