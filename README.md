@@ -8,7 +8,7 @@ One local memory for Claude Code, Codex, and every MCP agent — shared across s
   <a href="https://github.com/VonderVuflya/Yggdrasil/releases/latest"><img src="https://img.shields.io/github/v/release/VonderVuflya/Yggdrasil?label=release&color=blue" alt="Latest release"></a>
   <a href="https://pypi.org/project/yggdrasil-memory/"><img src="https://img.shields.io/pypi/v/yggdrasil-memory?label=PyPI&color=blue" alt="PyPI"></a>
   <a href="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil"><img src="https://glama.ai/mcp/servers/VonderVuflya/Yggdrasil/badges/score.svg" alt="Glama quality score"></a>
-  <a href="./BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.93%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
+  <a href="./BENCHMARKS.md"><img src="https://img.shields.io/badge/recall@1-0.94%20·%20reproducible-brightgreen" alt="Benchmarks"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha">
 </p>
@@ -117,7 +117,7 @@ Out of the box, Yggdrasil runs on **SQLite + FTS5 with zero dependencies** — i
 | Tier | You add | You gain |
 | --- | --- | --- |
 | **0 · default** | nothing — SQLite + FTS5 | keyword search, zero deps, instant — recall@1 = **0.77** |
-| **1 · semantic** | an **embedding** model (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | search by **meaning**, across languages — recall@1 = **0.93**, recall@3 **1.00** |
+| **1 · semantic** | an **embedding** model (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | search by **meaning**, across languages — recall@1 = **0.94**, recall@3 **1.00** |
 | **2 · self-maintaining** | a small **LLM** (`qwen2.5:1.5b` ~1 GB) | background dedupe/merge of memory (propose-only) |
 
 Ollama only *computes* vectors and runs the background model — every memory and every vector stays in the same local SQLite. `ygg install` detects your hardware and recommends a fit (`ygg recommend` shows the full catalog).
@@ -148,14 +148,14 @@ The engine itself is swappable — any service meeting the `MemoryBackend` contr
 
 ## 📊 The numbers
 
-Measured by [`eval/ygg_eval.py`](./eval/ygg_eval.py) — 35 labelled queries, ranking weights tuned on the *dev* split only, so **holdout is the unbiased number** (recall@1, with the `paraphrase-multilingual` model):
+Measured by [`eval/ygg_eval.py`](./eval/ygg_eval.py) — 232 memories, 110 labelled queries, ranking weights tuned on the *dev* split only, so **holdout is the unbiased number** (recall@1, with the `paraphrase-multilingual` model):
 
 | Search view | holdout recall@1 | recall@3 | zero-dep lexical |
 | --- | --- | --- | --- |
-| **Within a project** (the real path, pool ~6) | **0.93** | **1.00** | 0.77 |
-| **Whole store** (no filter, pool 35) | 0.80 | **1.00** | 0.77 |
+| **Within a project** (the real path, pool ~11) | **0.94** | **1.00** | 0.76 |
+| **Whole store** (no filter, pool 232) | 0.72 | 0.87 | 0.69 |
 
-**recall@3 = 1.00 in both views** — with the local model the right memory is *always* in the top 3, even searching the entire store; it's #1 0.93 of the time within a project. Zero-dep lexical mode already solves keyword and code-identifier queries (1.00). Small corpus (n=35), so the [full breakdown in BENCHMARKS.md](./BENCHMARKS.md) shows 95% CIs, pool sizes, and per-class scores — and you can rerun it in a minute: `python3 eval/ygg_eval.py --report`.
+**Within a project — the path you use — the right memory is #1 for 0.94 of queries and in the top 3 every time (recall@3 = 1.00).** Searching the whole store with no filter is harder (recall@1 0.72, recall@3 0.87 across all 232). Zero-dep lexical mode already solves keyword and code-identifier queries (1.00); the local model adds meaning and cross-language (crosslingual 0.25 → 0.95). The [full breakdown in BENCHMARKS.md](./BENCHMARKS.md) has 95% CIs, pool sizes, and per-class scores — rerun it in a minute: `python3 eval/ygg_eval.py --report`.
 
 ## 🆚 Yggdrasil vs the rest
 
