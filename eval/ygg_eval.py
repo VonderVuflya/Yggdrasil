@@ -208,14 +208,19 @@ if not os.environ.get("YGG_EVAL_SMALL"):
     from corpus_large import CORPUS, CASES, CROSS_PROJECT_CASES  # noqa: E402,F811
 
 
-def seed(store: MemoryStore) -> dict[str, str]:
+def seed(store: MemoryStore, verbose: bool = False) -> dict[str, str]:
     label_to_id: dict[str, str] = {}
-    for label, project, mtype, content in CORPUS:
+    total = len(CORPUS)
+    for i, (label, project, mtype, content) in enumerate(CORPUS, 1):
         rec = store.add(
             content=content, user_id=USER, namespace=NS, scope="project",
             metadata={"project": project, "scope": "project", "type": mtype, "source": "eval"},
         )
         label_to_id[label] = rec["id"]
+        if verbose and (i % 25 == 0 or i == total):
+            # heartbeat: embedding over a remote endpoint is network-bound and
+            # otherwise silent, so show that it's alive.
+            print(f"  seeding + embedding {i}/{total} memories…", flush=True)
     return label_to_id
 
 
@@ -227,7 +232,8 @@ _UNSET = object()
 _POOL = Counter(project for _, project, _, _ in CORPUS)
 
 
-def evaluate(splits: set[str] | None = None, embedder=_UNSET, project_filter: bool = True) -> dict:
+def evaluate(splits: set[str] | None = None, embedder=_UNSET, project_filter: bool = True,
+             store: MemoryStore | None = None, label_to_id: dict[str, str] | None = None) -> dict:
     """Score the labelled queries.
 
     project_filter=True  -> search WITHIN each query's project (the real
@@ -235,13 +241,21 @@ def evaluate(splits: set[str] | None = None, embedder=_UNSET, project_filter: bo
     project_filter=False -> search the WHOLE corpus (the hard "have I solved this
         anywhere?" path; candidate pool = every memory). The honest upper-bound
         on difficulty; report both so the headline isn't read as harder than it is.
+
+    Pass a pre-seeded `store` + `label_to_id` to reuse one embedded corpus across
+    many evaluate() calls — the seed embeddings are the expensive part over a
+    remote endpoint, and splits/project_filter don't change what's stored.
     """
-    fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
-    os.close(fd)
+    own = store is None
+    db_path = None
+    if own:
+        fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
+        os.close(fd)
     try:
-        emb = get_embedder() if embedder is _UNSET else embedder
-        store = MemoryStore(db_path, embedder=emb)
-        label_to_id = seed(store)
+        if own:
+            emb = get_embedder() if embedder is _UNSET else embedder
+            store = MemoryStore(db_path, embedder=emb)
+            label_to_id = seed(store)
         cases = [c for c in CASES if splits is None or c[4] in splits]
         per_class: dict[str, dict] = {}
         per_split: dict[str, dict] = {}
@@ -299,11 +313,12 @@ def evaluate(splits: set[str] | None = None, embedder=_UNSET, project_filter: bo
             "misses": [d for d in details if d["rank"] != 1],
         }
     finally:
-        for suffix in ("", "-wal", "-shm"):
-            try:
-                os.remove(db_path + suffix)
-            except FileNotFoundError:
-                pass
+        if own and db_path:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.remove(db_path + suffix)
+                except FileNotFoundError:
+                    pass
 
 
 def _mode_name() -> str:
@@ -315,21 +330,35 @@ def honest_report() -> None:
     used for tuning), the hard full-corpus number, disclosed pool sizes, and a
     95% CI that's honest about the small corpus."""
     mode = _mode_name()
-    print(f"# Yggdrasil retrieval eval — mode: {mode}\n")
-    for pf, scope_label in ((True, "project-scoped (real `ygg search --project P` path)"),
-                            (False, "full-corpus (hard: 1 of the whole store)")):
-        print(f"## {scope_label}")
-        allr = evaluate(project_filter=pf)
-        hold = evaluate(splits={"holdout"}, project_filter=pf)
-        dev = evaluate(splits={"dev"}, project_filter=pf)
-        pool = allr["candidate_pool"]
-        print(f"  candidate pool per query: min {pool['min']} · median {pool['median']} · max {pool['max']}")
-        for name, r in (("HOLDOUT (untouched by tuning)", hold), ("dev (tuning split)", dev), ("all", allr)):
-            lo, hi = r["recall@1_ci95"]
-            print(f"  {name:<30} n={r['n_cases']:<3} recall@1={r['recall@1']:.3f} "
-                  f"[95% CI {lo:.2f}–{hi:.2f}]  recall@3={r['recall@3']:.3f}  mrr={r['mrr']:.3f}")
-        print()
-    print("Headline should be read as HOLDOUT recall@1 (the split the fusion weights were NOT tuned on).")
+    print(f"# Yggdrasil retrieval eval — mode: {mode}\n", flush=True)
+    # Seed + embed the corpus ONCE, then reuse it for every split × scope — over a
+    # remote embedding endpoint the seed is by far the slowest part.
+    fd, db_path = tempfile.mkstemp(suffix=".sqlite", prefix="ygg-eval-")
+    os.close(fd)
+    store = MemoryStore(db_path, embedder=get_embedder())
+    label_to_id = seed(store, verbose=True)
+    print(flush=True)
+    try:
+        for pf, scope_label in ((True, "project-scoped (real `ygg search --project P` path)"),
+                                (False, "full-corpus (hard: 1 of the whole store)")):
+            print(f"## {scope_label}", flush=True)
+            allr = evaluate(project_filter=pf, store=store, label_to_id=label_to_id)
+            hold = evaluate(splits={"holdout"}, project_filter=pf, store=store, label_to_id=label_to_id)
+            dev = evaluate(splits={"dev"}, project_filter=pf, store=store, label_to_id=label_to_id)
+            pool = allr["candidate_pool"]
+            print(f"  candidate pool per query: min {pool['min']} · median {pool['median']} · max {pool['max']}")
+            for name, r in (("HOLDOUT (untouched by tuning)", hold), ("dev (tuning split)", dev), ("all", allr)):
+                lo, hi = r["recall@1_ci95"]
+                print(f"  {name:<30} n={r['n_cases']:<3} recall@1={r['recall@1']:.3f} "
+                      f"[95% CI {lo:.2f}–{hi:.2f}]  recall@3={r['recall@3']:.3f}  mrr={r['mrr']:.3f}", flush=True)
+            print(flush=True)
+        print("Headline should be read as HOLDOUT recall@1 (the split the fusion weights were NOT tuned on).")
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.remove(db_path + suffix)
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == "__main__":
