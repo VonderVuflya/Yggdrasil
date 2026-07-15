@@ -1,6 +1,6 @@
-# Yggdrasil MVP CLI
+# Yggdrasil CLI
 
-`yggdrasil/ygg.py` is a thin facade over the engine.s REST API. It exists so agents do not need to remember the engine.s exact payload shape.
+`yggdrasil/ygg.py` is a thin facade over the engine's REST API. It exists so agents do not need to remember the engine's exact payload shape.
 
 ## Environment
 

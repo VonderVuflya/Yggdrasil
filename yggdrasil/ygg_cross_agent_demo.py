@@ -30,7 +30,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MCP = Path(__file__).resolve().parent / "ygg_mcp_server.py"
 URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
-TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
+TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
 NAMESPACE = os.environ.get("YGG_NAMESPACE", "yggdrasil-crossagent")
 USER_ID = os.environ.get("YGG_USER_ID", "crossagent-user")
 PROJECT = "cross-agent-demo"

@@ -33,7 +33,7 @@ REVIEW_QUEUE = Path(__file__).resolve().parent / "ygg_review_queue.py"
 REVIEW_ACTIONS = Path(__file__).resolve().parent / "ygg_review_actions.py"
 REPORTS = ROOT / "reports"
 URL = os.environ.get("YGG_ENGINE_URL", "http://127.0.0.1:42069")
-TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
+TOKEN = os.environ.get("YGG_ENGINE_TOKEN") or "yggdrasil-demo-token"
 
 # >32 shared words so both near-duplicate memories share an identical 32-word
 # signature (-> near_duplicate) while differing in the tail (-> not exact dup).
