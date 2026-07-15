@@ -200,6 +200,13 @@ CROSS_PROJECT_CASES = [
     ("token check fails when clocks are out of sync", "A1"),
 ]
 
+# Expanded 200+ corpus for a statistically meaningful benchmark (docs/TODO #26).
+# Overrides the compact inline set above; set YGG_EVAL_SMALL=1 to fall back to it
+# for a quick check. corpus_large.py lives next to this file.
+if not os.environ.get("YGG_EVAL_SMALL"):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from corpus_large import CORPUS, CASES, CROSS_PROJECT_CASES  # noqa: E402,F811
+
 
 def seed(store: MemoryStore) -> dict[str, str]:
     label_to_id: dict[str, str] = {}
