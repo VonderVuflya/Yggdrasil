@@ -1,5 +1,7 @@
 import pathlib
+import shutil
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -53,6 +55,48 @@ class TestServiceGenerators(unittest.TestCase):
         self.assertIn("--token-file", argv)
         self.assertNotIn("--token", argv)
         self.assertNotIn("sekret-tok", argv)
+
+
+class TestEngineArgvEmbedBackend(unittest.TestCase):
+    """embed_url/backend ride argv from config; the api key rides by file path
+    only — the plist, the systemd unit and `ps` all inherit argv verbatim."""
+
+    def setUp(self):
+        self.home = pathlib.Path(tempfile.mkdtemp())
+        self._saved_home, service.YGG_HOME = service.YGG_HOME, self.home
+        self._saved_keyfile, service.EMBED_KEY_FILE = service.EMBED_KEY_FILE, self.home / "embed_api_key"
+        self._saved_cfg = service._config
+        self._cfg: dict = {}
+        service._config = lambda: self._cfg
+
+    def tearDown(self):
+        service.YGG_HOME = self._saved_home
+        service.EMBED_KEY_FILE = self._saved_keyfile
+        service._config = self._saved_cfg
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def test_url_and_backend_ride_argv(self):
+        self._cfg = {"embed_url": "https://openrouter.ai/api/v1", "embed_backend": "openai"}
+        argv = service.engine_argv("tok", "nemotron")
+        self.assertIn("--embed-url", argv)
+        self.assertIn("https://openrouter.ai/api/v1", argv)
+        self.assertIn("--embed-backend", argv)
+        self.assertIn("openai", argv)
+
+    def test_default_ollama_backend_not_passed(self):
+        self._cfg = {"embed_backend": "ollama"}
+        self.assertNotIn("--embed-backend", service.engine_argv("tok", "all-minilm"))
+
+    def test_api_key_travels_by_file_never_by_value(self):
+        service.EMBED_KEY_FILE.write_text("sk-or-v1-SUPERSECRET")
+        argv = service.engine_argv("tok", "nemotron")
+        self.assertIn("--embed-api-key-file", argv)
+        self.assertIn(str(service.EMBED_KEY_FILE), argv)
+        self.assertNotIn("--embed-api-key", argv)          # the by-value flag
+        self.assertNotIn("sk-or-v1-SUPERSECRET", " ".join(argv))
+
+    def test_no_key_file_no_flag(self):
+        self.assertNotIn("--embed-api-key-file", service.engine_argv("tok", "nemotron"))
 
 
 if __name__ == "__main__":

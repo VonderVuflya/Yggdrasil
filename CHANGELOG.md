@@ -23,6 +23,17 @@ All notable changes to this project are documented here. Format loosely follows
     still wins on privacy, which is the point of the project.
   - `embed_url`/`embed_backend` propagate from `config.json` to the daemon via
     `engine_argv`, so a service install honors them without a manual env export.
+- **`ygg config set embed_api_key <key>`** — the hosted backend is configured
+  entirely through the CLI; no env export required. The secret is kept out of
+  `config.json` (0644, and it lands in backups and dotfile repos) and written to
+  `~/.yggdrasil/embed_api_key` at 0600. The daemon is handed the *path*, not the
+  value — so the key stays out of `ps`, the launchd plist and the systemd unit,
+  the same treatment the auth token already gets. `ygg config list` masks it;
+  `ygg config get` still prints it in full for scripts, as `gh auth token` does.
+  `YGG_EMBED_API_KEY` / `OPENROUTER_API_KEY` still win over the stored file.
+  - Verified end to end: a daemon configured *only* via `ygg config set` embeds
+    through OpenRouter (`/health` → `dense: active (…nemotron…)`), answers a
+    paraphrased query with no shared words at rank 1, and shows no key in `ps`.
 
 ## [0.11.0] — 2026-07-15 — identity migration + dense-search fixes (BREAKING)
 

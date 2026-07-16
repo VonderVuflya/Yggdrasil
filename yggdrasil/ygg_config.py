@@ -22,6 +22,13 @@ from pathlib import Path
 YGG_HOME = Path(os.environ.get("YGG_HOME", str(Path.home() / ".yggdrasil")))
 CONFIG = YGG_HOME / "config.json"
 
+# Secrets get their own 0600 file instead of config.json: config.json is
+# world-readable and routinely ends up in backups and dotfile repos. The daemon
+# is handed the PATH, never the value, so the key stays out of `ps`, the launchd
+# plist and the systemd unit — the same trick already used for the auth token.
+EMBED_KEY_FILE = YGG_HOME / "embed_api_key"
+SECRET_FILES: dict[str, Path] = {"embed_api_key": EMBED_KEY_FILE}
+
 # Default identity that stored memories are written under. FIXED literals on
 # purpose: `ygg sync` keys memory by (user_id, namespace) across a user's
 # machines, and config.json is per-machine — so a generated-once id (or
@@ -83,14 +90,35 @@ def save(cfg: dict) -> None:
     CONFIG.write_text(json.dumps(cfg, indent=2, sort_keys=True) + "\n")
 
 
+def read_secret(path: Path) -> str:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
+def write_secret(path: Path, value: str) -> None:
+    YGG_HOME.mkdir(parents=True, exist_ok=True)
+    path.write_text(value.strip())
+    try:
+        os.chmod(path, 0o600)
+    except OSError:  # best effort (Windows/exotic FS) — value is still off argv
+        pass
+
+
 def resolve(key: str, flag: str | None = None) -> str:
-    """Effective value for `key`: flag > env > config.json > default."""
+    """Effective value for `key`: flag > env > stored > default.
+
+    "Stored" is config.json for normal settings and the key's own 0600 file for
+    secrets (see SECRET_FILES) — callers don't need to know which."""
     envs, default, _ = SETTINGS[key]
     if flag not in (None, ""):
         return str(flag)
     for e in envs:
         if os.environ.get(e):
             return os.environ[e]
+    if key in SECRET_FILES:
+        return read_secret(SECRET_FILES[key]) or default
     v = load().get(key)
     if v not in (None, ""):
         return str(v)
@@ -105,9 +133,48 @@ def source(key: str, flag: str | None = None) -> str:
     for e in envs:
         if os.environ.get(e):
             return f"env:{e}"
+    if key in SECRET_FILES:
+        return "keyfile" if read_secret(SECRET_FILES[key]) else "default"
     if load().get(key) not in (None, ""):
         return "config"
     return "default"
+
+
+def set_value(key: str, value: str) -> None:
+    """Persist a setting. Secrets are routed to their 0600 file automatically."""
+    if key in SECRET_FILES:
+        write_secret(SECRET_FILES[key], value)
+        return
+    cfg = load()
+    cfg[key] = value
+    save(cfg)
+
+
+def unset_value(key: str) -> bool:
+    """Drop a stored setting. True if something was actually removed."""
+    if key in SECRET_FILES:
+        path = SECRET_FILES[key]
+        if read_secret(path):
+            path.unlink(missing_ok=True)
+            return True
+        return False
+    cfg = load()
+    if cfg.pop(key, None) is None:
+        return False
+    save(cfg)
+    return True
+
+
+def display(key: str, value: str) -> str:
+    """Render a value for the terminal — secrets masked, never printed in full."""
+    if key in SECRET_FILES and value:
+        return f"{value[:6]}…{value[-4:]}" if len(value) > 12 else "(set)"
+    return value
+
+
+def stored_at(key: str) -> str:
+    """Where `ygg config set` would write this key — for user-facing messages."""
+    return str(SECRET_FILES[key]) if key in SECRET_FILES else str(CONFIG)
 
 
 # typed convenience accessors used across the codebase

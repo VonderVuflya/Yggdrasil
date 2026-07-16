@@ -1467,6 +1467,9 @@ def main() -> int:
     parser.add_argument("--embed-api-key",
                         default=os.environ.get("YGG_EMBED_API_KEY") or os.environ.get("OPENROUTER_API_KEY", ""),
                         help="Bearer key for the openai backend (e.g. OpenRouter). Empty for local llama-server.")
+    parser.add_argument("--embed-api-key-file", default=os.environ.get("YGG_EMBED_API_KEY_FILE"),
+                        help="Read the embedding API key from this 0600 file — keeps the secret "
+                             "out of `ps` and the plist/unit. Set by `ygg config set embed_api_key`.")
     args = parser.parse_args()
 
     if args.reset and os.path.exists(args.db):
@@ -1481,7 +1484,14 @@ def main() -> int:
         if (args.embed_backend or "ollama").strip().lower() in (
             "openai", "openai-compatible", "llamacpp", "llama.cpp", "openrouter"
         ):
-            embedder = OpenAIEmbedder(args.embed_url, args.embed_model, args.embed_api_key or "")
+            api_key = args.embed_api_key or ""
+            if args.embed_api_key_file:  # the 0600 file beats the env default, as with the token
+                try:
+                    with open(args.embed_api_key_file) as fh:
+                        api_key = fh.read().strip() or api_key
+                except OSError:
+                    pass
+            embedder = OpenAIEmbedder(args.embed_url, args.embed_model, api_key)
         else:
             embedder = OllamaEmbedder(args.embed_url, args.embed_model)
     store = MemoryStore(args.db, embedder=embedder)

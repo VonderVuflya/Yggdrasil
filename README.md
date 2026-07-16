@@ -140,17 +140,27 @@ Ollama only *computes* vectors and runs the background model — every memory an
 OpenRouter, LM Studio, vLLM), set `embed_backend`:
 
 ```bash
-# local llama.cpp — no key
+# local llama.cpp — no key needed
 ygg config set embed_backend openai
 ygg config set embed_url http://127.0.0.1:8080/v1
 ygg config set embed_model bge-small-en-v1.5
+ygg redeploy
 
-# OpenRouter — key via env (never written to config/argv/ps)
+# OpenRouter — free embeddings, no GPU needed
 ygg config set embed_backend openai
 ygg config set embed_url https://openrouter.ai/api/v1
-ygg config set embed_model openai/text-embedding-3-small
-export YGG_EMBED_API_KEY=sk-or-...   # or OPENROUTER_API_KEY
+ygg config set embed_model nvidia/llama-nemotron-embed-vl-1b-v2:free
+ygg config set embed_api_key sk-or-...    # or export YGG_EMBED_API_KEY
+ygg redeploy
 ```
+
+The key is stored in `~/.yggdrasil/embed_api_key` (0600) rather than
+`config.json`, and reaches the daemon as a **file path** — so it never shows up
+in `ps`, the launchd plist or the systemd unit. `ygg config list` masks it.
+
+Staying local still wins on quality *and* privacy: on the 232-memory / 110-query
+corpus, local `paraphrase-multilingual` scores recall@1 **0.964** vs **0.946**
+for the free hosted model — and your memories never leave the machine.
 
 **Background consolidation (small LLM):**
 

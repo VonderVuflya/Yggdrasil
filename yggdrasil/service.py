@@ -37,6 +37,7 @@ DATA = YGG_HOME / "data"
 LOGS = YGG_HOME / "logs"
 DB = DATA / "memory.sqlite"
 TOKEN_FILE = YGG_HOME / "token"
+EMBED_KEY_FILE = YGG_HOME / "embed_api_key"  # 0600; passed to the engine by PATH
 PIDFILE = YGG_HOME / "daemon.pid"
 MARKER = YGG_HOME / "service.json"  # records which manager set up autostart
 ENGINE_LOG = LOGS / "engine.log"
@@ -112,8 +113,6 @@ def engine_argv(tok: str, embed_model: str = "") -> list[str]:  # noqa: ARG001 â
     if embed_model:
         argv += ["--embed-model", embed_model]
     # url/backend are non-secret, so they ride on argv (config.json -> daemon).
-    # The api key does NOT â€” it would leak into `ps` and the plist/unit; the
-    # engine reads it from the inherited YGG_EMBED_API_KEY/OPENROUTER_API_KEY env.
     cfg = _config()
     embed_url = cfg.get("embed_url")
     if embed_url:
@@ -121,6 +120,11 @@ def engine_argv(tok: str, embed_model: str = "") -> list[str]:  # noqa: ARG001 â
     embed_backend = cfg.get("embed_backend")
     if embed_backend and str(embed_backend).lower() != "ollama":
         argv += ["--embed-backend", str(embed_backend)]
+    # The api key rides by FILE PATH, never by value â€” exactly like --token-file.
+    # One line here keeps the secret out of `ps`, the launchd plist, the systemd
+    # unit and the schtasks command, with no per-service-manager special casing.
+    if EMBED_KEY_FILE.exists():
+        argv += ["--embed-api-key-file", str(EMBED_KEY_FILE)]
     return argv
 
 

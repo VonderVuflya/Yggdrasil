@@ -290,7 +290,7 @@ def _config_cmd(rest: list[str]) -> int:
         for key, (envs, default, help_) in C.SETTINGS.items():
             val = C.resolve(key)
             src = C.source(key)
-            shown = val if val != "" else "(empty)"
+            shown = C.display(key, val) if val != "" else "(empty)"
             print(f"  {key:<16} {shown:<34} {src}")
             print(f"  {'':<16} {help_}")
         print("\n  precedence: flag > env > config > default")
@@ -302,6 +302,9 @@ def _config_cmd(rest: list[str]) -> int:
         if len(rest) < 2 or rest[1] not in C.SETTINGS:
             print(f"usage: ygg config get <{'|'.join(C.SETTINGS)}>", file=sys.stderr)
             return 2
+        # Deliberately UNmasked: `get` is the single-value accessor scripts pipe
+        # (KEY=$(ygg config get embed_api_key)), same contract as `gh auth token`.
+        # `config list` — the view people paste into issues — masks instead.
         print(C.resolve(rest[1]))
         return 0
 
@@ -310,11 +313,9 @@ def _config_cmd(rest: list[str]) -> int:
             print(f"usage: ygg config set <{'|'.join(C.SETTINGS)}> <value>", file=sys.stderr)
             return 2
         key, value = rest[1], rest[2]
-        cfg = C.load()
-        cfg[key] = value
-        C.save(cfg)
-        print(f"set {key} = {value}  (in {C.CONFIG})")
-        if key in ("embed_model", "embed_url"):
+        C.set_value(key, value)
+        print(f"set {key} = {C.display(key, value)}  (in {C.stored_at(key)})")
+        if key in ("embed_model", "embed_url", "embed_backend", "embed_api_key"):
             print("  note: embeddings run in the daemon — run `ygg redeploy` for this to take effect.")
         return 0
 
@@ -322,12 +323,11 @@ def _config_cmd(rest: list[str]) -> int:
         if len(rest) < 2 or rest[1] not in C.SETTINGS:
             print(f"usage: ygg config unset <{'|'.join(C.SETTINGS)}>", file=sys.stderr)
             return 2
-        cfg = C.load()
-        if cfg.pop(rest[1], None) is not None:
-            C.save(cfg)
-            print(f"unset {rest[1]} (now: {C.resolve(rest[1])} via {C.source(rest[1])})")
+        key = rest[1]
+        if C.unset_value(key):
+            print(f"unset {key} (now: {C.display(key, C.resolve(key))} via {C.source(key)})")
         else:
-            print(f"{rest[1]} was not set in config")
+            print(f"{key} was not set in config")
         return 0
 
     print(f"unknown config subcommand: {sub}\nusage: ygg config [list|get|set|unset]", file=sys.stderr)
