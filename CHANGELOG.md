@@ -3,7 +3,13 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.12.0] — 2026-07-17 — bring your own engine: llama.cpp, OpenRouter, OpenCode
+
+Yggdrasil stopped assuming Ollama for embeddings and Claude/Codex for agents.
+Dense search now runs on anything speaking the OpenAI `/v1/embeddings` dialect
+(llama.cpp, OpenRouter, LM Studio, vLLM), OpenCode is auto-registered like the
+other hosts, and hosted backends are configured entirely from the CLI. Every
+default is unchanged — an existing install upgrades to identical behaviour.
 
 ### Added
 - **OpenAI-compatible embedding backend.** Dense search can now run against any
@@ -11,8 +17,7 @@ All notable changes to this project are documented here. Format loosely follows
   LM Studio, vLLM — not just Ollama. Set `embed_backend openai` and point
   `embed_url` at the `/v1` base; `YGG_EMBED_API_KEY` (or `OPENROUTER_API_KEY`)
   carries the Bearer token for hosted providers, and a local llama-server needs
-  no key. The key flows via env only — never argv/plist/`ps`. Ollama stays the
-  default; nothing changes for existing installs.
+  no key. Ollama stays the default; nothing changes for existing installs.
   - Verified end-to-end against a real `llama-server` (bge-small, 384d): a
     paraphrased query with zero shared words retrieved the right memory at rank 1.
   - Verified live against OpenRouter on the 232-memory / 110-query corpus with
@@ -34,6 +39,29 @@ All notable changes to this project are documented here. Format loosely follows
   - Verified end to end: a daemon configured *only* via `ygg config set` embeds
     through OpenRouter (`/health` → `dense: active (…nemotron…)`), answers a
     paraphrased query with no shared words at rank 1, and shows no key in `ps`.
+- **OpenCode is auto-registered.** `ygg install` detects the `opencode` binary
+  and writes the MCP entry itself, merging into any existing `opencode.json`
+  behind a `.ygg.bak` backup; invalid JSON is left alone, and `ygg uninstall`
+  removes only our key. It always *worked* (OpenCode speaks MCP) but demanded a
+  hand-written config whose schema differs from Claude's in four places at once
+  — `mcp` vs `mcpServers`, mandatory `type`, `command` as one array, and
+  `environment` vs `env` — so the obvious copy-paste produced four silent
+  errors. Verified against a real install: `opencode mcp list` reports
+  `✓ yggdrasil connected` with all 6 `ygg_*` tools exposed.
+
+### Docs
+- README (and all six translations) now cover connecting to llama.cpp,
+  OpenRouter and OpenCode, including the two OpenRouter account settings that
+  break embeddings for reasons the error messages actively obscure: a
+  provisioning key returns `401 User not found` on inference, and a privacy
+  filter hides most models behind `404 All providers have been ignored`. Also
+  documented: `GET /api/v1/models` returns `200` for any key, valid or not, so
+  it cannot be used to check one — `GET /api/v1/key` can.
+- Recorded what the benchmark actually showed: vector size buys nothing here
+  (`mxbai-embed-large` 1024d → recall@1 0.809, `nomic-embed-text` 768d → 0.818,
+  `bge-small` 384d → 0.818 — all within each other's confidence intervals).
+  Language coverage is what moves the number: those English-only models fall to
+  0.40–0.45 on cross-language queries where the multilingual default holds 0.95.
 
 ## [0.11.0] — 2026-07-15 — identity migration + dense-search fixes (BREAKING)
 

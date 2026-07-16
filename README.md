@@ -72,7 +72,39 @@ The engine lazy-starts on first use and generates its own local token — no API
 | **Claude Desktop** _(app)_ | drag the `.mcpb` from the [latest release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) onto Settings → Extensions, paste your token (`ygg token`) — the desktop app then shares the same memory as your CLI agents ([guide](./packaging/mcpb/README.md)) |
 | **from source** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-`ygg install` is a one-time guided setup: it installs an always-on background service, registers the MCP tools with Claude Code and Codex, and — if your hardware allows — recommends optional local models (or pick `none` to stay zero-config).
+`ygg install` is a one-time guided setup: it installs an always-on background service, registers the MCP tools with every agent host it finds — **Claude Code, Codex, OpenCode** — and, if your hardware allows, recommends optional local models (or pick `none` to stay zero-config).
+
+<details>
+<summary><b>OpenCode</b> — nothing to configure</summary>
+
+Install [OpenCode](https://opencode.ai) first, then run `ygg install` (or `ygg redeploy` if Yggdrasil is already set up) — the entry is written for you and merged into any existing `opencode.json`. Confirm with:
+
+```bash
+opencode mcp list        # -> ✓ yggdrasil connected
+```
+
+Installed OpenCode *after* Yggdrasil? Just re-run `ygg install`.
+
+If you'd rather write it by hand, note that OpenCode's schema differs from Claude's in four places at once — servers live under `mcp` (not `mcpServers`), `type` is required, `command` is one array (not `command` + `args`), and env is `environment` (not `env`), so the Claude snippet won't port:
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "yggdrasil": {
+      "type": "local",
+      "command": ["/path/to/python3", "~/.yggdrasil/scripts/ygg_mcp_server.py"],
+      "enabled": true,
+      "environment": { "YGG_ENGINE_URL": "http://127.0.0.1:42069" }
+    }
+  }
+}
+```
+
+No token goes in the config — the engine reads the 0600 `~/.yggdrasil/token` itself. Run `ygg doctor` if the tools don't show up.
+
+</details>
 
 There is also a [`yggdrasil-memory` skill](./skills/) for any Claude surface: MCP connects the *tools*, the skill teaches the agent *when* to use them. Use both for the best behavior.
 
@@ -93,7 +125,7 @@ ygg seed --dry-run    # see what it would import; drop the flag to distill for r
 ## Why
 
 - 🧠 **Persistent** — decisions, lessons, and project status survive across sessions.
-- 🔌 **One brain, every tool** — Claude Code, Codex, and any MCP host share the same memory.
+- 🔌 **One brain, every tool** — Claude Code, Codex, OpenCode, and any MCP host share the same memory.
 - 🌐 **Cross-project recall** — *"this looks like what you did in project B — reuse it?"*
 - 🧹 **Curated, not captured** — your agent saves the few things that matter; governance dedupes and archives, never deletes.
 - 🌱 **Self-maintaining** *(opt-in)* — a small local model consolidates memory in the background. Zero API tokens.
@@ -158,9 +190,57 @@ The key is stored in `~/.yggdrasil/embed_api_key` (0600) rather than
 `config.json`, and reaches the daemon as a **file path** — so it never shows up
 in `ps`, the launchd plist or the systemd unit. `ygg config list` masks it.
 
+Check it took with `ygg doctor` — dense should name your model:
+
+```
+✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
+```
+
+<details>
+<summary><b>OpenRouter: two settings that will bite you</b></summary>
+
+**1. Use an inference key, not a provisioning key.** Keys from
+[openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys)
+can only mint other keys — embedding calls with one return a baffling
+`401 User not found`. Create a normal key at
+[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) instead.
+
+Note that `GET /api/v1/models` answers `200 OK` for *any* key, valid or not —
+it ignores auth entirely, so it can't tell you whether your key works. Check
+`GET /api/v1/key` instead: it returns `is_provisioning_key`, and fails outright
+on a bad key.
+
+**2. Privacy settings silently hide most models.** If a model 404s with
+`All providers have been ignored`, the model is fine — your account is
+filtering out every provider that serves it. Fix it at
+[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy).
+That filter is also why `openai/text-embedding-3-*` can come back `403` on a
+provider's terms of service.
+
+Browse what's actually available at
+[openrouter.ai/models?output_modalities=embeddings](https://openrouter.ai/models?fmt=cards&output_modalities=embeddings)
+(26 models at the time of writing). Useful ones:
+
+| Model | Price / 1M tokens |
+| --- | --- |
+| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | **$0** |
+| `perplexity/pplx-embed-v1-0.6b` | $0.004 |
+| `intfloat/multilingual-e5-large` | $0.01 — multilingual |
+| `google/gemini-embedding-2` | $0.20 |
+
+</details>
+
 Staying local still wins on quality *and* privacy: on the 232-memory / 110-query
 corpus, local `paraphrase-multilingual` scores recall@1 **0.964** vs **0.946**
-for the free hosted model — and your memories never leave the machine.
+for the free hosted model — and your memories never leave the machine. Reach for
+a hosted backend when the box can't run Ollama, not to chase accuracy.
+
+Bigger vectors do **not** buy accuracy here — on the same corpus
+`mxbai-embed-large` (1024d) scores 0.809 and `nomic-embed-text` (768d) 0.818,
+a difference their confidence intervals swallow whole. What actually moves the
+number is whether the model handles *your* languages: both are English-only and
+collapse to 0.40–0.45 on cross-language queries, where the multilingual default
+holds 0.95.
 
 **Background consolidation (small LLM):**
 

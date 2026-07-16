@@ -71,7 +71,39 @@ Die Engine startet beim ersten Gebrauch von selbst (lazy) und erzeugt ihr eigene
 | **Claude Desktop** _(App)_ | zieh die `.mcpb` aus der [neuesten Release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) auf Settings → Extensions und füge dein Token ein (`ygg token`) — die Desktop-App teilt sich dann dasselbe Gedächtnis wie deine CLI-Agents ([Anleitung](../packaging/mcpb/README.md)) |
 | **aus den Quellen** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-`ygg install` ist ein einmaliges, geführtes Setup: Es installiert einen immer aktiven Hintergrunddienst, registriert die MCP-Tools bei Claude Code und Codex und empfiehlt — wenn deine Hardware es hergibt — optionale lokale Modelle (oder wähle `none`, um konfigurationsfrei zu bleiben).
+`ygg install` ist ein einmaliges, geführtes Setup: Es installiert einen immer aktiven Hintergrunddienst, registriert die MCP-Tools bei jedem gefundenen Agent-Host — **Claude Code, Codex, OpenCode** — und empfiehlt, wenn deine Hardware es hergibt, optionale lokale Modelle (oder wähle `none`, um konfigurationsfrei zu bleiben).
+
+<details>
+<summary><b>OpenCode</b> — nichts zu konfigurieren</summary>
+
+Installiere zuerst [OpenCode](https://opencode.ai), dann führe `ygg install` aus (oder `ygg redeploy`, falls Yggdrasil schon eingerichtet ist) — der Eintrag wird automatisch erstellt und in ein bestehendes `opencode.json` gemergt. Prüfe es mit:
+
+```bash
+opencode mcp list        # -> ✓ yggdrasil connected
+```
+
+OpenCode *nach* Yggdrasil installiert? Führe einfach `ygg install` erneut aus.
+
+Willst du es lieber von Hand schreiben: OpenCodes Schema unterscheidet sich an gleich vier Stellen von dem von Claude — Server liegen unter `mcp` (nicht `mcpServers`), `type` ist erforderlich, `command` ist ein einzelnes Array (nicht `command` + `args`), und die Umgebung heißt `environment` (nicht `env`) — der Claude-Snippet lässt sich also nicht einfach übertragen:
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "yggdrasil": {
+      "type": "local",
+      "command": ["/path/to/python3", "~/.yggdrasil/scripts/ygg_mcp_server.py"],
+      "enabled": true,
+      "environment": { "YGG_ENGINE_URL": "http://127.0.0.1:42069" }
+    }
+  }
+}
+```
+
+Kein Token landet in der Konfiguration — die Engine liest die 0600-Datei `~/.yggdrasil/token` selbst. Führe `ygg doctor` aus, falls die Tools nicht auftauchen.
+
+</details>
 
 Für jede Claude-Oberfläche gibt es außerdem einen [`yggdrasil-memory`-Skill](../skills/): MCP verbindet die *Tools*, der Skill lehrt den Agent, *wann* er sie nutzen soll. Verwende beides für das beste Verhalten.
 
@@ -92,7 +124,7 @@ ygg seed --dry-run    # see what it would import; drop the flag to distill for r
 ## Warum
 
 - 🧠 **Persistent** — Entscheidungen, Erkenntnisse und Projektstatus überdauern jede Session.
-- 🔌 **Ein Gehirn, jedes Tool** — Claude Code, Codex und jeder MCP-Host teilen sich dasselbe Gedächtnis.
+- 🔌 **Ein Gehirn, jedes Tool** — Claude Code, Codex, OpenCode und jeder MCP-Host teilen sich dasselbe Gedächtnis.
 - 🌐 **Projektübergreifender Recall** — *„das sieht aus wie das, was du in Projekt B gemacht hast — wiederverwenden?“*
 - 🧹 **Kuratiert statt mitgeschnitten** — dein Agent speichert die wenigen Dinge, die zählen; die Governance dedupliziert und archiviert, löscht aber nie.
 - 🌱 **Selbstpflegend** *(opt-in)* — ein kleines lokales Modell konsolidiert das Gedächtnis im Hintergrund. Null API-Tokens.
@@ -129,9 +161,59 @@ Ollama *berechnet* nur Vektoren und führt das Hintergrundmodell aus — jede Er
 | Modell | Größe | Gut für |
 | --- | --- | --- |
 | `all-minilm` | 45 MB | Englisch, winzig & schnell |
-| `nomic-embed-text` | 274 MB | Englisch, bessere Qualität |
-| `paraphrase-multilingual` | ~560 MB | mehrsprachig (EN/RU + 50 Sprachen) |
+| `nomic-embed-text` | 274 MB | Englisch, bessere Qualität (768d) |
+| `mxbai-embed-large` | 670 MB | Englisch, hohe Qualität (1024d) |
+| `paraphrase-multilingual` | ~560 MB | mehrsprachig (EN/RU + 50 Sprachen, 768d) |
 | `bge-m3` | 1.2 GB | mehrsprachig, höchste Qualität (schwerer) |
+
+**Embedding-Backend** — standardmäßig Ollama. Um stattdessen einen OpenAI-kompatiblen `/v1/embeddings`-Server zu nutzen (`llama-server --embeddings` aus llama.cpp, OpenRouter, LM Studio, vLLM), setze `embed_backend`:
+
+```bash
+# local llama.cpp — no key needed
+ygg config set embed_backend openai
+ygg config set embed_url http://127.0.0.1:8080/v1
+ygg config set embed_model bge-small-en-v1.5
+ygg redeploy
+
+# OpenRouter — free embeddings, no GPU needed
+ygg config set embed_backend openai
+ygg config set embed_url https://openrouter.ai/api/v1
+ygg config set embed_model nvidia/llama-nemotron-embed-vl-1b-v2:free
+ygg config set embed_api_key sk-or-...    # or export YGG_EMBED_API_KEY
+ygg redeploy
+```
+
+Der Key wird in `~/.yggdrasil/embed_api_key` (0600) gespeichert statt in `config.json` und erreicht den Daemon als **Dateipfad** — so taucht er nie in `ps`, im launchd-plist oder in der systemd-Unit auf. `ygg config list` maskiert ihn.
+
+Prüfe mit `ygg doctor`, ob es angekommen ist — `dense` sollte dein Modell nennen:
+
+```
+✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
+```
+
+<details>
+<summary><b>OpenRouter: zwei Einstellungen, die dir auf die Füße fallen</b></summary>
+
+**1. Nutze einen Inference-Key, keinen Provisioning-Key.** Keys von [openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys) können nur andere Keys erzeugen — Embedding-Aufrufe damit liefern ein rätselhaftes `401 User not found`. Erstelle stattdessen einen normalen Key unter [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys).
+
+Beachte: `GET /api/v1/models` antwortet mit `200 OK` auf *jeden* Key, gültig oder nicht — die Auth wird komplett ignoriert, es sagt dir also nicht, ob dein Key funktioniert. Prüfe stattdessen mit `GET /api/v1/key`: Er liefert `is_provisioning_key` und schlägt bei einem ungültigen Key sofort fehl.
+
+**2. Privacy-Einstellungen blenden stillschweigend die meisten Modelle aus.** Antwortet ein Modell mit `404` und `All providers have been ignored`, ist das Modell in Ordnung — dein Konto filtert nur jeden Anbieter heraus, der es bereitstellt. Behebe das unter [openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy). Derselbe Filter erklärt auch, warum `openai/text-embedding-3-*` wegen der Nutzungsbedingungen eines Anbieters mit `403` zurückkommen kann.
+
+Was tatsächlich verfügbar ist, siehst du unter [openrouter.ai/models?output_modalities=embeddings](https://openrouter.ai/models?fmt=cards&output_modalities=embeddings) (26 Modelle zum Zeitpunkt des Schreibens). Nützliche Kandidaten:
+
+| Modell | Preis / 1M Tokens |
+| --- | --- |
+| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | **$0** |
+| `perplexity/pplx-embed-v1-0.6b` | $0.004 |
+| `intfloat/multilingual-e5-large` | $0.01 — mehrsprachig |
+| `google/gemini-embedding-2` | $0.20 |
+
+</details>
+
+Lokal zu bleiben gewinnt weiterhin bei Qualität *und* Privatsphäre: Auf dem Korpus aus 232 Erinnerungen / 110 Abfragen erreicht das lokale `paraphrase-multilingual` recall@1 **0.964** gegenüber **0.946** beim kostenlosen gehosteten Modell — und deine Erinnerungen verlassen nie die Maschine. Greif zu einem gehosteten Backend, wenn die Maschine kein Ollama stemmen kann, nicht auf der Jagd nach Genauigkeit.
+
+Größere Vektoren bringen hier **keine** bessere Genauigkeit — auf demselben Korpus erreicht `mxbai-embed-large` (1024d) 0.809 und `nomic-embed-text` (768d) 0.818, ein Unterschied, den ihre Konfidenzintervalle vollständig verschlucken. Was die Zahl wirklich bewegt, ist, ob das Modell *deine* Sprachen beherrscht: Beide sind rein englischsprachig und fallen bei sprachübergreifenden Abfragen auf 0.40–0.45 ab, während das mehrsprachige Standardmodell 0.95 hält.
 
 **Hintergrund-Konsolidierung (kleines LLM):**
 

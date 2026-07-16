@@ -71,7 +71,39 @@ El motor se inicia de forma diferida en el primer uso y genera su propio token l
 | **Claude Desktop** _(app)_ | arrastra el `.mcpb` desde la [última release](https://github.com/VonderVuflya/Yggdrasil/releases/latest) a Settings → Extensions, pega tu token (`ygg token`) — la app de escritorio pasa a compartir la misma memoria que tus agentes de CLI ([guía](../packaging/mcpb/README.md)) |
 | **desde el código fuente** | `uvx --from git+https://github.com/VonderVuflya/yggdrasil.git ygg install` |
 
-`ygg install` es una configuración guiada de una sola vez: instala un servicio en segundo plano siempre activo, registra las herramientas MCP con Claude Code y Codex y — si tu hardware lo permite — recomienda modelos locales opcionales (o elige `none` para seguir sin configurar nada).
+`ygg install` es una configuración guiada de una sola vez: instala un servicio en segundo plano siempre activo, registra las herramientas MCP con cada host de agentes que encuentra — **Claude Code, Codex, OpenCode** — y, si tu hardware lo permite, recomienda modelos locales opcionales (o elige `none` para seguir sin configurar nada).
+
+<details>
+<summary><b>OpenCode</b> — nada que configurar</summary>
+
+Instala [OpenCode](https://opencode.ai) primero y luego ejecuta `ygg install` (o `ygg redeploy` si Yggdrasil ya está configurado) — la entrada se escribe por ti y se fusiona con cualquier `opencode.json` existente. Confírmalo con:
+
+```bash
+opencode mcp list        # -> ✓ yggdrasil connected
+```
+
+¿Instalaste OpenCode *después* de Yggdrasil? Simplemente vuelve a ejecutar `ygg install`.
+
+Si prefieres escribirlo a mano, ten en cuenta que el esquema de OpenCode difiere del de Claude en cuatro sitios a la vez — los servidores viven bajo `mcp` (no `mcpServers`), `type` es obligatorio, `command` es un único array (no `command` + `args`), y el entorno es `environment` (no `env`), así que el fragmento de Claude no se puede reutilizar tal cual:
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "yggdrasil": {
+      "type": "local",
+      "command": ["/path/to/python3", "~/.yggdrasil/scripts/ygg_mcp_server.py"],
+      "enabled": true,
+      "environment": { "YGG_ENGINE_URL": "http://127.0.0.1:42069" }
+    }
+  }
+}
+```
+
+Ningún token va en la configuración — el propio motor lee el `~/.yggdrasil/token` con permisos 0600. Ejecuta `ygg doctor` si las herramientas no aparecen.
+
+</details>
 
 También hay una [skill `yggdrasil-memory`](../skills/) para cualquier superficie de Claude: MCP conecta las *herramientas*, la skill enseña al agente *cuándo* usarlas. Usa ambas para el mejor comportamiento.
 
@@ -92,7 +124,7 @@ ygg seed --dry-run    # see what it would import; drop the flag to distill for r
 ## Por qué
 
 - 🧠 **Persistente** — las decisiones, las lecciones y el estado del proyecto sobreviven entre sesiones.
-- 🔌 **Un cerebro, todas las herramientas** — Claude Code, Codex y cualquier host MCP comparten la misma memoria.
+- 🔌 **Un cerebro, todas las herramientas** — Claude Code, Codex, OpenCode y cualquier host MCP comparten la misma memoria.
 - 🌐 **Recuerdo entre proyectos** — *"esto se parece a lo que hiciste en el proyecto B — ¿lo reutilizamos?"*
 - 🧹 **Curada, no capturada** — tu agente guarda las pocas cosas que importan; la gobernanza deduplica y archiva, nunca borra.
 - 🌱 **Automantenida** *(opcional)* — un pequeño modelo local consolida la memoria en segundo plano. Cero tokens de API.
@@ -129,9 +161,82 @@ Ollama solo *calcula* los vectores y ejecuta el modelo en segundo plano — cada
 | Modelo | Tamaño | Bueno para |
 | --- | --- | --- |
 | `all-minilm` | 45 MB | inglés, diminuto y rápido |
-| `nomic-embed-text` | 274 MB | inglés, mejor calidad |
-| `paraphrase-multilingual` | ~560 MB | multilingüe (EN/RU + 50 idiomas) |
+| `nomic-embed-text` | 274 MB | inglés, mejor calidad (768d) |
+| `mxbai-embed-large` | 670 MB | inglés, alta calidad (1024d) |
+| `paraphrase-multilingual` | ~560 MB | multilingüe (EN/RU + 50 idiomas, 768d) |
 | `bge-m3` | 1.2 GB | multilingüe, máxima calidad (más pesado) |
+
+**Backend de embeddings** — Ollama por defecto. Para usar en su lugar un servidor `/v1/embeddings` compatible con OpenAI (el `llama-server --embeddings` de llama.cpp, OpenRouter, LM Studio, vLLM), configura `embed_backend`:
+
+```bash
+# local llama.cpp — no key needed
+ygg config set embed_backend openai
+ygg config set embed_url http://127.0.0.1:8080/v1
+ygg config set embed_model bge-small-en-v1.5
+ygg redeploy
+
+# OpenRouter — free embeddings, no GPU needed
+ygg config set embed_backend openai
+ygg config set embed_url https://openrouter.ai/api/v1
+ygg config set embed_model nvidia/llama-nemotron-embed-vl-1b-v2:free
+ygg config set embed_api_key sk-or-...    # or export YGG_EMBED_API_KEY
+ygg redeploy
+```
+
+La clave se guarda en `~/.yggdrasil/embed_api_key` (0600) en lugar de en `config.json`, y llega al daemon como una **ruta de archivo** — así que nunca aparece en `ps`, en el plist de launchd ni en la unidad de systemd. `ygg config list` la enmascara.
+
+Comprueba que se aplicó con `ygg doctor` — dense debería mostrar el nombre de tu modelo:
+
+```
+✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
+```
+
+<details>
+<summary><b>OpenRouter: dos ajustes que te van a morder</b></summary>
+
+**1. Usa una clave de inferencia, no una clave de aprovisionamiento.** Las claves de
+[openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys)
+solo sirven para generar otras claves — las llamadas de embeddings con una de ellas
+devuelven un desconcertante `401 User not found`. Crea en su lugar una clave normal en
+[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys).
+
+Ten en cuenta que `GET /api/v1/models` responde `200 OK` para *cualquier* clave, válida
+o no — ignora la autenticación por completo, así que no puede decirte si tu clave
+funciona. Comprueba en su lugar `GET /api/v1/key`: devuelve `is_provisioning_key`, y
+falla directamente con una clave inválida.
+
+**2. Los ajustes de privacidad ocultan la mayoría de los modelos sin avisar.** Si un
+modelo da un 404 con `All providers have been ignored`, el modelo está bien — tu cuenta
+está filtrando a todos los proveedores que lo ofrecen. Arréglalo en
+[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy).
+Ese mismo filtro es también la razón por la que `openai/text-embedding-3-*` puede
+devolver `403` por los términos de servicio de un proveedor.
+
+Explora lo que hay realmente disponible en
+[openrouter.ai/models?output_modalities=embeddings](https://openrouter.ai/models?fmt=cards&output_modalities=embeddings)
+(26 modelos en el momento de escribir esto). Algunos útiles:
+
+| Modelo | Precio / 1M tokens |
+| --- | --- |
+| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | **$0** |
+| `perplexity/pplx-embed-v1-0.6b` | $0.004 |
+| `intfloat/multilingual-e5-large` | $0.01 — multilingüe |
+| `google/gemini-embedding-2` | $0.20 |
+
+</details>
+
+Quedarte en local sigue ganando en calidad *y* privacidad: en el corpus de 232 memorias
+/ 110 consultas, el `paraphrase-multilingual` local obtiene un recall@1 de **0.964**
+frente a **0.946** del modelo alojado gratuito — y tus memorias nunca salen de la
+máquina. Recurre a un backend alojado cuando la máquina no pueda ejecutar Ollama, no
+para perseguir precisión.
+
+Vectores más grandes **no** compran precisión aquí — en el mismo corpus,
+`mxbai-embed-large` (1024d) obtiene 0.809 y `nomic-embed-text` (768d) 0.818, una
+diferencia que sus intervalos de confianza se tragan por completo. Lo que realmente
+mueve la cifra es si el modelo maneja *tus* idiomas: ambos son solo-inglés y caen a
+0.40–0.45 en consultas entre idiomas, donde el modelo multilingüe por defecto se
+mantiene en 0.95.
 
 **Consolidación en segundo plano (LLM pequeño):**
 
