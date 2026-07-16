@@ -268,6 +268,62 @@ def claude_json_entry() -> dict:
     }
 
 
+def opencode_config_path() -> Path:
+    """Global OpenCode config. Honours XDG_CONFIG_HOME, which OpenCode reads too."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "opencode" / "opencode.json"
+
+
+def opencode_json_entry() -> dict:
+    """The MCP entry as OpenCode wants it — a DIFFERENT shape from Claude's.
+
+    OpenCode nests servers under `mcp` (not `mcpServers`), requires an explicit
+    `type`, takes the command as ONE array (not command + args), and names the
+    env block `environment`. Four gratuitous differences, which is exactly why
+    this is generated rather than left to the user to hand-copy.
+
+    No token here either — ygg_core reads the 0600 token file at call time.
+    """
+    return {
+        "type": "local",
+        "command": [_python(), str(_mcp_py())],
+        "enabled": True,
+        "environment": {"YGG_ENGINE_URL": URL},
+    }
+
+
+def _register_opencode_json() -> bool:
+    """Register with OpenCode by writing its global opencode.json.
+
+    `opencode mcp add` exists but prompts for the command interactively, so the
+    file is the only non-interactive path. Merges into any existing config (with
+    a .ygg.bak backup) — a user's providers/agents/keybinds must survive this.
+    """
+    path = opencode_config_path()
+    try:
+        cfg = json.loads(path.read_text()) if path.exists() else {}
+    except ValueError:
+        return False  # hand-edited into invalid JSON — don't clobber it
+    if not isinstance(cfg, dict):
+        return False
+    if path.exists():
+        try:
+            shutil.copy2(path, str(path) + ".ygg.bak")
+        except OSError:
+            pass
+    cfg.setdefault("$schema", "https://opencode.ai/config.json")
+    mcp = cfg.setdefault("mcp", {})
+    if not isinstance(mcp, dict):
+        return False
+    mcp["yggdrasil"] = opencode_json_entry()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cfg, indent=2) + "\n")
+    except OSError:
+        return False
+    return True
+
+
 def _register_claude_json() -> bool:
     """Write the MCP server straight into ~/.claude.json.
 
@@ -327,6 +383,10 @@ def register_mcp() -> list[str]:
             capture_output=True, text=True)
         if r.returncode == 0:
             done.append("Codex")
+    # OpenCode: detected by its binary, or by a config dir left from a prior run.
+    if shutil.which("opencode") or opencode_config_path().parent.is_dir():
+        if _register_opencode_json():
+            done.append("OpenCode")
     return done
 
 
@@ -343,6 +403,16 @@ def unregister_mcp() -> None:
             if isinstance(cfg, dict) and "yggdrasil" in cfg.get("mcpServers", {}):
                 del cfg["mcpServers"]["yggdrasil"]
                 path.write_text(json.dumps(cfg, indent=2))
+        except (OSError, ValueError):
+            pass
+    # Same for OpenCode — remove OUR entry only, leave the rest of their config.
+    oc = opencode_config_path()
+    if oc.exists():
+        try:
+            cfg = json.loads(oc.read_text())
+            if isinstance(cfg, dict) and "yggdrasil" in cfg.get("mcp", {}):
+                del cfg["mcp"]["yggdrasil"]
+                oc.write_text(json.dumps(cfg, indent=2) + "\n")
         except (OSError, ValueError):
             pass
 

@@ -1,3 +1,5 @@
+import json
+import os
 import pathlib
 import shutil
 import sys
@@ -55,6 +57,74 @@ class TestServiceGenerators(unittest.TestCase):
         self.assertIn("--token-file", argv)
         self.assertNotIn("--token", argv)
         self.assertNotIn("sekret-tok", argv)
+
+
+class TestOpenCodeRegistration(unittest.TestCase):
+    """OpenCode's MCP schema differs from Claude's in four ways (mcp vs
+    mcpServers, explicit type, command-as-one-array, environment vs env) — the
+    generated entry must match OpenCode's, and must never eat a user's config."""
+
+    def setUp(self):
+        self.cfgdir = pathlib.Path(tempfile.mkdtemp())
+        os.environ["XDG_CONFIG_HOME"] = str(self.cfgdir)
+
+    def tearDown(self):
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        shutil.rmtree(self.cfgdir, ignore_errors=True)
+
+    def test_entry_uses_opencode_schema_not_claude_schema(self):
+        e = service.opencode_json_entry()
+        self.assertEqual(e["type"], "local")
+        self.assertIsInstance(e["command"], list)      # ONE array, not command+args
+        self.assertGreaterEqual(len(e["command"]), 2)
+        self.assertIn("environment", e)                 # not "env"
+        self.assertNotIn("args", e)
+        self.assertNotIn("env", e)
+
+    def test_entry_carries_no_token(self):
+        """The token lives in the 0600 file; configs get synced and backed up."""
+        self.assertNotIn("YGG_ENGINE_TOKEN", service.opencode_json_entry()["environment"])
+
+    def test_path_honours_xdg(self):
+        self.assertEqual(service.opencode_config_path(),
+                         self.cfgdir / "opencode" / "opencode.json")
+
+    def test_writes_under_mcp_key(self):
+        self.assertTrue(service._register_opencode_json())
+        cfg = json.loads(service.opencode_config_path().read_text())
+        self.assertIn("yggdrasil", cfg["mcp"])
+        self.assertNotIn("mcpServers", cfg)
+
+    def test_merges_and_backs_up_existing_config(self):
+        path = service.opencode_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "model": "openrouter/some/model",
+            "mcp": {"other-server": {"type": "local", "command": ["x"]}},
+        }))
+        self.assertTrue(service._register_opencode_json())
+        cfg = json.loads(path.read_text())
+        self.assertEqual(cfg["model"], "openrouter/some/model")   # user setting survives
+        self.assertIn("other-server", cfg["mcp"])                 # their server survives
+        self.assertIn("yggdrasil", cfg["mcp"])
+        self.assertTrue(pathlib.Path(str(path) + ".ygg.bak").exists())
+
+    def test_refuses_to_clobber_invalid_json(self):
+        path = service.opencode_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ this is not json")
+        self.assertFalse(service._register_opencode_json())
+        self.assertEqual(path.read_text(), "{ this is not json")  # left untouched
+
+    def test_unregister_removes_only_our_entry(self):
+        path = service.opencode_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mcp": {"other-server": {"type": "local", "command": ["x"]}}}))
+        service._register_opencode_json()
+        service.unregister_mcp()
+        cfg = json.loads(path.read_text())
+        self.assertNotIn("yggdrasil", cfg["mcp"])
+        self.assertIn("other-server", cfg["mcp"])
 
 
 class TestEngineArgvEmbedBackend(unittest.TestCase):
