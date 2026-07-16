@@ -111,6 +111,16 @@ def engine_argv(tok: str, embed_model: str = "") -> list[str]:  # noqa: ARG001 â
             "--token-file", str(TOKEN_FILE)]
     if embed_model:
         argv += ["--embed-model", embed_model]
+    # url/backend are non-secret, so they ride on argv (config.json -> daemon).
+    # The api key does NOT â€” it would leak into `ps` and the plist/unit; the
+    # engine reads it from the inherited YGG_EMBED_API_KEY/OPENROUTER_API_KEY env.
+    cfg = _config()
+    embed_url = cfg.get("embed_url")
+    if embed_url:
+        argv += ["--embed-url", str(embed_url)]
+    embed_backend = cfg.get("embed_backend")
+    if embed_backend and str(embed_backend).lower() != "ollama":
+        argv += ["--embed-backend", str(embed_backend)]
     return argv
 
 

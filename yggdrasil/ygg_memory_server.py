@@ -45,9 +45,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 try:
-    from .ygg_embeddings import OllamaEmbedder, cosine
+    from .ygg_embeddings import OllamaEmbedder, OpenAIEmbedder, cosine
 except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
-    from ygg_embeddings import OllamaEmbedder, cosine
+    from ygg_embeddings import OllamaEmbedder, OpenAIEmbedder, cosine
 
 try:
     from . import ygg_config as _cfg
@@ -1459,7 +1459,14 @@ def main() -> int:
     parser.add_argument("--embed-model", default=os.environ.get("YGG_EMBED_MODEL"),
                         help="Embedding model for dense search (e.g. all-minilm). Default: off (lexical).")
     parser.add_argument("--embed-url", default=os.environ.get("YGG_EMBED_URL", "http://127.0.0.1:11434"),
-                        help="Ollama base URL for embeddings.")
+                        help="Embeddings base URL. Ollama: http://host:11434. "
+                             "openai backend: the /v1 base (llama.cpp http://host:8080/v1, "
+                             "OpenRouter https://openrouter.ai/api/v1).")
+    parser.add_argument("--embed-backend", default=os.environ.get("YGG_EMBED_BACKEND", "ollama"),
+                        help="Embedding wire protocol: ollama (/api/embeddings) or openai (/v1/embeddings).")
+    parser.add_argument("--embed-api-key",
+                        default=os.environ.get("YGG_EMBED_API_KEY") or os.environ.get("OPENROUTER_API_KEY", ""),
+                        help="Bearer key for the openai backend (e.g. OpenRouter). Empty for local llama-server.")
     args = parser.parse_args()
 
     if args.reset and os.path.exists(args.db):
@@ -1469,7 +1476,14 @@ def main() -> int:
             except FileNotFoundError:
                 pass
 
-    embedder = OllamaEmbedder(args.embed_url, args.embed_model) if args.embed_model else None
+    embedder = None
+    if args.embed_model:
+        if (args.embed_backend or "ollama").strip().lower() in (
+            "openai", "openai-compatible", "llamacpp", "llama.cpp", "openrouter"
+        ):
+            embedder = OpenAIEmbedder(args.embed_url, args.embed_model, args.embed_api_key or "")
+        else:
+            embedder = OllamaEmbedder(args.embed_url, args.embed_model)
     store = MemoryStore(args.db, embedder=embedder)
     Handler.store = store
     tok = args.token

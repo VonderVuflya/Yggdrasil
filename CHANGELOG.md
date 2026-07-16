@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **OpenAI-compatible embedding backend.** Dense search can now run against any
+  `/v1/embeddings` server — llama.cpp's `llama-server --embeddings`, OpenRouter,
+  LM Studio, vLLM — not just Ollama. Set `embed_backend openai` and point
+  `embed_url` at the `/v1` base; `YGG_EMBED_API_KEY` (or `OPENROUTER_API_KEY`)
+  carries the Bearer token for hosted providers, and a local llama-server needs
+  no key. The key flows via env only — never argv/plist/`ps`. Ollama stays the
+  default; nothing changes for existing installs.
+  - Verified end-to-end against a real `llama-server` (bge-small, 384d): a
+    paraphrased query with zero shared words retrieved the right memory at rank 1.
+  - `embed_url`/`embed_backend` propagate from `config.json` to the daemon via
+    `engine_argv`, so a service install honors them without a manual env export.
+
 ## [0.11.0] — 2026-07-15 — identity migration + dense-search fixes (BREAKING)
 
 Retire the demo-heritage identity so real memory no longer lives under a

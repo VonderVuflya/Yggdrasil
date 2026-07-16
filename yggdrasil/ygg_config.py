@@ -53,7 +53,15 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "embed_model": (("YGG_EMBED_MODEL",), "",
                     "Embedding model (daemon-level; change needs `ygg redeploy`)."),
     "embed_url": (("YGG_EMBED_URL",), "http://127.0.0.1:11434",
-                  "Embeddings endpoint — keep local (daemon-level; needs `ygg redeploy`)."),
+                  "Embeddings endpoint — keep local (daemon-level; needs `ygg redeploy`). "
+                  "For the openai backend use the /v1 base, e.g. http://127.0.0.1:8080/v1 "
+                  "(llama.cpp) or https://openrouter.ai/api/v1 (OpenRouter)."),
+    "embed_backend": (("YGG_EMBED_BACKEND",), "ollama",
+                      "Embedding wire protocol: `ollama` (/api/embeddings) or `openai` "
+                      "(/v1/embeddings — llama.cpp, OpenRouter, LM Studio, vLLM)."),
+    "embed_api_key": (("YGG_EMBED_API_KEY", "OPENROUTER_API_KEY"), "",
+                      "Bearer key for the openai backend (e.g. OpenRouter). "
+                      "Empty for a local llama-server."),
     "user_id": (("YGG_USER_ID",), DEFAULT_USER_ID, "Identity stored memories are written under."),
     "namespace": (("YGG_NAMESPACE",), DEFAULT_NAMESPACE, "Memory namespace."),
     "sync_repo": (("YGG_SYNC_REPO",), "",

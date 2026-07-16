@@ -130,9 +130,27 @@ Ollama only *computes* vectors and runs the background model — every memory an
 | Model | Size | Good for |
 | --- | --- | --- |
 | `all-minilm` | 45 MB | English, tiny & fast |
-| `nomic-embed-text` | 274 MB | English, better quality |
-| `paraphrase-multilingual` | ~560 MB | multilingual (EN/RU + 50 langs) |
+| `nomic-embed-text` | 274 MB | English, better quality (768d) |
+| `mxbai-embed-large` | 670 MB | English, high quality (1024d) |
+| `paraphrase-multilingual` | ~560 MB | multilingual (EN/RU + 50 langs, 768d) |
 | `bge-m3` | 1.2 GB | multilingual, top quality (heavier) |
+
+**Embedding backend** — Ollama by default. To use an OpenAI-compatible
+`/v1/embeddings` server instead (llama.cpp's `llama-server --embeddings`,
+OpenRouter, LM Studio, vLLM), set `embed_backend`:
+
+```bash
+# local llama.cpp — no key
+ygg config set embed_backend openai
+ygg config set embed_url http://127.0.0.1:8080/v1
+ygg config set embed_model bge-small-en-v1.5
+
+# OpenRouter — key via env (never written to config/argv/ps)
+ygg config set embed_backend openai
+ygg config set embed_url https://openrouter.ai/api/v1
+ygg config set embed_model openai/text-embedding-3-small
+export YGG_EMBED_API_KEY=sk-or-...   # or OPENROUTER_API_KEY
+```
 
 **Background consolidation (small LLM):**
 
