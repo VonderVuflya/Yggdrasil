@@ -15,6 +15,12 @@ All notable changes to this project are documented here. Format loosely follows
   default; nothing changes for existing installs.
   - Verified end-to-end against a real `llama-server` (bge-small, 384d): a
     paraphrased query with zero shared words retrieved the right memory at rank 1.
+  - Verified live against OpenRouter on the 232-memory / 110-query corpus with
+    the free `nvidia/llama-nemotron-embed-vl-1b-v2:free` (2048d, $0): recall@1
+    **0.946** (CI95 0.900–0.982), crosslingual **1.00** — statistically level
+    with the local `paraphrase-multilingual` default (0.964, CI95 0.927–0.991).
+    A useful escape hatch for a box that can't run Ollama; the local default
+    still wins on privacy, which is the point of the project.
   - `embed_url`/`embed_backend` propagate from `config.json` to the daemon via
     `engine_argv`, so a service install honors them without a manual env export.
 
