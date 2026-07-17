@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [0.12.1] — 2026-07-17 — fix: `ygg install` no longer eats your settings
+## [Unreleased]
 
 ### Changed
 - **The memory citation now reads `🌳 from memory:` instead of `🌳 recalled:`.**
@@ -14,6 +14,8 @@ All notable changes to this project are documented here. Format loosely follows
   `quality`): the tree carries the brand, plain words carry the meaning. The
   injected prompt copy was trimmed to match, and now has tests — it is the one
   piece of Yggdrasil copy a user reads on every single prompt.
+
+## [0.12.1] — 2026-07-17 — fix: `ygg install` no longer eats your settings
 
 ### Fixed
 - **The setup wizard overwrote `config.json` instead of merging into it**, so
