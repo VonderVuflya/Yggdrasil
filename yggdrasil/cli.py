@@ -580,6 +580,21 @@ def _update() -> int:
 
 
 def main() -> int:
+    """Entry point (`ygg`). Wraps _run so ctrl-c leaves like a CLI, not a crash.
+
+    Backing out of the wizard is a normal thing to do — the menu says `ctrl-c
+    quit` — and it printed a traceback, which reads as "you broke it". The
+    wrapper lives here rather than under __main__ because pyproject points the
+    console script straight at cli:main.
+    """
+    try:
+        return _run()
+    except KeyboardInterrupt:
+        print("\naborted", file=sys.stderr)
+        return 130          # conventional shell exit code for SIGINT
+
+
+def _run() -> int:
     argv = sys.argv[1:]
     cmd = argv[0] if argv else "help"
     rest = argv[1:]

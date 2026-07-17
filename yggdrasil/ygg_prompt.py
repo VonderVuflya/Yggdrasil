@@ -49,24 +49,29 @@ def interactive(inp=None, out=None) -> bool:
 # --------------------------------------------------------------------------- #
 
 def _read_key_posix() -> str:
+    """Read one keypress from the fd — never through sys.stdin.
+
+    sys.stdin is a TextIOWrapper: read(1) pulls a whole os.read(fd, 8192) into
+    ITS buffer and hands back one character. An arrow (ESC [ A, three bytes)
+    therefore lands entirely in that buffer, and the select() that looks for the
+    rest polls the *descriptor*, which is now empty — so every arrow decoded as
+    a lone ESC. Reading the fd directly keeps the bytes where select can see them.
+    """
+    import select as _select
     import termios
     import tty
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
+        ch = os.read(fd, 1).decode("utf-8", "replace")
         if ch != _ESC:
             return ch
-        # An escape sequence (arrows) arrives as ESC [ A. A LONE esc (quit) has
-        # nothing behind it — peek with a zero timeout instead of blocking.
-        import select as _select
-        if not _select.select([sys.stdin], [], [], 0.05)[0]:
+        # ESC with nothing behind it is a real lone ESC; ESC [ A is an arrow.
+        if not _select.select([fd], [], [], 0.05)[0]:
             return _ESC
-        rest = sys.stdin.read(1)
-        if rest != "[":
-            return _ESC
-        return _ESC + "[" + sys.stdin.read(1)
+        rest = os.read(fd, 2).decode("utf-8", "replace")
+        return _ESC + rest if rest.startswith("[") else _ESC
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 

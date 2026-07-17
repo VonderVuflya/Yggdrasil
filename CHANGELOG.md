@@ -8,6 +8,18 @@ All notable changes to this project are documented here. Format loosely follows
 0.13.0 made the installer ask the right questions; this makes the settings it
 writes legible afterwards.
 
+### Fixed
+- **Arrow keys crashed the setup wizard.** Every ↑/↓ aborted `ygg install` with
+  a `KeyboardInterrupt` traceback, so 0.13.0's wizard was unusable the moment
+  you tried to move the cursor. `sys.stdin` is a TextIOWrapper: `read(1)` pulls
+  a whole `os.read(fd, 8192)` into *its* buffer, so an arrow's three bytes
+  (`ESC [ A`) landed there entirely — and the `select()` looking for the rest
+  polls the descriptor, which was now empty. Every arrow therefore decoded as a
+  lone ESC, which meant quit. Keys are read from the fd directly now.
+- **ctrl-c leaves like a CLI, not a crash.** Backing out of the wizard printed a
+  traceback — for an action the menu itself advertises. It exits with `aborted`
+  and code 130.
+
 ### Changed
 - **`ygg config` is readable.** It printed twelve settings and twenty-four lines
   of help as one unbroken wall, so finding the one you came for meant reading
