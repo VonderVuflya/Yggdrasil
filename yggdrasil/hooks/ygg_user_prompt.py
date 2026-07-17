@@ -7,7 +7,7 @@ agent's faster-feeling default (just grep / just ask). This hook removes the
 decision: on EVERY user prompt it runs a cross-project recall and injects the
 top matches as `additionalContext`, so relevant prior lessons are already in
 front of the agent without it choosing to look. It also asks the agent to CITE
-what it reused (`🌳 recalled: …`) — the visible breadcrumb that earns user trust.
+what it reused (`🌳 from memory: …`) — the visible breadcrumb that earns user trust.
 
 Fail-safe + cheap by design: trivial prompts are skipped, only genuinely-relevant
 hits (cosine gate) are injected, and any error prints nothing and exits 0.
@@ -129,9 +129,14 @@ def main() -> int:
         return 0  # inject nothing rather than noise
 
     lines = [
-        "🌳 Possibly relevant from the user's durable memory (auto-recalled for THIS request).",
-        "Reuse it if it applies — and when you do, cite it inline as `🌳 recalled: <gist>` so the",
-        "user can see the memory working. Verify against the actual code; memory can be stale.",
+        # The citation marker is deliberately plain: `recalled` was the ygg_recall
+        # API verb leaking into a line a HUMAN reads, and it described what the
+        # machine did rather than what the reader needs to know — that the claim
+        # came from their own memory, not from the agent guessing. The 🌳 carries
+        # the brand (it marks every ygg surface); the words carry the meaning.
+        "🌳 From the user's saved memory — possibly relevant to this request.",
+        "If you use one, mark it inline as `🌳 from memory: <gist>` so they can see where",
+        "it came from. Verify against the actual code first; memory can be stale.",
     ]
     for it in hits:
         meta = it.get("metadata") or {}

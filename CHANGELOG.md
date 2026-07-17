@@ -5,6 +5,16 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [0.12.1] — 2026-07-17 — fix: `ygg install` no longer eats your settings
 
+### Changed
+- **The memory citation now reads `🌳 from memory:` instead of `🌳 recalled:`.**
+  `recalled` was `ygg_recall`'s API verb leaking into a line a human reads, and
+  it announced what the machine did rather than the thing the reader needs — that
+  the claim came from their own memory instead of the agent guessing. It also
+  broke the convention every other surface follows (`🌳 Yggdrasil doctor`, `seed`,
+  `quality`): the tree carries the brand, plain words carry the meaning. The
+  injected prompt copy was trimmed to match, and now has tests — it is the one
+  piece of Yggdrasil copy a user reads on every single prompt.
+
 ### Fixed
 - **The setup wizard overwrote `config.json` instead of merging into it**, so
   re-running `ygg install` — routine when switching models or re-installing —
