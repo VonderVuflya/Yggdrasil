@@ -392,9 +392,29 @@ _HTTP_HEADERS = {"Content-Type": "application/json",
                  "User-Agent": f"yggdrasil/{_VERSION}"}
 
 
+def _headers() -> dict[str, str]:
+    """Request headers, with a Bearer token when the distill endpoint is hosted.
+
+    Distillation has spoken the OpenAI dialect since 0.7.1, but never sent an
+    Authorization header — so pointing `distill_url` at OpenRouter probed
+    /api/generate and /api/chat (404, swallowed), then hit /v1/chat/completions
+    and raised a bare 401 that named neither the key nor the cause. Resolved per
+    call, not at import, so `ygg config set distill_api_key` takes effect on the
+    next run instead of the next process.
+    """
+    h = dict(_HTTP_HEADERS)
+    try:
+        key = _cfg.resolve("distill_api_key")
+    except Exception:  # noqa: BLE001 — a config problem must never block a local seed
+        key = ""
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
+
+
 def _post_json(url: str, body: dict, timeout: int) -> dict:
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers=dict(_HTTP_HEADERS), method="POST")
+                                 headers=_headers(), method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -423,7 +443,7 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
     the total deadline. `total` is a belt-and-suspenders overall wall cap.
     Returns (text, finish_reason)."""
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers=dict(_HTTP_HEADERS), method="POST")
+                                 headers=_headers(), method="POST")
     parts: list[str] = []
     finish: str | None = None
     start = time.monotonic()
@@ -487,7 +507,13 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
             return (f"{OLLAMA_URL}/api/chat", "ollama_chat",
                     {"model": model, "messages": [{"role": "user", "content": prompt}],
                      "format": "json", "options": {"num_ctx": DISTILL_NUM_CTX}})
-        return (f"{OLLAMA_URL}/v1/chat/completions", "openai",
+        # Tolerate a base that already ends in /v1. `embed_url` wants the /v1
+        # base (…/api/v1) while this one wants the host root, so the same
+        # provider needs two different URLs across two settings — nobody will
+        # remember which is which, and the punishment is a 404 from a doubled
+        # /v1/v1 that looks like the endpoint is simply wrong.
+        root = OLLAMA_URL[:-3].rstrip("/") if OLLAMA_URL.rstrip("/").endswith("/v1") else OLLAMA_URL
+        return (f"{root}/v1/chat/completions", "openai",
                 {"model": model, "messages": [{"role": "user", "content": prompt}]})
 
     def extract(mode: str, data: dict) -> tuple[str, str | None]:
@@ -529,6 +555,17 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
             if exc.code == 404:  # dialect not implemented here — try the next
                 last_404 = exc
                 continue
+            if exc.code in (401, 403):
+                # Name the cause. A hosted endpoint answers the probe with a bare
+                # 401, which says nothing about the missing key — and the two
+                # dialects tried before it 404'd and were swallowed, so the
+                # traceback points at /v1/chat/completions for no obvious reason.
+                raise RuntimeError(
+                    f"{OLLAMA_URL} rejected the request ({exc.code}). A hosted distill "
+                    f"endpoint needs an API key:\n"
+                    f"  ygg config set distill_api_key <key>   (or export YGG_DISTILL_API_KEY)\n"
+                    f"Local Ollama / llama.cpp need no key — check `ygg config get distill_url`."
+                ) from exc
             raise
     if last_404:
         raise last_404

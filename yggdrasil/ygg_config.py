@@ -27,7 +27,9 @@ CONFIG = YGG_HOME / "config.json"
 # is handed the PATH, never the value, so the key stays out of `ps`, the launchd
 # plist and the systemd unit — the same trick already used for the auth token.
 EMBED_KEY_FILE = YGG_HOME / "embed_api_key"
-SECRET_FILES: dict[str, Path] = {"embed_api_key": EMBED_KEY_FILE}
+DISTILL_KEY_FILE = YGG_HOME / "distill_api_key"
+SECRET_FILES: dict[str, Path] = {"embed_api_key": EMBED_KEY_FILE,
+                                 "distill_api_key": DISTILL_KEY_FILE}
 
 # Default identity that stored memories are written under. FIXED literals on
 # purpose: `ygg sync` keys memory by (user_id, namespace) across a user's
@@ -51,6 +53,9 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
                     "Point at a beefier box, e.g. http://192.168.3.124:11434."),
     "distill_timeout": (("YGG_DISTILL_TIMEOUT",), "120",
                         "Per-file distill timeout in seconds (raise for big sessions)."),
+    "distill_api_key": (("YGG_DISTILL_API_KEY", "OPENROUTER_API_KEY"), "",
+                        "Bearer key for a hosted distill endpoint (e.g. OpenRouter). "
+                        "Empty for local Ollama / llama.cpp."),
     "distill_num_ctx": (("YGG_DISTILL_NUM_CTX",), "8192",
                         "Context window (tokens) requested from the distill model. Without "
                         "this Ollama uses ITS default (often 4096) and silently truncates "

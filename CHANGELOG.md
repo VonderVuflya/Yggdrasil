@@ -6,6 +6,24 @@ All notable changes to this project are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Changed
+### Added
+- **`ygg seed` can distill through a hosted endpoint.** `ygg config set
+  distill_api_key <key>` (or `YGG_DISTILL_API_KEY` / `OPENROUTER_API_KEY`) sends
+  a Bearer token with the distill request. Distillation has spoken the OpenAI
+  dialect since 0.7.1 but never authenticated, so 0.12.0's "point Yggdrasil at
+  OpenRouter" applied to embeddings only — the same URL under `distill_url`
+  failed. The key is stored like the others: its own 0600 file, masked in
+  `ygg config list`, never in `config.json`.
+  - **`401`/`403` now name the cause** instead of surfacing a bare HTTPError
+    from `/v1/chat/completions` — the two Ollama dialects probed first return
+    404 and are swallowed, so the traceback pointed at an endpoint the user
+    never configured.
+  - **A `distill_url` ending in `/v1` is accepted.** `embed_url` wants the /v1
+    base and `distill_url` wants the host root, so one provider needs two
+    different URLs; copying the wrong one built `/v1/v1` and 404'd, which reads
+    like a broken endpoint rather than a typo.
+
+### Changed
 - **The update nudge now reads like context-mode's**, on its own line:
   `⚠️ Yggdrasil v0.12.0 outdated → v0.12.1 available. Upgrade: /ygg-upgrade`.
   It used to bury both versions in a sentence and point at `ygg update` even
