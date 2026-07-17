@@ -82,6 +82,30 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
 }
 
 
+# Display grouping. SETTINGS is keyed by precedence machinery, which is the
+# wrong order to READ in: `ygg config` used to print twelve keys and twenty-four
+# lines of help as one wall, so finding the one you came for meant scanning all
+# of it. Group by the job the setting does, in the order a user meets them.
+GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Embeddings — dense/semantic search",
+     ("embed_model", "embed_backend", "embed_url", "embed_api_key")),
+    ("Distillation — `ygg seed`, consolidation",
+     ("bg_model", "distill_url", "distill_api_key", "distill_timeout", "distill_num_ctx")),
+    ("Identity — who memories belong to",
+     ("user_id", "namespace")),
+    ("Sync — cross-machine, no cloud",
+     ("sync_repo",)),
+)
+
+
+def grouped() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """GROUPS, with any setting missing from it appended under 'Other', so a new
+    key can never silently vanish from `ygg config`."""
+    seen = {k for _, keys in GROUPS for k in keys}
+    rest = tuple(k for k in SETTINGS if k not in seen)
+    return GROUPS + ((("Other", rest),) if rest else ())
+
+
 def load() -> dict:
     try:
         d = json.loads(CONFIG.read_text())

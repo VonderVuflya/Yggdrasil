@@ -38,7 +38,7 @@ Setup & service:
   ygg doctor             Diagnose the installation (engine, models, MCP, hook)
   ygg register           (Re)register the MCP server with Claude Code / Codex
   ygg reindex            Backfill embeddings for memories missing them (dense recall)
-  ygg config             Show/set persistent settings (list | get | set | unset)
+  ygg config             Show/set persistent settings (list [-v] | edit | get | set | unset)
   ygg update             Upgrade to the latest published version, then redeploy
   ygg redeploy           Redeploy the installed code into the daemon (no upgrade)
   ygg status | start | stop | restart | logs | token | uninstall
@@ -313,24 +313,104 @@ def _reindex() -> int:
     return 0
 
 
+def _wrap(text: str, width: int, indent: str) -> list[str]:
+    import textwrap
+    return textwrap.wrap(text, width=width, initial_indent=indent, subsequent_indent=indent)
+
+
+def _config_row(C, key: str, p, width: int = 30) -> str:
+    """One setting: name, effective value, where it came from. Secrets masked."""
+    val = C.resolve(key)
+    src = C.source(key)
+    shown = C.display(key, val) if val != "" else p.dim("—")
+    # Colour by source, so "what did I actually change?" is answerable at a
+    # glance instead of by reading the third column of every row.
+    src_shown = p.dim(src) if src == "default" else p.cyan(src)
+    pad = " " * max(1, width - len(C.display(key, val) or "—"))
+    return f"    {key:<16} {shown}{pad}{src_shown}"
+
+
+def _config_list(C, verbose: bool = False) -> int:
+    try:
+        from . import ygg_ui
+    except ImportError:  # pragma: no cover
+        import ygg_ui  # type: ignore
+    p = ygg_ui.palette()
+    print(f"\n🌳 {p.bold('Yggdrasil settings')}   {p.dim(str(C.CONFIG))}")
+    for title, keys in C.grouped():
+        if not keys:
+            continue
+        print(f"\n  {p.bold(title)}")
+        for key in keys:
+            print(_config_row(C, key, p))
+            if verbose:
+                for line in _wrap(C.SETTINGS[key][2], 74, " " * 6):
+                    print(p.dim(line))
+    print(f"\n  {p.dim('flag > env > config > default')}")
+    if not verbose:
+        print(f"  {p.dim('ygg config -v')}          what each setting does")
+    print(f"  {p.dim('ygg config set <k> <v>')} change one"
+          f"{'' if not ygg_ui.enabled() else p.dim('  ·  ygg config edit   pick from a menu')}")
+    return 0
+
+
+def _config_edit(C) -> int:
+    """Pick a setting from a menu and change it — the discoverable path.
+
+    `ygg config set embed_backend openai` only helps someone who already knows
+    the key exists, which is the same gap the install wizard closes.
+    """
+    try:
+        from . import ygg_prompt as _prompt
+        from . import ygg_ui
+    except ImportError:  # pragma: no cover
+        import ygg_prompt as _prompt  # type: ignore
+        import ygg_ui  # type: ignore
+    p = ygg_ui.palette()
+    opts = []
+    for title, keys in C.grouped():
+        for key in keys:
+            val = C.resolve(key)
+            shown = C.display(key, val) if val != "" else "—"
+            opts.append(_prompt.Option(key, key, f"{shown}   [{title.split(' —')[0].lower()}]"))
+    if not opts:
+        return 0
+    try:
+        key = _prompt.select("Which setting?", opts)
+    except KeyboardInterrupt:
+        return 1
+    print(f"\n  {p.bold(key)}")
+    for line in _wrap(C.SETTINGS[key][2], 74, "  "):
+        print(p.dim(line))
+    current = C.resolve(key)
+    secret = key in C.SECRET_FILES
+    try:
+        new = _prompt.text("New value (empty = leave as is)",
+                           "" if secret else current, secret=secret)
+    except KeyboardInterrupt:
+        return 1
+    if not new or new == current:
+        print(p.dim("  unchanged"))
+        return 0
+    C.set_value(key, new)
+    print(f"  {ygg_ui.mark_ok(p)} {key} = {C.display(key, new)}  {p.dim('in ' + C.stored_at(key))}")
+    if key.startswith(("embed_", "distill_")):
+        print(p.dim("  → these run in the daemon: `ygg redeploy` to apply"))
+    return 0
+
+
 def _config_cmd(rest: list[str]) -> int:
-    """ygg config list | get <key> | set <key> <value> | unset <key>."""
+    """ygg config [list|edit|get <key>|set <key> <value>|unset <key>]."""
     from . import ygg_config as C
+    verbose = "-v" in rest or "--verbose" in rest
+    rest = [a for a in rest if a not in ("-v", "--verbose")]
     sub = rest[0] if rest else "list"
 
+    if sub in ("edit", "menu"):
+        return _config_edit(C)
+
     if sub in ("list", "ls", ""):
-        cfg = C.load()
-        print("Yggdrasil settings  (effective value · source)\n")
-        for key, (envs, default, help_) in C.SETTINGS.items():
-            val = C.resolve(key)
-            src = C.source(key)
-            shown = C.display(key, val) if val != "" else "(empty)"
-            print(f"  {key:<16} {shown:<34} {src}")
-            print(f"  {'':<16} {help_}")
-        print("\n  precedence: flag > env > config > default")
-        print(f"  config file: {C.CONFIG}")
-        print("  set persistently:  ygg config set <key> <value>")
-        return 0
+        return _config_list(C, verbose=verbose)
 
     if sub == "get":
         if len(rest) < 2 or rest[1] not in C.SETTINGS:

@@ -16,6 +16,18 @@ behaviour.
 
 ### Changed
 ### Added
+- **`ygg config` is readable.** It printed twelve settings and twenty-four lines
+  of help as one unbroken wall, so finding the one you came for meant reading
+  all of it. Settings are now grouped by the job they do (embeddings,
+  distillation, identity, sync), values line up in a column, and the source is
+  coloured — so "what did I actually change?" is a glance, not a scan of the
+  third column. Help moved behind `ygg config -v`, where you look when you're
+  digging into one setting rather than surveying them all. API keys are masked.
+- **`ygg config edit`** — pick a setting from a menu, see what it does, change
+  it. `ygg config set embed_backend openai` only ever helped people who already
+  knew the key existed. Same stdlib prompts as the installer, same numbered
+  fallback with no terminal.
+
 - **`ygg install` is an interactive wizard.** It now asks *where* embeddings
   should run — Ollama, llama.cpp, OpenRouter, or none — with arrow keys, the
   trade-off spelled out next to each option, and `←` to walk back and change an
