@@ -318,16 +318,41 @@ def _wrap(text: str, width: int, indent: str) -> list[str]:
     return textwrap.wrap(text, width=width, initial_indent=indent, subsequent_indent=indent)
 
 
-def _config_row(C, key: str, p, width: int = 30) -> str:
+def _config_problems(C) -> dict[str, str]:
+    """Settings that are wrong *in combination* -> what's wrong with them.
+
+    A key is only missing relative to a backend chosen three rows earlier, so no
+    single row can be judged on its own — and the un-set key renders dim, which
+    made the one cell that mattered the quietest thing on screen. `ygg doctor`
+    caught this; `ygg config`, where people actually configure it, did not.
+    """
+    bad: dict[str, str] = {}
+    for url_key, key_key in (("embed_url", "embed_api_key"),
+                             ("distill_url", "distill_api_key")):
+        if _is_hosted(C.resolve(url_key)) and not C.resolve(key_key):
+            bad[key_key] = "needed: the endpoint above is hosted"
+    if C.resolve("embed_backend") == "openai" and not C.resolve("embed_model"):
+        bad["embed_model"] = "needed: the openai backend has no default model"
+    return bad
+
+
+def _config_row(C, key: str, p, problem: str = "", width: int = 30) -> str:
     """One setting: name, effective value, where it came from. Secrets masked."""
     val = C.resolve(key)
     src = C.source(key)
-    shown = C.display(key, val) if val != "" else p.dim("—")
+    plain = C.display(key, val) or "—"
+    if problem:
+        shown = p.yellow(plain)          # the row that needs you, not the row that's dim
+    else:
+        shown = C.display(key, val) if val != "" else p.dim("—")
     # Colour by source, so "what did I actually change?" is answerable at a
-    # glance instead of by reading the third column of every row.
-    src_shown = p.dim(src) if src == "default" else p.cyan(src)
-    pad = " " * max(1, width - len(C.display(key, val) or "—"))
-    return f"    {key:<16} {shown}{pad}{src_shown}"
+    # glance instead of by reading the third column of every row. env: stays
+    # distinct from config: one dies with the shell, the other is on disk.
+    src_shown = (p.dim(src) if src == "default"
+                 else p.yellow(src) if src.startswith("env:") else p.cyan(src))
+    pad = " " * max(1, width - len(plain))
+    row = f"    {key:<16} {shown}{pad}{src_shown}"
+    return row + (f"\n      {p.yellow('↑ ' + problem)}" if problem else "")
 
 
 def _config_list(C, verbose: bool = False) -> int:
@@ -336,13 +361,14 @@ def _config_list(C, verbose: bool = False) -> int:
     except ImportError:  # pragma: no cover
         import ygg_ui  # type: ignore
     p = ygg_ui.palette()
+    problems = _config_problems(C)
     print(f"\n🌳 {p.bold('Yggdrasil settings')}   {p.dim(str(C.CONFIG))}")
     for title, keys in C.grouped():
         if not keys:
             continue
         print(f"\n  {p.bold(title)}")
         for key in keys:
-            print(_config_row(C, key, p))
+            print(_config_row(C, key, p, problems.get(key, "")))
             if verbose:
                 for line in _wrap(C.SETTINGS[key][2], 74, " " * 6):
                     print(p.dim(line))

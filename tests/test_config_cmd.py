@@ -86,6 +86,49 @@ class SecretMaskingTest(unittest.TestCase):
         self.assertNotIn("SECRETVALUE", _run("list", "-v"))
 
 
+class BrokenCombinationTest(unittest.TestCase):
+    """A missing key is only wrong relative to a backend chosen three rows
+    earlier, so no row can be judged alone — and an un-set key renders dim,
+    which made the one cell that mattered the quietest thing on screen."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        os.environ["YGG_HOME"] = self.home
+        for e in ("YGG_EMBED_URL", "YGG_EMBED_BACKEND", "YGG_EMBED_API_KEY",
+                  "YGG_DISTILL_URL", "YGG_DISTILL_API_KEY", "OPENROUTER_API_KEY"):
+            os.environ.pop(e, None)
+        importlib.reload(C)
+
+    def tearDown(self):
+        for e in ("YGG_HOME", "YGG_EMBED_URL", "YGG_EMBED_BACKEND",
+                  "YGG_EMBED_API_KEY", "YGG_DISTILL_URL", "YGG_DISTILL_API_KEY"):
+            os.environ.pop(e, None)
+        shutil.rmtree(self.home, ignore_errors=True)
+        importlib.reload(C)
+
+    def test_hosted_embed_without_a_key_is_flagged(self):
+        C.set_value("embed_url", "https://openrouter.ai/api/v1")
+        self.assertIn("embed_api_key", cli._config_problems(C))
+        self.assertIn("hosted", _run("list"))
+
+    def test_hosted_distill_without_a_key_is_flagged(self):
+        C.set_value("distill_url", "https://openrouter.ai/api/v1")
+        self.assertIn("distill_api_key", cli._config_problems(C))
+
+    def test_key_present_clears_the_flag(self):
+        C.set_value("embed_url", "https://openrouter.ai/api/v1")
+        C.set_value("embed_api_key", "sk-or-v1-x")
+        self.assertNotIn("embed_api_key", cli._config_problems(C))
+
+    def test_local_endpoint_needs_no_key(self):
+        C.set_value("embed_url", "http://127.0.0.1:11434")
+        self.assertEqual(cli._config_problems(C), {})
+
+    def test_a_healthy_config_flags_nothing(self):
+        self.assertEqual(cli._config_problems(C), {})
+        self.assertNotIn("↑", _run("list"))
+
+
 class EditMenuTest(unittest.TestCase):
     """Driven through the non-TTY fallback — same path as a piped install."""
 

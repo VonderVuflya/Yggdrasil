@@ -23,6 +23,11 @@ behaviour.
   coloured — so "what did I actually change?" is a glance, not a scan of the
   third column. Help moved behind `ygg config -v`, where you look when you're
   digging into one setting rather than surveying them all. API keys are masked.
+  A setting that's wrong only *in combination* — a hosted `embed_url` with no
+  `embed_api_key` — is called out on the row itself, in yellow, with the reason.
+  It used to render dim: the one cell that mattered was the quietest thing on
+  screen, and only `ygg doctor` knew. `env:` sources are yellow too, since a
+  value that dies with the shell is not the same as one on disk.
 - **`ygg config edit`** — pick a setting from a menu, see what it does, change
   it. `ygg config set embed_backend openai` only ever helped people who already
   knew the key existed. Same stdlib prompts as the installer, same numbered
