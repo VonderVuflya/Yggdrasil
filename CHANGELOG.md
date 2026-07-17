@@ -3,6 +3,13 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.13.2] — 2026-07-17
+
+### Fixed
+- Arrow keys no longer quit the setup wizard — 0.13.0's `ygg install` broke on
+  the first ↓. Reinstall or `ygg update` if you hit it.
+- `ctrl-c` leaves the wizard cleanly instead of printing a traceback.
+
 ## [0.13.1] — 2026-07-17 — `ygg config` you can read
 
 0.13.0 made the installer ask the right questions; this makes the settings it
