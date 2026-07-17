@@ -3,19 +3,12 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [0.13.0] — 2026-07-17 — interactive setup, and the hosted path finished
+## [0.13.1] — 2026-07-17 — `ygg config` you can read
 
-0.12.0 made Yggdrasil run on anyone's engine but left you to find that out from
-the README and type `ygg config set` at it. `ygg install` now asks where
-embeddings should run and writes the answer itself, `ygg seed` can finally
-authenticate to a hosted endpoint (embeddings could; distillation could not),
-and `ygg doctor` catches the misconfiguration that used to fail silently inside
-the daemon. Defaults are unchanged — an existing install upgrades to identical
-behaviour.
-
+0.13.0 made the installer ask the right questions; this makes the settings it
+writes legible afterwards.
 
 ### Changed
-### Added
 - **`ygg config` is readable.** It printed twelve settings and twenty-four lines
   of help as one unbroken wall, so finding the one you came for meant reading
   all of it. Settings are now grouped by the job they do (embeddings,
@@ -33,6 +26,19 @@ behaviour.
   knew the key existed. Same stdlib prompts as the installer, same numbered
   fallback with no terminal.
 
+## [0.13.0] — 2026-07-17 — interactive setup, and the hosted path finished
+
+0.12.0 made Yggdrasil run on anyone's engine but left you to find that out from
+the README and type `ygg config set` at it. `ygg install` now asks where
+embeddings should run and writes the answer itself, `ygg seed` can finally
+authenticate to a hosted endpoint (embeddings could; distillation could not),
+and `ygg doctor` catches the misconfiguration that used to fail silently inside
+the daemon. Defaults are unchanged — an existing install upgrades to identical
+behaviour.
+
+
+### Changed
+### Added
 - **`ygg install` is an interactive wizard.** It now asks *where* embeddings
   should run — Ollama, llama.cpp, OpenRouter, or none — with arrow keys, the
   trade-off spelled out next to each option, and `←` to walk back and change an
