@@ -6,6 +6,15 @@ All notable changes to this project are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Changed
+- **The update nudge now reads like context-mode's**, on its own line:
+  `⚠️ Yggdrasil v0.12.0 outdated → v0.12.1 available. Upgrade: /ygg-upgrade`.
+  It used to bury both versions in a sentence and point at `ygg update` even
+  inside an agent, where `/ygg-upgrade` is one keystroke away and works out the
+  install channel itself. The agent is now told to relay it verbatim on its own
+  line — the failure mode was never silence, it was the notice dissolving into
+  prose until neither the versions nor the command survived. Terminals still get
+  `ygg update`; a slash command means nothing in a shell.
+
 - **The memory citation now reads `🌳 from memory:` instead of `🌳 recalled:`.**
   `recalled` was `ygg_recall`'s API verb leaking into a line a human reads, and
   it announced what the machine did rather than the thing the reader needs — that

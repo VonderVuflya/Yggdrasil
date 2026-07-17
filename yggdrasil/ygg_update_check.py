@@ -67,8 +67,17 @@ def refresh_cache() -> None:
         pass
 
 
-def notice(installed: str | None = None) -> str:
-    """A one-line upgrade nudge if the cached latest > installed, else ''. No network."""
+def notice(installed: str | None = None, upgrade: str = "ygg update") -> str:
+    """A one-line upgrade nudge if the cached latest > installed, else ''. No network.
+
+    One line, both versions, and the exact command — nothing else. It gets read
+    mid-task by someone who did not ask about versions, so it has to be skimmable
+    in a glance and impossible to confuse with the answer they were waiting for.
+
+    `upgrade` is the command for the CALLER's surface: `/ygg-upgrade` inside an
+    agent that has our slash commands (it detects pipx/brew/npm/uvx on its own),
+    plain `ygg update` in a terminal where a slash command means nothing.
+    """
     installed = installed or installed_version()
     if not installed:
         return ""
@@ -77,5 +86,6 @@ def notice(installed: str | None = None) -> str:
     except (OSError, ValueError):
         return ""
     if latest and _vtuple(latest) > _vtuple(installed):
-        return f"⬆ Yggdrasil {latest} is available (you have {installed}). Upgrade:  ygg update"
+        return (f"⚠️ Yggdrasil v{installed} outdated → v{latest} available. "
+                f"Upgrade: {upgrade}")
     return ""

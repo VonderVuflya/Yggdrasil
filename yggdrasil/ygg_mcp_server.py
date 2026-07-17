@@ -427,7 +427,14 @@ _NOTICE_SHOWN = False
 
 def _update_suffix() -> str:
     """A one-line 'newer version available' nudge, appended to the FIRST tool
-    result of the session (so the agent can relay it), then never again."""
+    result of the session (so the agent can relay it), then never again.
+
+    Told to relay it VERBATIM ON ITS OWN LINE, because the failure mode isn't the
+    agent staying silent — it's the agent dissolving the notice into its prose
+    ("by the way, a newer version is out") until neither the version numbers nor
+    the command survive. `/ygg-upgrade` is a slash command the agent can hand
+    straight to the user; it works out the install channel itself.
+    """
     global _NOTICE_SHOWN
     if _NOTICE_SHOWN:
         return ""
@@ -437,8 +444,11 @@ def _update_suffix() -> str:
             from . import ygg_update_check
         except ImportError:
             import ygg_update_check  # type: ignore
-        note = ygg_update_check.notice()
-        return f"\n\n[yggdrasil] {note}" if note else ""
+        note = ygg_update_check.notice(upgrade="/ygg-upgrade")
+        if not note:
+            return ""
+        return ("\n\n[yggdrasil] Relay this to the user verbatim, on its own line, "
+                f"once — not folded into a sentence:\n{note}")
     except Exception:  # noqa: BLE001
         return ""
 
