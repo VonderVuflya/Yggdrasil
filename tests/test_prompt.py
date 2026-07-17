@@ -1,9 +1,14 @@
 """The stdlib prompt primitives: the non-TTY fallback and the BACK sentinel.
 
-The raw-mode arrow path can't be driven from a test runner (there's no terminal),
-so what's pinned here is the contract that survives without one — because that's
+Raw mode needs a real terminal to drive, so what's pinned here is the fallback —
 the path `ygg install` actually takes under uvx, npx, Docker and CI, and the one
-that silently breaks if the fallback ever regresses.
+that breaks silently if it ever regresses.
+
+These must pass identically from a shell and from a pipe, which is the whole
+trick: the environment differs, so nothing may assert on the ambient terminal
+(`interactive()` gets explicit streams) and nothing may reach the fallback by
+luck (`_ForcePlain` sets YGG_NO_TUI, instead of relying on redirect_stdout to
+happen to hide the tty — that version passed piped and hung on a real one).
 """
 
 import builtins
@@ -40,20 +45,70 @@ def _quiet(fn, *a, **k):
         return fn(*a, **k)
 
 
-class NonTtyDetectionTest(unittest.TestCase):
-    def test_not_interactive_without_a_terminal(self):
-        """A test runner, a pipe, Docker: no raw mode possible."""
-        self.assertFalse(p.interactive())
+class _Tty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class _Pipe(io.StringIO):
+    def isatty(self):
+        return False
+
+
+class InteractiveDetectionTest(unittest.TestCase):
+    """Assert on the streams we pass in, never on the ambient terminal: these
+    run both from a real shell (tty) and from CI (pipe), and a test that reads
+    the environment passes in one and fails in the other."""
+
+    def setUp(self):
+        self._env = {k: os.environ.get(k) for k in ("NO_COLOR", "YGG_NO_COLOR", "YGG_NO_TUI")}
+        for k in self._env:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_both_ends_a_terminal_can_drive_raw_mode(self):
+        self.assertTrue(p.interactive(inp=_Tty(), out=_Tty()))
+
+    def test_piped_stdin_cannot(self):
+        """`ygg install < /dev/null` has a tty stdout and a dead stdin — reading
+        keys there blocks forever."""
+        self.assertFalse(p.interactive(inp=_Pipe(), out=_Tty()))
+
+    def test_piped_stdout_cannot(self):
+        self.assertFalse(p.interactive(inp=_Tty(), out=_Pipe()))
+
+    def test_no_color_forces_the_plain_path(self):
+        os.environ["NO_COLOR"] = "1"
+        self.assertFalse(p.interactive(inp=_Tty(), out=_Tty()))
 
     def test_env_kill_switch(self):
         os.environ["YGG_NO_TUI"] = "1"
-        try:
-            self.assertFalse(p.interactive())
-        finally:
-            os.environ.pop("YGG_NO_TUI")
+        self.assertFalse(p.interactive(inp=_Tty(), out=_Tty()))
 
 
-class SelectFallbackTest(unittest.TestCase):
+class _ForcePlain(unittest.TestCase):
+    """Pin the fallback path explicitly. Without this these tests only took it
+    because redirect_stdout happened to hide the tty — run them from a real
+    terminal and they'd enter raw mode and hang waiting for a keypress."""
+
+    def setUp(self):
+        self._prev = os.environ.get("YGG_NO_TUI")
+        os.environ["YGG_NO_TUI"] = "1"
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("YGG_NO_TUI", None)
+        else:
+            os.environ["YGG_NO_TUI"] = self._prev
+
+
+class SelectFallbackTest(_ForcePlain):
     def test_number_picks_the_option(self):
         with _Answers("2"):
             self.assertEqual(_quiet(p.select, "Where?", OPTS), "openrouter")
@@ -90,7 +145,7 @@ class SelectFallbackTest(unittest.TestCase):
             builtins.input = real
 
 
-class TextTest(unittest.TestCase):
+class TextTest(_ForcePlain):
     def test_empty_takes_the_default(self):
         with _Answers(""):
             self.assertEqual(p.text("Model", "all-minilm"), "all-minilm")
@@ -113,7 +168,7 @@ class TextTest(unittest.TestCase):
             builtins.input = real
 
 
-class ConfirmTest(unittest.TestCase):
+class ConfirmTest(_ForcePlain):
     def test_yes_no_and_default(self):
         with _Answers("y"):
             self.assertTrue(p.confirm("ok?", False))
