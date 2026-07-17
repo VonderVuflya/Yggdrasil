@@ -18,6 +18,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:  # package context
+    from . import ygg_config as _cfg
+    from . import ygg_prompt as _prompt
+except ImportError:  # pragma: no cover — flat deploy / direct run
+    import ygg_config as _cfg  # type: ignore
+    import ygg_prompt as _prompt  # type: ignore
+
 YGG_HOME = Path(os.environ.get("YGG_HOME", str(Path.home() / ".yggdrasil")))
 
 # (name, size, description, tier, lang)  tier: cpu | mid | heavy
@@ -300,9 +307,33 @@ def _ask_yes(prompt: str, default: bool) -> bool:
     return ans.startswith("y")
 
 
-def wizard() -> int:
+_BACKENDS = [
+    ("ollama", "Ollama, local", "private · best quality · needs Ollama"),
+    ("llamacpp", "llama.cpp, local", "private · no Ollama needed"),
+    ("openrouter", "OpenRouter, hosted", "free tier · no GPU · memories leave your machine"),
+    ("none", "none", "lexical only · zero-config · instant"),
+]
+
+
+def _backend_step(current: str) -> str:
+    opts = [_prompt.Option(v, label, note) for v, label, note in _BACKENDS]
+    return _prompt.select("Where should embeddings run?", opts, default=current or "ollama")
+
+
+def _embed_step(backend: str, rec_embed: str, current: str) -> str:
+    """The model question, phrased for whichever backend was chosen."""
+    if backend == "ollama":
+        return _prompt.text("Embedding model", current or rec_embed, allow_back=True)
+    if backend == "llamacpp":
+        return _prompt.text("Embedding model (as llama-server names it)",
+                            current or "bge-small-en-v1.5", allow_back=True)
+    return _prompt.text("Embedding model", current or "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+                        allow_back=True)
+
+
+def wizard() -> int:  # noqa: C901 — a linear wizard; splitting it hides the flow
     h = hw()
-    print("=== Yggdrasil setup ===\n")
+    _prompt.banner("Yggdrasil setup")
     print_catalog(h)
     rec_embed, rec_bg = recommend(h)
     print()
@@ -310,14 +341,84 @@ def wizard() -> int:
         print("Note: Ollama isn't installed yet — semantic search needs it. You can still pick")
         print("models now (they'll be pulled once you install Ollama; exact commands are shown")
         print("at the end), or choose 'none' for zero-config, lexical-only mode.\n")
-    embed = _ask("Embedding model (or 'none')", rec_embed)
-    bg = _ask("Background model (or 'none')", rec_bg)
+
+    # A step list rather than a straight run of prompts: every answer is a
+    # decision the user may want to revise once they see the next question, and
+    # `ctrl-c and start over` is a miserable way to change your mind about the
+    # first of six. `a` holds answers across back/forward so a revisited step
+    # opens on what you already said.
+    a: dict = {}
+    steps = ["backend", "embed", "url", "key", "bg", "features"]
+    i = 0
+    while i < len(steps):
+        step = steps[i]
+        back = i > 0
+
+        if step == "backend":
+            a["backend"] = _backend_step(a.get("backend", ""))
+        elif step == "embed":
+            if a["backend"] == "none":
+                a["embed"] = "none"
+                i += 1
+                continue
+            r = _embed_step(a["backend"], rec_embed, a.get("embed", ""))
+            if r is _prompt.BACK or r == _prompt.BACK:
+                i -= 1
+                continue
+            a["embed"] = r
+        elif step == "url":
+            if a["backend"] not in ("llamacpp", "openrouter"):
+                a.pop("url", None)
+                i += 1
+                continue
+            default = a.get("url") or ("http://127.0.0.1:8080/v1" if a["backend"] == "llamacpp"
+                                       else "https://openrouter.ai/api/v1")
+            r = _prompt.text("Endpoint (the /v1 base)", default, allow_back=True)
+            if r == _prompt.BACK:
+                i -= 1
+                continue
+            a["url"] = r
+        elif step == "key":
+            if a["backend"] != "openrouter":
+                a.pop("key", None)
+                i += 1
+                continue
+            print("  A key from openrouter.ai/settings/keys — an inference key, not a")
+            print("  provisioning one (those answer 401 on every embedding call).")
+            r = _prompt.text("API key", "", secret=True, allow_back=True)
+            if r == _prompt.BACK:
+                i -= 1
+                continue
+            a["key"] = r
+        elif step == "bg":
+            r = _prompt.text("Background model (or 'none')", a.get("bg") or rec_bg, allow_back=True)
+            if r == _prompt.BACK:
+                i -= 1
+                continue
+            a["bg"] = r
+        elif step == "features":
+            r = _prompt.confirm("Enable SessionStart auto-bootstrap hook?",
+                                a.get("hooks", True), allow_back=True)
+            if r == _prompt.BACK:
+                i -= 1
+                continue
+            a["hooks"] = r
+            a["autosave"] = _prompt.confirm(
+                "Auto-distill finished sessions into lessons? (Stop hook, local)",
+                a.get("autosave", False))
+            a["write_path"] = a["bg"] != "none" and _prompt.confirm(
+                "Enable background smart write-path?", a.get("write_path", True))
+            a["consolidation"] = a["bg"] != "none" and _prompt.confirm(
+                "Enable scheduled auto-consolidation?", a.get("consolidation", False))
+        i += 1
+
+    embed, bg = a["embed"], a["bg"]
     feats = {
         "dense": embed != "none",
-        "hooks": _ask_yes("Enable SessionStart auto-bootstrap hook?", True),
-        "autosave": _ask_yes("Auto-distill finished sessions into lessons? (Stop hook, local)", False),
-        "write_path": bg != "none" and _ask_yes("Enable background smart write-path?", True),
-        "consolidation": bg != "none" and _ask_yes("Enable scheduled auto-consolidation?", False),
+        "hooks": a["hooks"],
+        "autosave": a["autosave"],
+        "write_path": a["write_path"],
+        "consolidation": a["consolidation"],
     }
     YGG_HOME.mkdir(parents=True, exist_ok=True)
     # MERGE, never overwrite. Re-running `ygg install` is routine (new model, new
@@ -334,8 +435,22 @@ def wizard() -> int:
         config = {}
     config.update({"embed_model": "" if embed == "none" else embed,
                    "bg_model": "" if bg == "none" else bg, "features": feats})
+    # Backend/url only exist for the non-Ollama paths; going BACK to Ollama has
+    # to clear them, or a stale openrouter URL keeps pointing the daemon at a
+    # host the user just walked away from.
+    if a["backend"] in ("llamacpp", "openrouter"):
+        config["embed_backend"] = "openai"
+        config["embed_url"] = a["url"]
+    elif a["backend"] == "ollama":
+        config.pop("embed_backend", None)
+        config.pop("embed_url", None)
     cfg_path.write_text(json.dumps(config, indent=2))
-    print(f"\nSaved {cfg_path}:\n{json.dumps(config, indent=2)}")
+    if a.get("key"):
+        _cfg.set_value("embed_api_key", a["key"])   # own 0600 file, never config.json
+    shown = dict(config)
+    print(f"\nSaved {cfg_path}:\n{json.dumps(shown, indent=2)}")
+    if a.get("key"):
+        print(f"Saved the API key to {_cfg.EMBED_KEY_FILE} (0600).")
 
     print("\nInstalling the background service ...")
     try:

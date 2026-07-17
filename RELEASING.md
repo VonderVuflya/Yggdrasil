@@ -4,9 +4,28 @@ Yggdrasil ships through several channels so users install with whatever they
 already use. **They all install the same Python package — PyPI is the source of
 truth; npm and Homebrew bootstrap or wrap it.** Publish in this order.
 
-Version lives in two places — keep them in sync before a release:
-`yggdrasil/__init__.py` (`__version__`), `pyproject.toml` (`version`), and
-`clients/npm/package.json` (`version`). Tag `vX.Y.Z` after pushing.
+**Use `bash scripts/release.sh <version>`** — it bumps every file, checks the
+CHANGELOG, runs the tests, and publishes each channel in order. Run it **from
+`main`**: step 5 pushes `HEAD:$BRANCH`, so from a feature branch it tags and
+publishes that branch instead. `--dry-run` prints the plan without touching
+anything.
+
+The version lives in **ten** files, not the three this page used to list:
+
+```
+yggdrasil/__init__.py            pyproject.toml           clients/npm/package.json
+server.json                      packaging/mcpb/manifest.json
+.claude-plugin/plugin.json       .claude-plugin/marketplace.json
+.codex-plugin/plugin.json        .cursor-plugin/plugin.json
+.cursor-plugin/marketplace.json
+```
+
+`release.sh` bumps all ten. Only bump by hand if you're not using it — and then
+check them all, because a stale plugin manifest ships a wrong version to the
+marketplace without failing anything. `packaging/homebrew/yggdrasil.rb` is the
+exception: it needs the sdist's sha256, so it's patched *after* PyPI publishes.
+
+Tag `vX.Y.Z` after pushing (release.sh does this too).
 
 ---
 

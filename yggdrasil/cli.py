@@ -84,6 +84,20 @@ MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materiali
                "import", "relate", "relations", "quality", "migrate"}
 
 
+def _is_hosted(url: str) -> bool:
+    """True when this endpoint is somebody else's server, so it needs a key.
+
+    Anything on the loopback or a private LAN address is your own box (Ollama,
+    llama.cpp, a desktop down the hall) and authenticates nothing.
+    """
+    host = (url or "").split("//")[-1].split("/")[0].split(":")[0].lower()
+    if not host or host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):  # noqa: S104
+        return False
+    if host.endswith(".local") or host.startswith(("192.168.", "10.", "172.16.")):
+        return False
+    return "." in host          # a real hostname -> off-machine
+
+
 def _port() -> int:
     return int(os.environ.get("YGG_PORT", "42069"))
 
@@ -175,6 +189,10 @@ def _doctor() -> int:
     except ImportError:  # flat layout
         import ygg_ui
     import time as _time
+    try:
+        from . import ygg_config as C
+    except ImportError:  # pragma: no cover — flat deploy
+        import ygg_config as C  # type: ignore
     p = ygg_ui.palette()
     ok = True
     url = f"http://127.0.0.1:{_port()}"
@@ -200,6 +218,22 @@ def _doctor() -> int:
             check(True, "dense", h["dense"])
         if h.get("scale_hint"):
             check(None, "scale", h["scale_hint"])
+        # A hosted backend with no key fails at request time, deep inside the
+        # daemon, where the user never sees it — dense just quietly stops
+        # working. Catch the misconfiguration here, where they're already looking.
+        for kind, url_key, key_key, cmd in (
+            ("embeddings", "embed_url", "embed_api_key", "embed_api_key"),
+            ("distill", "distill_url", "distill_api_key", "distill_api_key"),
+        ):
+            endpoint = C.resolve(url_key)
+            if not _is_hosted(endpoint):
+                continue
+            if C.resolve(key_key):
+                check(True, f"{kind} key", f"set for {endpoint}")
+            else:
+                ok = False
+                check(False, f"{kind} key", f"{endpoint} is hosted but no key is set",
+                      f"ygg config set {cmd} <key>")
     except Exception as exc:  # noqa: BLE001
         ok = False
         print(f"🌳 {p.bold('Yggdrasil doctor')}\n")

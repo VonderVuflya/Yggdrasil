@@ -7,6 +7,26 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Changed
 ### Added
+- **`ygg install` is an interactive wizard.** It now asks *where* embeddings
+  should run — Ollama, llama.cpp, OpenRouter, or none — with arrow keys, the
+  trade-off spelled out next to each option, and `←` to walk back and change an
+  earlier answer once a later question makes it obvious. Picking a hosted
+  backend asks for the endpoint and key and writes them for you; walking back to
+  Ollama clears them again. Until now the only way to reach any of this was to
+  already know `ygg config set embed_backend openai` existed.
+  - Built on stdlib (`termios`/`msvcrt`, ~200 lines), so **"zero dependencies"
+    stays true**. A prompt library would only have drawn the arrows: the part
+    that mattered — stepping back through a wizard — is a state machine none of
+    them provide (clack, the usual reference, doesn't).
+  - Falls back to a numbered list when stdin isn't a terminal, and to the
+    default on EOF. `ygg install` runs through `uvx`, `npx` and Docker, where a
+    raw-mode TUI can't work at all and a prompt library would simply crash.
+    `YGG_NO_TUI=1` forces the plain path.
+- **`ygg doctor` catches a hosted endpoint with no key** — the failure it
+  replaces happened at request time, deep in the daemon, where dense search just
+  quietly stopped working. Loopback and LAN addresses authenticate nothing and
+  stay silent.
+
 - **`ygg seed` can distill through a hosted endpoint.** `ygg config set
   distill_api_key <key>` (or `YGG_DISTILL_API_KEY` / `OPENROUTER_API_KEY`) sends
   a Bearer token with the distill request. Distillation has spoken the OpenAI
