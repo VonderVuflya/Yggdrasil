@@ -320,10 +320,22 @@ def wizard() -> int:
         "consolidation": bg != "none" and _ask_yes("Enable scheduled auto-consolidation?", False),
     }
     YGG_HOME.mkdir(parents=True, exist_ok=True)
-    config = {"embed_model": "" if embed == "none" else embed,
-              "bg_model": "" if bg == "none" else bg, "features": feats}
-    (YGG_HOME / "config.json").write_text(json.dumps(config, indent=2))
-    print(f"\nSaved {YGG_HOME / 'config.json'}:\n{json.dumps(config, indent=2)}")
+    # MERGE, never overwrite. Re-running `ygg install` is routine (new model, new
+    # host, a re-install), and a plain write here silently dropped every setting
+    # the wizard doesn't ask about: the pinned user_id/namespace (the whole point
+    # of the 0.11.0 identity migration — losing them strands existing memory),
+    # embed_backend/embed_url, distill_url, sync_repo. Only touch our own keys.
+    cfg_path = YGG_HOME / "config.json"
+    try:
+        config = json.loads(cfg_path.read_text())
+        if not isinstance(config, dict):
+            config = {}
+    except (OSError, ValueError):
+        config = {}
+    config.update({"embed_model": "" if embed == "none" else embed,
+                   "bg_model": "" if bg == "none" else bg, "features": feats})
+    cfg_path.write_text(json.dumps(config, indent=2))
+    print(f"\nSaved {cfg_path}:\n{json.dumps(config, indent=2)}")
 
     print("\nInstalling the background service ...")
     try:

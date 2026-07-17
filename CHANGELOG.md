@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.12.1] — 2026-07-17 — fix: `ygg install` no longer eats your settings
+
+### Fixed
+- **The setup wizard overwrote `config.json` instead of merging into it**, so
+  re-running `ygg install` — routine when switching models or re-installing —
+  silently dropped every setting it doesn't ask about: the pinned
+  `user_id`/`namespace` (the identity 0.11.0 migrated *specifically* so a
+  default could never strand memory again — losing the pin re-opens that exact
+  hole), plus `embed_backend`, `embed_url`, `distill_url` and `sync_repo`.
+  Dense search would quietly fall back to localhost Ollama, distillation would
+  drift off the box you pointed it at, and memory could end up written under a
+  different identity than it was stored with.
+
+  The bug predates 0.12.0 but that release widened the blast radius by adding
+  the `embed_backend`/`embed_url` keys it destroys. The wizard now merges and
+  touches only the keys it owns; a corrupt `config.json` is rebuilt rather than
+  crashing the install.
+
 ## [0.12.0] — 2026-07-17 — bring your own engine: llama.cpp, OpenRouter, OpenCode
 
 Yggdrasil stopped assuming Ollama for embeddings and Claude/Codex for agents.

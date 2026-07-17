@@ -5,7 +5,14 @@ These are pure/deterministic given a hardware dict, so no Ollama or engine is
 touched — we feed synthetic `hw()` dicts and assert the recommendation and the
 rendered catalog."""
 
+import builtins
+import importlib
 import io
+import json
+import os
+import pathlib
+import shutil
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 
@@ -62,6 +69,76 @@ class CatalogTest(unittest.TestCase):
         for name, _size, _desc, _tier, lang in s.BG_MODELS:
             if name != "none":
                 self.assertTrue(lang and lang != "—", name)
+
+
+class WizardConfigMergeTest(unittest.TestCase):
+    """Re-running `ygg install` must not eat settings the wizard never asks about.
+
+    It used to write config.json from scratch, silently dropping the pinned
+    user_id/namespace (which strands existing memory — the exact failure the
+    0.11.0 identity migration exists to prevent), plus embed_backend/embed_url,
+    distill_url and sync_repo."""
+
+    PRESET = {
+        "user_id": "local", "namespace": "personal",
+        "embed_backend": "openai", "embed_url": "https://openrouter.ai/api/v1",
+        "distill_url": "http://192.168.3.124:11434",
+        "sync_repo": "git@github.com:me/mem.git",
+    }
+
+    def setUp(self):
+        self.home = pathlib.Path(tempfile.mkdtemp())
+        os.environ["YGG_HOME"] = str(self.home)
+        importlib.reload(s)
+        self.cfg = self.home / "config.json"
+        # answers for: embed model, bg model, hooks, autosave, write_path, consolidation
+        self._answers = iter(["all-minilm", "qwen2.5:1.5b", "n", "n", "n", "n"])
+        self._real_input = builtins.input
+        builtins.input = lambda *a, **k: next(self._answers, "")
+        self._real_install = None
+
+    def tearDown(self):
+        builtins.input = self._real_input
+        os.environ.pop("YGG_HOME", None)
+        shutil.rmtree(self.home, ignore_errors=True)
+        importlib.reload(s)
+
+    def _run_wizard(self):
+        # stub the service install — we only care about what lands in config.json
+        import yggdrasil.service as service
+        real = service.install
+        service.install = lambda *a, **k: 0
+        try:
+            with redirect_stdout(io.StringIO()):
+                s.wizard()
+        finally:
+            service.install = real
+
+    def test_wizard_preserves_settings_it_never_asks_about(self):
+        self.cfg.write_text(json.dumps(self.PRESET))
+        self._run_wizard()
+        after = json.loads(self.cfg.read_text())
+        for key, value in self.PRESET.items():
+            self.assertEqual(after.get(key), value, f"wizard dropped {key}")
+
+    def test_wizard_still_writes_its_own_answers(self):
+        self.cfg.write_text(json.dumps(self.PRESET))
+        self._run_wizard()
+        after = json.loads(self.cfg.read_text())
+        self.assertEqual(after["embed_model"], "all-minilm")
+        self.assertEqual(after["bg_model"], "qwen2.5:1.5b")
+        self.assertIn("features", after)
+
+    def test_wizard_survives_a_corrupt_config(self):
+        self.cfg.write_text("{ not json")
+        self._run_wizard()
+        after = json.loads(self.cfg.read_text())  # rebuilt, not crashed
+        self.assertEqual(after["embed_model"], "all-minilm")
+
+    def test_wizard_works_with_no_config_yet(self):
+        self._run_wizard()
+        after = json.loads(self.cfg.read_text())
+        self.assertEqual(after["bg_model"], "qwen2.5:1.5b")
 
 
 class HwClassifierTest(unittest.TestCase):
