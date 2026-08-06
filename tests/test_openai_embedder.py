@@ -160,5 +160,94 @@ class BackendSelectionTest(unittest.TestCase):
         self.assertIsNone(E.get_embedder())
 
 
+class IdleTtlTest(unittest.TestCase):
+    """`ttl` lets LM Studio unload the embedder after idle time, so a user isn't
+    forced to pin gigabytes in VRAM for a daemon that wakes up in bursts. It is a
+    non-standard field, so it must only be sent when explicitly configured."""
+
+    def _body_of(self, **kwargs):
+        seen = {}
+
+        def fake_urlopen(req, timeout=None):  # noqa: ARG001
+            seen.update(json.loads(req.data.decode("utf-8")))
+            return _resp(_openai_payload([[0.1]]))
+
+        emb = E.OpenAIEmbedder("http://host:1234/v1", "bge", **kwargs)
+        with mock.patch.object(E.urllib.request, "urlopen", fake_urlopen):
+            emb.embed("hi")
+        return seen
+
+    def test_ttl_absent_by_default(self):
+        self.assertNotIn("ttl", self._body_of())
+
+    def test_ttl_sent_when_configured(self):
+        self.assertEqual(self._body_of(ttl=300).get("ttl"), 300)
+
+    def test_zero_and_negative_are_treated_as_off(self):
+        for value in (0, -5):
+            self.assertNotIn("ttl", self._body_of(ttl=value), f"ttl={value}")
+
+    def test_env_configures_ttl(self):
+        for e in ("YGG_EMBED_MODEL", "YGG_EMBED_BACKEND", "YGG_EMBED_TTL"):
+            os.environ.pop(e, None)
+        os.environ.update({"YGG_EMBED_MODEL": "bge", "YGG_EMBED_BACKEND": "openai",
+                           "YGG_EMBED_TTL": "600"})
+        try:
+            self.assertEqual(E.get_embedder().ttl, 600)
+            os.environ["YGG_EMBED_TTL"] = "not-a-number"  # must not crash the daemon
+            self.assertEqual(E.get_embedder().ttl, 0)
+        finally:
+            for e in ("YGG_EMBED_MODEL", "YGG_EMBED_BACKEND", "YGG_EMBED_TTL"):
+                os.environ.pop(e, None)
+
+
+class ModelSubstitutionTest(unittest.TestCase):
+    """LM Studio answers /v1/embeddings for an unloaded model with a vector from
+    whatever embedder is resident (HTTP 200, other name in `model`). Storing that
+    silently mixes vector spaces, so the vector must be refused."""
+
+    def _embedder_seeing(self, served_model: str, requested: str = "text-embedding-bge-m3"):
+        payload = dict(_openai_payload([[0.1, 0.2, 0.3]]))
+        payload["model"] = served_model
+        emb = E.OpenAIEmbedder("http://host:1234/v1", requested)
+        return emb, mock.patch.object(
+            E.urllib.request, "urlopen", lambda req, timeout=None: _resp(payload))
+
+    def test_wrong_model_is_refused(self):
+        emb, patched = self._embedder_seeing("text-embedding-paraphrase-multilingual")
+        with patched:
+            self.assertIsNone(emb.embed("привет"))
+            self.assertIsNone(emb.embed_batch(["a", "b"]))
+
+    def test_matching_model_passes(self):
+        emb, patched = self._embedder_seeing("text-embedding-bge-m3")
+        with patched:
+            self.assertEqual(emb.embed("hi"), [0.1, 0.2, 0.3])
+
+    def test_cosmetic_differences_are_not_substitution(self):
+        """A publisher prefix or .gguf suffix is how servers echo ids, not a swap."""
+        for served in ("gpustack/text-embedding-bge-m3",
+                       "text-embedding-bge-m3.gguf",
+                       "bge-m3"):
+            emb, patched = self._embedder_seeing(served)
+            with patched:
+                self.assertEqual(emb.embed("hi"), [0.1, 0.2, 0.3], f"served={served}")
+
+    def test_absent_model_field_is_accepted(self):
+        """Older llama-server builds don't echo `model` — that must not break dense."""
+        emb = E.OpenAIEmbedder("http://host:8080/v1", "bge")
+        with mock.patch.object(E.urllib.request, "urlopen",
+                               lambda req, timeout=None: _resp(_openai_payload([[1.0, 2.0]]))):
+            self.assertEqual(emb.embed("hi"), [1.0, 2.0])
+
+    def test_warning_is_printed_once(self):
+        emb, patched = self._embedder_seeing("some-other-model")
+        with patched, mock.patch("builtins.print") as printed:
+            emb.embed("a")
+            emb.embed("b")
+        self.assertEqual(printed.call_count, 1)
+        self.assertIn("some-other-model", printed.call_args[0][0])
+
+
 if __name__ == "__main__":
     unittest.main()

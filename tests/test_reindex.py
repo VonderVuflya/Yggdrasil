@@ -43,6 +43,49 @@ class ReindexTest(unittest.TestCase):
         self._insert(store, archived=1)
         self.assertEqual(store.missing_embeddings(), 0)
 
+    def test_second_concurrent_reindex_is_a_no_op(self):
+        """The daemon backfills in a startup thread while the user may run
+        `ygg reindex` by hand. Both walking the store at once split the work and
+        each reported a partial count; the second caller must stand down."""
+        store = self._store()
+        self._insert(store)
+        store._reindex_gate.acquire()  # pretend the startup thread owns the walk
+        try:
+            self.assertEqual(store.reindex_embeddings(), -1)
+            self.assertEqual(store.missing_embeddings(), 1)  # untouched
+        finally:
+            store._reindex_gate.release()
+        self.assertEqual(store.reindex_embeddings(), 1)  # gate free again
+
+    def test_progress_is_reported_and_reset(self):
+        store = self._store()
+        for _ in range(3):
+            self._insert(store)
+        self.assertFalse(store.reindex_status()["running"])
+        self.assertEqual(store.reindex_embeddings(), 3)
+        st = store.reindex_status()
+        self.assertFalse(st["running"])
+        self.assertEqual(st["total"], 3)
+        self.assertEqual(st["done"], 3)
+        self.assertEqual(st["remaining"], 0)
+
+    def test_progress_advances_during_the_walk(self):
+        """`done` must move while the walk runs — that is what the CLI renders."""
+        store = self._store()
+        for _ in range(40):  # > one CHUNK (32)
+            self._insert(store)
+        seen = []
+        original = store._store_embedding_locked
+
+        def spy(seq, vec):
+            seen.append(store._reindex_progress.get("done", 0))
+            return original(seq, vec)
+
+        store._store_embedding_locked = spy
+        store.reindex_embeddings()
+        self.assertEqual(seen[0], 0)          # first chunk not yet accounted
+        self.assertIn(32, seen)               # second chunk starts after 32 done
+
     def test_add_populates_vector_cache(self):
         store = self._store()
         rec = store.add(content="cache me", user_id="u", namespace="n",

@@ -277,6 +277,13 @@ class MemoryStore:
         # per row so a model switch can be detected and reindexed (item: model
         # versioning), and so mixed-model rows are never silently cosine-compared.
         self._embed_model = getattr(self.embedder, "model", None) if self.embedder else None
+        # Reindex bookkeeping. The daemon backfills in a startup thread while the
+        # user may also run `ygg reindex` by hand — without this the two walk the
+        # same rows at once and the CLI reports a fraction of the store as though
+        # the rest had been skipped. `_reindex_gate` makes the second caller a
+        # no-op; `_reindex_progress` is what the CLI polls to draw a bar.
+        self._reindex_gate = threading.Lock()
+        self._reindex_progress = {"running": False, "done": 0, "total": 0}
         # seq -> unit vector. Built once at startup (single-threaded here) and
         # kept warm incrementally on every write; None-guarded so lexical-only
         # runs pay nothing.
@@ -1127,34 +1134,53 @@ class MemoryStore:
                     [(now, i) for i in ids],
                 )
 
+    def reindex_status(self) -> dict:
+        """Live progress of a running reindex, for the CLI to poll and render."""
+        p = dict(self._reindex_progress)
+        p["remaining"] = self.missing_embeddings()
+        return p
+
     def reindex_embeddings(self) -> int:
         """Embed rows that have no current-model vector — self-heals after a
         cold-start timeout, when dense is enabled after content already exists,
         OR when the embedding model changed (rows tagged with a different model,
-        including '(legacy)' JSON migrations, are re-embedded)."""
+        including '(legacy)' JSON migrations, are re-embedded).
+
+        Returns the number of rows embedded, or -1 if another reindex is already
+        walking the store — the startup backfill thread and a manual `ygg reindex`
+        used to run concurrently and split the work between them, so each reported
+        a partial count that matched nothing the user could see."""
         if self.embedder is None:
             return 0
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT seq, content FROM memories WHERE embedding_blob IS NULL OR embed_model IS NOT ?",
-                (self._embed_model,),
-            ).fetchall()
-        healed = 0
-        batch = getattr(self.embedder, "embed_batch", None)
-        CHUNK = 32
-        for i in range(0, len(rows), CHUNK):
-            chunk = rows[i:i + CHUNK]
-            texts = [r["content"] for r in chunk]
-            vecs = batch(texts) if batch is not None else None
-            if vecs is None:  # no batch API (or it failed) -> per-item fallback
-                vecs = [self._embed_raw(t) for t in texts]
-            for row, vec in zip(chunk, vecs):
-                if vec:
-                    with self._lock:
-                        with self._conn:
-                            self._store_embedding_locked(row["seq"], vec)
-                    healed += 1
-        return healed
+        if not self._reindex_gate.acquire(blocking=False):
+            return -1
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT seq, content FROM memories WHERE embedding_blob IS NULL OR embed_model IS NOT ?",
+                    (self._embed_model,),
+                ).fetchall()
+            healed = 0
+            self._reindex_progress = {"running": True, "done": 0, "total": len(rows)}
+            batch = getattr(self.embedder, "embed_batch", None)
+            CHUNK = 32
+            for i in range(0, len(rows), CHUNK):
+                chunk = rows[i:i + CHUNK]
+                texts = [r["content"] for r in chunk]
+                vecs = batch(texts) if batch is not None else None
+                if vecs is None:  # no batch API (or it failed) -> per-item fallback
+                    vecs = [self._embed_raw(t) for t in texts]
+                for row, vec in zip(chunk, vecs):
+                    if vec:
+                        with self._lock:
+                            with self._conn:
+                                self._store_embedding_locked(row["seq"], vec)
+                        healed += 1
+                self._reindex_progress["done"] = min(i + CHUNK, len(rows))
+            return healed
+        finally:
+            self._reindex_progress["running"] = False
+            self._reindex_gate.release()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1232,6 +1258,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"success": False, "error": "forbidden host header"})
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/reindex/status":
+            self._send(200, {"success": True, "data": self.store.reindex_status()})
+            return
         if parsed.path == "/health":
             embedder = self.store.embedder
             embed_model = getattr(embedder, "model", None) if embedder is not None else None
@@ -1319,7 +1348,17 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_json()
         if parsed.path == "/reindex":
             healed = self.store.reindex_embeddings()
-            self._send(200, {"success": True, "data": {"healed": healed}})
+            if healed < 0:  # another pass (usually the startup backfill) owns it
+                status = self.store.reindex_status()
+                self._send(200, {"success": True, "data": {
+                    "healed": 0, "already_running": True,
+                    "done": status.get("done", 0), "total": status.get("total", 0)}})
+                return
+            # `healed` alone reads as "only N of my memories are indexed" when the
+            # startup thread already did the rest. Report the whole store too.
+            self._send(200, {"success": True, "data": {
+                "healed": healed, "total": self.store.count(),
+                "missing": self.store.missing_embeddings()}})
             return
         if parsed.path == "/add":
             content = body.get("content")
@@ -1470,6 +1509,9 @@ def main() -> int:
     parser.add_argument("--embed-api-key-file", default=os.environ.get("YGG_EMBED_API_KEY_FILE"),
                         help="Read the embedding API key from this 0600 file — keeps the secret "
                              "out of `ps` and the plist/unit. Set by `ygg config set embed_api_key`.")
+    parser.add_argument("--embed-ttl", type=int, default=int(os.environ.get("YGG_EMBED_TTL") or 0),
+                        help="Seconds of idle time after which the runtime may unload the embedding "
+                             "model (LM Studio `ttl`). 0 = don't send it, model stays resident.")
     args = parser.parse_args()
 
     if args.reset and os.path.exists(args.db):
@@ -1491,7 +1533,8 @@ def main() -> int:
                         api_key = fh.read().strip() or api_key
                 except OSError:
                     pass
-            embedder = OpenAIEmbedder(args.embed_url, args.embed_model, api_key)
+            embedder = OpenAIEmbedder(args.embed_url, args.embed_model, api_key,
+                                      ttl=args.embed_ttl or 0)
         else:
             embedder = OllamaEmbedder(args.embed_url, args.embed_model)
     store = MemoryStore(args.db, embedder=embedder)
