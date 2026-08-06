@@ -9,6 +9,11 @@ against the current engine on a 232-memory / 110-query corpus; footprint on v0.5
 > path you actually use. Searching the **entire store** with no project filter is harder:
 > recall@1 = 0.72, recall@3 = 0.87 across all 232 memories. Zero-dep lexical mode alone is
 > recall@1 = 0.76. All in a **132 KB** install, **~21 MB** RAM, no Docker / DB server / cloud / API key.
+>
+> **Corpus size is part of the number.** These figures are for a 232-memory store on the
+> default `paraphrase-multilingual` embedder. On a 4,799-memory store that same embedder
+> falls to recall@1 = 0.550 (the lexical baseline) and you want `bge-m3`, which holds
+> 0.775 — see the takeaways below.
 
 ---
 
@@ -48,6 +53,14 @@ Honest takeaways:
 - **The number held as the corpus grew 6×.** At n=35 the headline was recall@1 0.93 with
   a wide CI; at n=232 / 110 queries it's 0.94 with a tighter CI `[0.87–1.00]` and roughly
   double the candidate pool. Bigger, harder eval, same result.
+- **It does not hold forever, and the embedder is why.** Re-measured on a real
+  4,799-memory store (120 queries, EN+RU), `paraphrase-multilingual` drops to recall@1
+  **0.550 — exactly level with the BM25 baseline**, i.e. dense search stops paying for
+  itself. `bge-m3` holds **0.775** on that same store (paired Δ +0.225, CI95
+  `[+0.125…+0.325]`). So read every number here as *corpus-size-dependent*: 0.94 is the
+  figure for a 232-memory store with the light default embedder, not a constant. Past
+  ~1k memories `ygg doctor` says so and `ygg setup` recommends `bge-m3` instead.
+  (Details: `docs/TODO-scale-lifecycle-lmstudio.md` §1.)
 - **holdout ≈ dev** (0.94 vs 0.98 project-scoped) — the ranking weights don't overfit
   the metric; the tuner (`eval/ygg_tune.py`) explicitly kept defaults when a swept gain
   didn't hold on holdout.
