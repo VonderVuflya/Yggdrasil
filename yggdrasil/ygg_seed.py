@@ -51,6 +51,73 @@ MAX_CHARS_PER_FILE = 14000  # window we feed the local model per source file
 OLLAMA_URL = _cfg.distill_url()
 DISTILL_TIMEOUT = _cfg.distill_timeout()
 DISTILL_NUM_CTX = _cfg.distill_num_ctx()
+DISTILL_REASONING = _cfg.distill_reasoning()
+DISTILL_TTL = _cfg.distill_ttl()
+
+# Models that think before answering unless told not to. Extraction gains nothing
+# from a <think> trace — measured on 8 real transcripts, qwen3-14b went 16.8s ->
+# 6.1s per file for the same lesson count — but the OFF SWITCH IS NOT PORTABLE:
+#   * Qwen3       obeys `/no_think` appended to the prompt.
+#   * Qwen3.5/3.6 IGNORE `/no_think` entirely and obey only the API-level
+#     `reasoning_effort: "none"` (verified against LM Studio).
+#   * `chat_template_kwargs.enable_thinking=false` is ignored by LM Studio.
+# So we send BOTH signals: the field is harmless to servers that don't know it
+# (OpenAI-dialect servers ignore unknown keys), and the marker is a no-op for
+# models that don't recognise it.
+_NO_THINK_MARKER = "\n/no_think"
+# Body fields outside the plain OpenAI/Ollama schema. A strict server may 400 on
+# any of them, and none is worth failing a distill over — they get stripped and
+# the call retried once (slower, or with the model left resident, but it runs).
+_NONSTANDARD_KEYS = frozenset(("reasoning_effort", "think", "ttl"))
+_REASONING_MODEL_HINTS = ("qwen3", "qwen-3", "deepseek-r1", "magistral", "phi-4-reasoning",
+                          "glm-4.5", "glm-5", "minimax-m", "exaone-deep")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Does this model think unless told otherwise? (`distill_reasoning=auto`.)
+
+    Delegates to ygg_providers, which owns the name list because the wizard
+    labels model rows with the same judgement. Suppression is NOT free on a model
+    that wasn't reasoning anyway — measured: qwen3-4b-2507 (an instruct build
+    whose LM Studio id omits 'instruct', so this returns True) gained nothing in
+    time and lost 5 of 8 files to English output. `_restate_language` absorbs
+    that; we still err toward suppressing because the time saved on an actual
+    reasoning model is 3-8x."""
+    try:
+        from . import ygg_providers as _providers
+    except ImportError:  # pragma: no cover — flat deploy
+        try:
+            import ygg_providers as _providers  # type: ignore
+        except ImportError:
+            name = (model or "").lower()
+            if any(t in name for t in ("-instruct", "instruct-", "non-thinking", "no-think")):
+                return False
+            return any(h in name for h in _REASONING_MODEL_HINTS)
+    return _providers.is_reasoning(model)
+
+
+def _restate_language(prompt: str) -> str:
+    """Repeat the language rule at the very END of a reasoning-suppressed prompt.
+
+    The directive sits in the middle of the prompt, and a model that skips its
+    thinking pass follows mid-prompt instructions markedly worse: measured on 8
+    Russian transcripts, qwen3-4b-2507 wrote 5 of them in English once `/no_think`
+    was appended, and zero without it. Recency is the cheap fix — the rule is the
+    last thing the model reads. Only for the Russian case, which is the one that
+    actually drifts (an English log has nothing to drift to)."""
+    if "RUSSIAN" not in prompt:
+        return ""
+    return ('\nREMINDER: every "content" value MUST be in RUSSIAN. '
+            "Keep code identifiers, commands and names verbatim.")
+
+
+def _suppress_reasoning(model: str) -> bool:
+    mode = DISTILL_REASONING
+    if mode == "off":
+        return True
+    if mode == "on":
+        return False
+    return _is_reasoning_model(model)
 
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +325,9 @@ Return STRICT JSON: {"lessons":[{"type":"...","content":"..."}]}.
 - type is one of: decision, lesson, convention, fix, reference, project_status.
 - content is ONE self-contained fact a future session would want: a decision and
   its rationale, a non-obvious fix, a convention, a gotcha, current status.
-- Keep each under 280 chars. 0 to 6 lessons. Skip chit-chat and anything
+- ONE fact per lesson. If a note covers several topics, split it into separate
+  lessons — a lesson mixing topics matches no single query well.
+- Keep each under 500 chars. 0 to 6 lessons. Skip chit-chat and anything
   derivable from the code. NEVER include secrets/tokens/keys.{LANG}
 Work log follows:
 ---
@@ -319,6 +388,30 @@ def _salvage_lessons(raw: str) -> list:
 # than store a stub. Length is deliberately NOT a signal (lessons are meant to
 # be short); the tell is the ENDING and unbalanced delimiters.
 _TRUNCATION_TAILS = (":", ",", ";", "—", "–", "-", "(", "[", "{")
+
+
+def _wrong_language(content: str, source_text: str) -> bool:
+    """True if a lesson answered in English about a Russian log.
+
+    Suppressing the thinking pass makes models follow the mid-prompt language rule
+    intermittently: measured over four runs of the same 8 Russian transcripts,
+    reasoning ON drifted in 0 of them, reasoning suppressed in two (4 and 5 lessons
+    of ~48). Restating the rule at the end of the prompt helps but does not close
+    it, so this is the deterministic backstop — same shape as `_looks_truncated`:
+    drop the bad lesson instead of persisting it, and the file is retried later.
+
+    Deliberately narrow: only fires when the SOURCE is clearly Cyrillic-dominant
+    and the lesson has NO Cyrillic at all. A Russian lesson that is mostly code
+    identifiers still contains some Cyrillic and passes."""
+    body = (content or "").strip()
+    if len(body) < 40:  # too short to judge — a bare identifier is not a language
+        return False
+    src = (source_text or "")[:4000]
+    cyr_src = sum(1 for ch in src if "а" <= ch.lower() <= "я" or ch.lower() == "ё")
+    lat_src = sum(1 for ch in src if "a" <= ch.lower() <= "z")
+    if cyr_src < 40 or cyr_src < lat_src:  # same test as _lang_directive
+        return False
+    return not any("а" <= ch.lower() <= "я" or ch.lower() == "ё" for ch in body)
 
 
 def _looks_truncated(content: str) -> bool:
@@ -498,23 +591,34 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
     total = timeout or DISTILL_TIMEOUT
     idle = min(total, STREAM_IDLE_TIMEOUT)
 
+    quiet = _suppress_reasoning(model)
+    text = prompt + _restate_language(prompt) + _NO_THINK_MARKER if quiet else prompt
+
     def base(kind: str) -> tuple[str, str, dict]:
         if kind == "generate":
-            return (f"{OLLAMA_URL}/api/generate", "ollama_generate",
-                    {"model": model, "prompt": prompt, "format": "json",
-                     "options": {"num_ctx": DISTILL_NUM_CTX}})
+            body = {"model": model, "prompt": text, "format": "json",
+                    "options": {"num_ctx": DISTILL_NUM_CTX}}
+            if quiet:  # Ollama's own switch for hybrid models
+                body["think"] = False
+            return (f"{OLLAMA_URL}/api/generate", "ollama_generate", body)
         if kind == "chat":
-            return (f"{OLLAMA_URL}/api/chat", "ollama_chat",
-                    {"model": model, "messages": [{"role": "user", "content": prompt}],
-                     "format": "json", "options": {"num_ctx": DISTILL_NUM_CTX}})
+            body = {"model": model, "messages": [{"role": "user", "content": text}],
+                    "format": "json", "options": {"num_ctx": DISTILL_NUM_CTX}}
+            if quiet:
+                body["think"] = False
+            return (f"{OLLAMA_URL}/api/chat", "ollama_chat", body)
         # Tolerate a base that already ends in /v1. `embed_url` wants the /v1
         # base (…/api/v1) while this one wants the host root, so the same
         # provider needs two different URLs across two settings — nobody will
         # remember which is which, and the punishment is a 404 from a doubled
         # /v1/v1 that looks like the endpoint is simply wrong.
         root = OLLAMA_URL[:-3].rstrip("/") if OLLAMA_URL.rstrip("/").endswith("/v1") else OLLAMA_URL
-        return (f"{root}/v1/chat/completions", "openai",
-                {"model": model, "messages": [{"role": "user", "content": prompt}]})
+        body = {"model": model, "messages": [{"role": "user", "content": text}]}
+        if quiet:  # the only switch Qwen3.5/3.6 actually honour
+            body["reasoning_effort"] = "none"
+        if DISTILL_TTL:  # let LM Studio release the (large) distill model when idle
+            body["ttl"] = DISTILL_TTL
+        return (f"{root}/v1/chat/completions", "openai", body)
 
     def extract(mode: str, data: dict) -> tuple[str, str | None]:
         if mode == "ollama_generate":
@@ -554,6 +658,26 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
         except urllib.error.HTTPError as exc:
             if exc.code == 404:  # dialect not implemented here — try the next
                 last_404 = exc
+                continue
+            if exc.code in (400, 422) and _NONSTANDARD_KEYS & body.keys():
+                # A strict server can reject the reasoning-suppression field it
+                # doesn't know (`reasoning_effort`, `think`). That must degrade to
+                # a slower distill, never to a failed one — retry once without it.
+                plain = {k: v for k, v in body.items() if k not in _NONSTANDARD_KEYS}
+                try:
+                    if stream:
+                        out, finish = _stream_collect(
+                            url, {**plain, "stream": True}, mode, idle, total)
+                    else:
+                        out, finish = extract(
+                            mode, _post_json(url, {**plain, "stream": False}, idle))
+                    if finish == "length":
+                        raise ValueError(_TRUNCATED_MSG)
+                    if _strip_fences(out):
+                        _ENDPOINT_CACHE[OLLAMA_URL] = (kind, stream)
+                        return _strip_fences(out)
+                except urllib.error.HTTPError:
+                    pass  # not the reasoning field's fault — fall through below
                 continue
             if exc.code in (401, 403):
                 # Name the cause. A hosted endpoint answers the probe with a bare
@@ -692,6 +816,9 @@ def distill_text(text: str, *, project: str, source: str, model: str,
         if not content:
             continue
         if _looks_truncated(content):  # a mid-sentence stub — drop it, don't persist
+            truncated += 1
+            continue
+        if _wrong_language(content, text):  # answered in English about a Russian log
             truncated += 1
             continue
         try:
@@ -941,9 +1068,10 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
         agg["timed_out"] += 1 if res.get("timed_out") else 0
         if progress is not None:
             progress.file_done(res)
-        # Record state so the next run skips this file — UNLESS it timed out, so a
-        # plain re-run (with a higher YGG_DISTILL_TIMEOUT) retries just the big ones.
-        if state is not None and not res.get("timed_out"):
+        # Advance incremental state only after a complete success.  An error can
+        # be a timeout, malformed model JSON, or a failed memory write; marking
+        # any of those as done silently loses the file from every later seed.
+        if state is not None and not res.get("errors"):
             try:
                 st = f.stat()
                 state[str(f)] = {"mtime": st.st_mtime, "size": st.st_size, "distilled_at": time.time()}
@@ -1089,6 +1217,28 @@ def _bg_model() -> str:
     return _cfg.bg_model()
 
 
+def _release_model(model: str) -> None:
+    """Hand the GPU back when a seed run ends, if an idle window is configured.
+
+    `distill_ttl` only starts counting down after the LAST request, so without
+    this the (multi-GB) distill model keeps the VRAM for another ttl-worth of
+    minutes past a run that is already over. Best-effort and silent: not every
+    runtime can be asked, and failing to unload is never worth a warning."""
+    if not model or not DISTILL_TTL:
+        return
+    try:
+        from . import ygg_providers as _providers
+    except ImportError:  # pragma: no cover — flat deploy
+        try:
+            import ygg_providers as _providers  # type: ignore
+        except ImportError:
+            return
+    try:
+        _providers.unload(model)
+    except Exception:  # noqa: BLE001 — cosmetic cleanup, never fail the run
+        pass
+
+
 def seed(args: argparse.Namespace) -> int:
     sources = discover()
     if not sources:
@@ -1201,6 +1351,7 @@ def seed(args: argparse.Namespace) -> int:
         _save_seed_state(state)
     progress.summary(interrupted=interrupted,
                      up_to_date=(up_to_date_projects, up_to_date_files))
+    _release_model(model)
     if progress.timed_out:
         n = progress.timed_out
         higher = max(180, DISTILL_TIMEOUT * 2)
@@ -1265,6 +1416,9 @@ def main(cmd: str, rest: list[str]) -> int:
                        help="Ollama endpoint for distillation, e.g. http://192.168.3.124:11434 "
                             "(default: config distill_url, else local)")
         p.add_argument("--timeout", default="", help="per-file distill timeout in seconds (default: config distill_timeout)")
+        p.add_argument("--reasoning", default="", choices=["", "auto", "off", "on"],
+                       help="let a hybrid model think first: auto (off for known reasoning "
+                            "models — 3-6x faster, same lessons), off, or on")
     if cmd == "seed":
         p.add_argument("--dry-run", action="store_true", help="discover + estimate only, write nothing")
         p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
@@ -1281,9 +1435,11 @@ def main(cmd: str, rest: list[str]) -> int:
     # Apply flag > env > config > default for the distill endpoint + timeout, by
     # setting the module globals _ollama_generate reads. (stats has no such flags.)
     if cmd in ("seed", "distill"):
-        global OLLAMA_URL, DISTILL_TIMEOUT
+        global OLLAMA_URL, DISTILL_TIMEOUT, DISTILL_REASONING, DISTILL_TTL
         OLLAMA_URL = _cfg.distill_url(getattr(args, "ollama_url", "") or None)
         DISTILL_TIMEOUT = _cfg.distill_timeout(getattr(args, "timeout", "") or None)
+        DISTILL_REASONING = _cfg.distill_reasoning(getattr(args, "reasoning", "") or None)
+        DISTILL_TTL = _cfg.distill_ttl()
     if cmd == "stats":
         return stats(args.user_id, args.namespace)
     if cmd == "seed":
