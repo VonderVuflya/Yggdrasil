@@ -90,6 +90,26 @@ class IncrementalSeedTest(unittest.TestCase):
         r = ygg_seed.distill_source(src, model="m", user_id="u", namespace="n", state=state, force=True)
         self.assertEqual((r["added"], r["skipped"]), (1, 0))     # force re-processes
 
+    def test_failed_distill_remains_pending_for_the_next_seed(self):
+        """A malformed model response must never advance incremental state."""
+        src, mf = self._src()
+        state = {}
+        calls = 0
+
+        def fail(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return {"added": 0, "dup": 0, "errors": 1, "timed_out": False}
+
+        ygg_seed.distill_text = fail
+        first = ygg_seed.distill_source(src, model="m", user_id="u", namespace="n", state=state)
+        second = ygg_seed.distill_source(src, model="m", user_id="u", namespace="n", state=state)
+
+        self.assertEqual((first["errors"], first["skipped"]), (1, 0))
+        self.assertNotIn(mf, state)
+        self.assertEqual((second["errors"], second["skipped"]), (1, 0))
+        self.assertEqual(calls, 2)
+
 
 class LessonsFromRawTest(unittest.TestCase):
     """The distill parser must tolerate the malformed JSON small models emit."""

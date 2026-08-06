@@ -1,5 +1,8 @@
-"""Distill timeout handling: configurable limit, timeout detection, and the
-re-run contract (timed-out files are NOT marked done; deterministic errors are)."""
+"""Distill failures: configurable timeout, error detection, and re-run contract.
+
+Any failed distill remains pending.  A local model may emit malformed JSON in
+one run and valid JSON in the next, so treating that as terminal loses chats.
+"""
 
 import socket
 import tempfile
@@ -51,11 +54,12 @@ class DistillTimeoutContractTest(unittest.TestCase):
         self.assertEqual(state, {})                       # nothing recorded
         self.assertFalse(s._is_unchanged(f, state))        # -> re-run retries it
 
-    def test_deterministic_error_is_marked_done(self):
+    def test_malformed_response_is_not_marked_done(self):
         s._ollama_generate = lambda *a, **k: "not json{{{"  # parse error every time
         f, state, agg = self._run_once()
         self.assertEqual(agg["timed_out"], 0)
-        self.assertIn(str(f), state)                       # recorded -> not retried forever
+        self.assertEqual(state, {})                         # re-run retries it
+        self.assertFalse(s._is_unchanged(f, state))
 
     def test_distill_text_reports_timed_out(self):
         s._ollama_generate = lambda *a, **k: (_ for _ in ()).throw(socket.timeout())
