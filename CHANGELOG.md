@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.15.0] — 2026-08-06 — distillation that stays on task
+
+### Added
+- **Reasoning-aware distillation.** `distill_reasoning=auto` suppresses internal
+  reasoning on models known to support it, avoiding long `<think>` traces that
+  do not improve extracted lessons. Set it to `on` or `off` to override.
+- **Model lifecycle controls.** `distill_ttl` can release the distillation
+  model after an idle interval, while keeping it loaded between files in one
+  `ygg seed` run.
+
+### Fixed
+- Malformed, truncated, timed-out, or wrong-language distillation output stays
+  pending so the next seed run can retry it; only valid lessons mark a source
+  complete.
+- Strict OpenAI-compatible servers now retry without an unsupported reasoning
+  control instead of failing the whole distillation request.
+
 ## [0.14.0] — 2026-08-06 — the installer finds your runtime instead of asking you to
 
 `ygg install` assumed Ollama and then asked you to type a model name from
