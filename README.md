@@ -144,7 +144,7 @@ Yggdrasil is **memory + tools** — the *intelligence* is your LLM. It just make
 
 ## 🎛️ Memory tiers — zero-config by default
 
-Out of the box, Yggdrasil runs on **SQLite + FTS5 with zero dependencies** — instant keyword search, no models, nothing to download. Optional **local** models via [Ollama](https://ollama.com) add two independent tiers:
+Out of the box, Yggdrasil runs on **SQLite + FTS5 with zero dependencies** — instant keyword search, no models, nothing to download. Optional **local** models add two independent tiers:
 
 | Tier | You add | You gain |
 | --- | --- | --- |
@@ -152,7 +152,9 @@ Out of the box, Yggdrasil runs on **SQLite + FTS5 with zero dependencies** — i
 | **1 · semantic** | an **embedding** model (`all-minilm` 45 MB · `paraphrase-multilingual` ~560 MB) | search by **meaning**, across languages — recall@1 = **0.94**, recall@3 **1.00** |
 | **2 · self-maintaining** | a small **LLM** (`qwen2.5:1.5b` ~1 GB) | background dedupe/merge of memory (propose-only) |
 
-Ollama only *computes* vectors and runs the background model — every memory and every vector stays in the same local SQLite. `ygg install` detects your hardware and recommends a fit (`ygg recommend` shows the full catalog).
+The runtime only *computes* vectors and runs the background model — every memory and every vector stays in the same local SQLite.
+
+`ygg install` scans for [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai) and llama.cpp, offers to start whichever is installed but idle, and then shows one menu per job with **green for models you already have and red for models it would download**. Pick a row, and it writes `embed_backend`, `embed_url` and `distill_url` for you — including the part nobody guesses right, that `embed_url` wants the `/v1` base while `distill_url` wants the host root. A runtime on another machine is one URL: paste it and the dialect is detected. `ygg recommend` shows the same scan plus the full catalog without changing anything.
 
 <details>
 <summary>Full model menu</summary>
@@ -167,9 +169,11 @@ Ollama only *computes* vectors and runs the background model — every memory an
 | `paraphrase-multilingual` | ~560 MB | multilingual (EN/RU + 50 langs, 768d) |
 | `bge-m3` | 1.2 GB | multilingual, top quality (heavier) |
 
-**Embedding backend** — Ollama by default. To use an OpenAI-compatible
-`/v1/embeddings` server instead (llama.cpp's `llama-server --embeddings`,
-OpenRouter, LM Studio, vLLM), set `embed_backend`:
+**Embedding backend** — Ollama by default. `ygg install` sets all of this for you
+once you pick a runtime; the manual route below is for scripted setups and for
+changing one thing later. To use an OpenAI-compatible `/v1/embeddings` server
+instead (llama.cpp's `llama-server --embeddings`, OpenRouter, LM Studio, vLLM),
+set `embed_backend`:
 
 ```bash
 # local llama.cpp — no key needed
@@ -195,6 +199,38 @@ Check it took with `ygg doctor` — dense should name your model:
 ```
 ✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
 ```
+
+<details>
+<summary><b>LM Studio: the four things that catch people out</b></summary>
+
+`ygg install` handles all of this. Read on only if you're wiring it by hand.
+
+**1. Two settings, two different shapes of the same URL.** `embed_url` is the
+`/v1` base; `distill_url` is the host root. Same server, and swapping them gets
+you a 404 that reads like the endpoint is simply wrong.
+
+```bash
+ygg config set embed_backend openai
+ygg config set embed_url    http://127.0.0.1:1234/v1
+ygg config set distill_url  http://127.0.0.1:1234
+```
+
+**2. The model id is not what you downloaded.** `lms get nomic-embed-text` puts
+a model on disk that the API answers to as
+`text-embedding-nomic-embed-text-v1.5`. Ask the server, don't guess:
+
+```bash
+curl -s http://127.0.0.1:1234/api/v0/models | grep '"id"'
+```
+
+**3. Turn on Just-In-Time model loading** (Developer tab). Without it nothing is
+loaded when the daemon calls, and every request 404s.
+
+**4. Turn on "run the server on login".** The Yggdrasil daemon starts at boot; if
+LM Studio's server doesn't, dense search silently degrades to lexical until you
+next open the app.
+
+</details>
 
 <details>
 <summary><b>OpenRouter: two settings that will bite you</b></summary>

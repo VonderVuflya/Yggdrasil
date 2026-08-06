@@ -3,6 +3,66 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.14.0] — 2026-08-06 — the installer finds your runtime instead of asking you to
+
+`ygg install` assumed Ollama and then asked you to type a model name from
+memory. If you ran LM Studio you had to work out three things nobody told you:
+that `embed_backend` has to be `openai`, that `embed_url` wants the `/v1` base
+while `distill_url` wants the host root, and the exact id the server answers to
+(`text-embedding-nomic-embed-text-v1.5`, not the `nomic-embed-text` you
+downloaded). Then `ygg doctor` told you the working install was broken, because
+it ran `ollama list` no matter what you'd configured.
+
+### Added
+- **The wizard scans for runtimes first.** Ollama, LM Studio and llama.cpp are
+  probed in parallel before the first question, and the result is the first
+  thing on screen: running, installed-but-idle, or missing (with a download
+  link). Detection is by API, so a runtime that's up is up regardless of how it
+  was started.
+- **It offers to start an idle one.** "The models are on disk, the config is
+  right, the server just isn't listening" is the most common shape of
+  "Yggdrasil doesn't work". One keystroke now runs `ollama serve` /
+  `lms server start` and re-probes.
+- **Model menus, green and red.** One per job (embedding, distillation), listing
+  what the runtime actually holds — green, ready to use — above what it would
+  have to download, red, with the size. Pick a red row and it's fetched through
+  whichever runtime owns it, with that runtime's own progress output.
+- **The id written to config is the one the server answers to.** It's discovered
+  by diffing the model list around the download rather than hardcoded, so it
+  survives LM Studio renaming a staff pick.
+- **Endpoints are filled in for you** — `embed_backend`, `embed_url` and
+  `distill_url`, each in the shape that setting wants. The wizard never wrote
+  `distill_url` at all before, so distillation quietly kept aiming at
+  `127.0.0.1:11434` no matter which runtime you'd chosen.
+- **"Another machine…"** takes one URL, probes it, detects the dialect (Ollama
+  vs OpenAI-compatible) and derives both settings. A bare `box.local:1234`
+  works.
+- **Embeddings and distillation can sit on different runtimes** — they're asked
+  separately, defaulting to the same answer.
+- **`ygg providers`** runs the same scan on its own, `--json` for scripts.
+
+### Fixed
+- **`ygg doctor` no longer reports a healthy LM Studio install as broken.** It
+  checked every configured model with `ollama list` and, failing to find
+  `ollama` on PATH, called it a failed install. It now probes the endpoint each
+  model is actually configured against, and separates the three failures that
+  were being conflated: nothing answering at the URL, the runtime answering but
+  not serving that model (it lists what it does serve), and a hosted endpoint
+  missing its key.
+- **`ygg install` stopped demanding `ollama pull` for models Ollama doesn't
+  own.** With an OpenAI-dialect endpoint configured it skipped nothing and
+  warned about a missing Ollama it didn't need.
+- **Menu rows line up.** The label was padded *after* being coloured, so the
+  ANSI escape counted toward the width and the notes column came out ragged.
+  Long rows are also clipped to the terminal instead of wrapping, which used to
+  make the menu scroll up its own body on every keypress.
+
+### Changed
+- The wizard opens with the hardware line and the runtime scan instead of a
+  40-line model catalog printed before it knew whether any of it could run here.
+  The full catalog stayed put under `ygg recommend`, which now leads with the
+  same scan.
+
 ## [0.13.2] — 2026-07-17
 
 ### Fixed
