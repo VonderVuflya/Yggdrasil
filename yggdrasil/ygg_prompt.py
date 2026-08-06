@@ -97,22 +97,58 @@ UP, DOWN, LEFT, RIGHT = _ESC + "[A", _ESC + "[B", _ESC + "[D", _ESC + "[C"
 # --------------------------------------------------------------------------- #
 
 class Option:
-    """One choice. `note` is the trade-off — the reason a user picks this one."""
+    """One choice. `note` is the trade-off — the reason a user picks this one.
 
-    def __init__(self, value: str, label: str, note: str = ""):
+    `badge` is state rather than argument: "installed" vs "download 563 MB" on a
+    model list, coloured by `badge_color` (a Palette method name). Keeping it a
+    separate field, instead of letting callers pre-colour the label, is what lets
+    the column stay aligned — you cannot pad a string that has ANSI in it.
+    """
+
+    def __init__(self, value: str, label: str, note: str = "",
+                 badge: str = "", badge_color: str = ""):
         self.value, self.label, self.note = value, label, note
+        self.badge, self.badge_color = badge, badge_color
+
+    def paint_badge(self, p) -> str:
+        if not self.badge:
+            return ""
+        return getattr(p, self.badge_color or "dim", p.dim)(self.badge)
+
+
+def _cols() -> int:
+    try:
+        import shutil as _sh
+        return max(40, _sh.get_terminal_size((100, 24)).columns)
+    except OSError:
+        return 100
 
 
 def _render(title: str, options: list[Option], cursor: int, p, allow_back: bool) -> int:
-    """Draw the menu; return how many lines were printed (to erase next pass)."""
+    """Draw the menu; return how many lines were printed (to erase next pass).
+
+    Every row is clipped to the terminal width. A row that wraps counts as two
+    lines on screen but one here, and `_erase` then scrolls the menu up its own
+    body on each keypress — with a note column, that stopped being hypothetical.
+    """
+    width = min(34, max((len(o.label) for o in options), default=0) + 1)
+    bwidth = max((len(o.badge) for o in options), default=0)
+    room = _cols() - 6 - width - (bwidth + 2 if bwidth else 0)
     lines = [f"{p.bold('◆')}  {p.bold(title)}"]
     for i, o in enumerate(options):
+        # Pad on the PLAIN text, then colour — `f"{p.bold(x):<22}"` pads the
+        # escape sequence too and the notes column comes out ragged.
+        pad = " " * max(1, width - len(o.label))
         if i == cursor:
             mark, label = p.green("●"), p.bold(o.label)
         else:
             mark, label = p.dim("○"), o.label
-        note = f"  {p.dim(o.note)}" if o.note else ""
-        lines.append(f"{p.dim('│')}  {mark} {label:<22}{note}")
+        badge = ""
+        if bwidth:
+            badge = o.paint_badge(p) + " " * (bwidth - len(o.badge) + 2)
+        text = o.note if len(o.note) <= room else o.note[:max(0, room - 1)].rstrip() + "…"
+        note = p.dim(text) if text else ""
+        lines.append(f"{p.dim('│')}  {mark} {label}{pad}{badge}{note}".rstrip())
     hint = "↑↓ move · enter select" + (" · ← back" if allow_back else "") + " · ctrl-c quit"
     lines.append(f"{p.dim('└')}  {p.dim(hint)}")
     sys.stdout.write("\n".join(lines) + "\n")
@@ -172,8 +208,9 @@ def _select_plain(title: str, options: list[Option], idx: int, allow_back: bool)
     """No terminal: a numbered list on plain input(). Same contract."""
     print(f"\n{title}")
     for i, o in enumerate(options, 1):
+        badge = f"  [{o.badge}]" if o.badge else ""
         note = f"  — {o.note}" if o.note else ""
-        print(f"  {i}) {o.label}{note}")
+        print(f"  {i}) {o.label}{badge}{note}")
     suffix = "  (b = back)" if allow_back else ""
     while True:
         try:

@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.request
 from pathlib import Path
 from shutil import which
@@ -34,6 +35,7 @@ ygg — one shared, durable memory for your AI coding agents
 Setup & service:
   ygg install            Guided setup: hardware-aware models, background service, MCP registration
   ygg recommend          Show the hardware-aware model catalog
+  ygg providers          Scan for local LLM runtimes (Ollama / LM Studio / llama.cpp)
   ygg setup              Re-run the interactive setup wizard
   ygg doctor             Diagnose the installation (engine, models, MCP, hook)
   ygg register           (Re)register the MCP server with Claude Code / Codex
@@ -165,12 +167,53 @@ def _service(cmd: str, rest: list[str]) -> int:
     return 2
 
 
-def _ollama_models() -> list[str]:
-    try:
-        out = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5).stdout
-        return [line.split()[0] for line in out.splitlines()[1:] if line.strip()]
-    except (OSError, subprocess.SubprocessError):
-        return []
+def _runtime_check(check, label: str, model: str, url: str, backend: str,
+                   kind: str = "") -> bool:
+    """Is `model` really being served at `url`? Reported in the runtime's terms.
+
+    Three distinct failures, three distinct fixes, and conflating them is what
+    made a mis-set endpoint look like a missing model:
+      * nothing answers at the URL     -> start the runtime
+      * it answers, model isn't there  -> download the model
+      * the URL is hosted              -> covered by the api-key check above
+    """
+    from . import ygg_providers as P
+
+    url = (url or "").rstrip("/")
+    if _is_hosted(url):
+        check(None, label, f"{model} @ {url} (hosted — not probed)")
+        return True
+
+    dialect = (backend or "").strip().lower()
+    if dialect == "ollama":
+        models = P.probe_ollama(url, timeout=2.5)
+    elif dialect in ("openai", "openai-compatible"):
+        models = P.probe_openai(url, timeout=2.5)
+    else:                                   # distill_url carries no backend key
+        found = P.probe_any(url, timeout=2.5)
+        dialect, models = found if found else ("", None)
+
+    if models is None:
+        idle = [x for x in P.detect(timeout=1.0) if x.installed and not x.running]
+        fix = (P.start_hint(idle[0]) if idle
+               else f"start the runtime serving {url}, then: ygg restart")
+        check(False, label, f"{model} — nothing answering on {url}", fix)
+        return False
+
+    prov = P.Provider("probe", "runtime", url, models, dialect=dialect or "openai")
+    host = prov.distill_url.split("//")[-1]      # no /v1 — this is a place, not an API
+    hit = prov.has(model) or prov.matches(model)
+    if hit:
+        served = model if prov.has(model) else prov.matches(model).id
+        check(True, label, f"{served} · served by {host}")
+        return True
+    # List only models of the kind we're looking for; offering an embedder as a
+    # near-miss for a distill model is worse than saying nothing.
+    same = [m.id for m in models if not kind or m.kind == kind]
+    near = ", ".join(same[:4]) if same else f"no {kind or 'usable'} models at all"
+    check(False, label, f"{model} is not on {host} (it has: {near})",
+          f"ygg setup   — pick one of those, or download {model} in {host}")
+    return False
 
 
 def _mcp_registered(agent: str) -> bool:
@@ -205,6 +248,7 @@ def _doctor() -> int:
             print(f"     {p.dim('→ fix: ' + fix)}")
 
     t0 = _time.monotonic()
+    h: dict = {}  # stays empty when the engine is unreachable; read again further down
     try:
         with urllib.request.urlopen(f"{url}/health", timeout=3) as r:
             h = json.load(r)
@@ -247,23 +291,65 @@ def _doctor() -> int:
     embed, bg = cfg.get("embed_model") or "", cfg.get("bg_model") or ""
     check(bool(embed), "embedding model", embed or "none (lexical-only)",
           "" if embed else "ygg setup")
+    # Retrieval accuracy decays with corpus size, and a weak embedder decays fast:
+    # on this benchmark paraphrase-multilingual went 0.94 -> 0.550 recall@1 between
+    # 232 and 4,799 memories, i.e. down to the lexical baseline, while bge-m3 held
+    # 0.775. Nothing looks broken when it happens — the search just quietly stops
+    # beating BM25 — so say it out loud once the store is big enough to matter.
+    count = h.get("memory_count") or 0
+    if embed and count >= 1000 and not any(
+            strong in embed.lower() for strong in ("bge-m3", "qwen3-embedding", "e5-large")):
+        check(None, "embedder scale",
+              f"{count} memories on '{embed}' — weaker embedders fade at this size",
+              "ygg config set embed_model text-embedding-bge-m3 && ygg redeploy && ygg reindex")
     check(bool(bg), "background model", bg or "none (manual write-path)",
           "" if bg else "ygg setup")
 
-    if embed or bg:
-        if which("ollama"):
-            pulled = _ollama_models()
-            for m in (embed, bg):
-                if not m:
-                    continue
-                have = any(x.split(":")[0] == m.split(":")[0] for x in pulled)
-                ok = ok and have
-                check(have, f"model {m}", "present" if have else "NOT pulled",
-                      "" if have else f"ollama pull {m}")
-        else:
+    # The daemon takes its embedder as an argv flag, so config.json can say one
+    # thing while the running process and the autostart unit say another. That
+    # divergence is invisible until a reboot, when the stale unit wins and starts
+    # embedding against vectors of a different dimension.
+    if embed:
+        from . import service
+        want = service.engine_argv(service.token() or "", embed)
+        installed = service.installed_unit_argv()
+        if installed is not None and installed != want:
             ok = False
-            check(False, "ollama", "a model is configured but `ollama` is missing",
-                  "install Ollama — https://ollama.com")
+            check(False, "autostart unit", "launches different flags than config.json",
+                  "ygg redeploy")
+        elif installed is not None:
+            check(True, "autostart unit", "matches config.json")
+
+    # Check each model against the runtime it's actually configured against.
+    # This used to run `ollama list` unconditionally, so every LM Studio user was
+    # told their working install was broken because `ollama` wasn't on PATH.
+    if embed:
+        ok = _runtime_check(check, "embedding", embed, C.resolve("embed_url"),
+                            C.resolve("embed_backend"), "embed") and ok
+    if bg:
+        ok = _runtime_check(check, "background", bg, C.resolve("distill_url"),
+                            "", "llm") and ok
+    # A model with no idle-unload window sits in VRAM forever for a daemon that
+    # wakes up in bursts. The runtime's REST API doesn't expose per-model TTL, so
+    # judge it from our side: an unset ttl means we never ask it to be released.
+    pinned = [name for name, key, url_key in (
+        ("embedding", "embed_ttl", "embed_url"), ("distill", "distill_ttl", "distill_url"))
+        if (embed if name == "embedding" else bg)
+        and not _is_hosted(C.resolve(url_key))
+        and str(C.resolve(key) or "0").strip() in ("", "0")]
+    if pinned:
+        check(None, "model lifecycle",
+              f"no idle-unload window for the {' and '.join(pinned)} model — "
+              f"it stays in VRAM between runs",
+              "ygg config set embed_ttl 300   # and/or: ygg config set distill_ttl 600")
+    if not embed and not bg:
+        # Lexical-only is a legitimate setup, but "you already have LM Studio
+        # running with six models" is worth saying out loud exactly once.
+        from . import ygg_providers as P
+        found = [x for x in P.detect(timeout=1.0) if x.running or x.installed]
+        if found:
+            check(None, "runtimes", " · ".join(f"{x.name}: {x.status()}" for x in found),
+                  "ygg setup   — wire one of these up for semantic search")
 
     claude_reg = _mcp_registered("claude")
     codex_reg = _mcp_registered("codex")
@@ -295,6 +381,35 @@ def _register() -> int:
     return 1
 
 
+def _reindex_progress_loop(tok: str, stop: threading.Event) -> None:
+    """Poll /reindex/status and redraw a one-line bar until told to stop.
+
+    The POST below blocks for as long as the whole walk takes — minutes on a large
+    store — and used to print nothing at all, which reads as a hang. The engine
+    reports progress on a separate endpoint, so a watcher thread can render it
+    while the request is still in flight."""
+    url = f"http://127.0.0.1:{_port()}/reindex/status"
+    drawn = False
+    while not stop.wait(0.5):
+        try:
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                st = (json.load(r).get("data") or {})
+        except Exception:  # noqa: BLE001 — progress is cosmetic, never fail the run
+            continue
+        total, done = st.get("total") or 0, st.get("done") or 0
+        if not st.get("running") or not total:
+            continue
+        pct = done / total
+        bar = "█" * int(pct * 24) + "░" * (24 - int(pct * 24))
+        sys.stdout.write(f"\r   reindexing {bar} {pct:5.0%}  {done}/{total}")
+        sys.stdout.flush()
+        drawn = True
+    if drawn:
+        sys.stdout.write("\r" + " " * 60 + "\r")
+        sys.stdout.flush()
+
+
 def _reindex() -> int:
     """Backfill embeddings for any memories missing one (restores dense recall)."""
     from . import service
@@ -303,13 +418,31 @@ def _reindex() -> int:
         f"http://127.0.0.1:{_port()}/reindex", data=b"{}", method="POST",
         headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
     )
+    stop = threading.Event()
+    watcher = threading.Thread(target=_reindex_progress_loop, args=(tok, stop), daemon=True)
+    watcher.start()
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            healed = (json.load(r).get("data") or {}).get("healed", 0)
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            data = json.load(r).get("data") or {}
     except Exception as exc:  # noqa: BLE001
         print(f"reindex failed: {exc} (is the engine up? `ygg start`)", file=sys.stderr)
         return 1
-    print(f"reindex: backfilled {healed} missing embedding(s).")
+    finally:
+        stop.set()
+        watcher.join(timeout=2)
+    if data.get("already_running"):
+        # The daemon backfills on startup too; saying so beats reporting 0 healed.
+        print(f"reindex: already running in the background "
+              f"({data.get('done', 0)}/{data.get('total', 0)} done) — nothing to do.")
+        return 0
+    healed, total = data.get("healed", 0), data.get("total")
+    missing = data.get("missing")
+    # Say what the STORE looks like now, not just what this call did: the daemon
+    # backfills on startup, so "backfilled 3615" on a 4799-memory store read as if
+    # the other 1184 had been skipped.
+    tail = f" — {total} memories, all embedded." if total and not missing else (
+        f" — {missing} still missing." if missing else ".")
+    print(f"reindex: backfilled {healed} embedding(s){tail}")
     return 0
 
 
@@ -640,6 +773,13 @@ def _run() -> int:
         from . import ygg_setup as m
         sys.argv = ["ygg", cmd, *rest]
         return m.main()
+    if cmd == "providers":
+        from . import ygg_providers as P
+        if "--json" in rest:
+            return P.main()
+        from . import ygg_setup as m
+        m.print_runtime_scan()
+        return 0
     if cmd in ("stats", "seed", "distill"):
         from . import service
         service.ensure_running()  # cold-start onboarding needs the engine up

@@ -169,5 +169,117 @@ class TestEngineArgvEmbedBackend(unittest.TestCase):
         self.assertNotIn("--embed-api-key-file", service.engine_argv("tok", "nemotron"))
 
 
+class TestModelsToPull(unittest.TestCase):
+    """`ollama pull` is only the right way to fetch an Ollama-served model.
+
+    `ygg install` used to run it for every configured model and, failing to find
+    the binary, told LM Studio users their install had fallen back to
+    lexical-only — which it hadn't."""
+
+    def test_plain_ollama_pulls_both(self):
+        self.assertEqual(
+            service.models_to_pull("all-minilm", "qwen2.5:3b", {}),
+            ["all-minilm", "qwen2.5:3b"])
+
+    def test_an_openai_embed_backend_is_not_ollamas_to_fetch(self):
+        cfg = {"embed_backend": "openai", "embed_url": "http://127.0.0.1:1234/v1",
+               "distill_url": "http://127.0.0.1:1234"}
+        self.assertEqual(
+            service.models_to_pull("text-embedding-nomic-embed-text-v1.5",
+                                   "qwen2.5-3b-instruct", cfg), [])
+
+    def test_the_two_halves_are_judged_separately(self):
+        """Embeddings on LM Studio, distillation on local Ollama is a real setup."""
+        cfg = {"embed_backend": "openai", "embed_url": "http://127.0.0.1:1234/v1"}
+        self.assertEqual(service.models_to_pull("lmstudio-embed", "qwen2.5:3b", cfg),
+                         ["qwen2.5:3b"])
+        cfg = {"distill_url": "http://192.168.3.150:1234"}
+        self.assertEqual(service.models_to_pull("all-minilm", "qwen3-4b", cfg),
+                         ["all-minilm"])
+
+    def test_a_trailing_slash_is_still_the_default_endpoint(self):
+        self.assertEqual(
+            service.models_to_pull("", "qwen2.5:3b", {"distill_url": "http://127.0.0.1:11434/"}),
+            ["qwen2.5:3b"])
+
+    def test_pull_false_fetches_nothing(self):
+        self.assertEqual(service.models_to_pull("all-minilm", "qwen2.5:3b", {}, pull=False), [])
+
+    def test_unset_models_are_not_pulled(self):
+        self.assertEqual(service.models_to_pull("", "", {}), [])
+
+
+class TestStaleUnitDetection(unittest.TestCase):
+    """`ygg config set embed_model X` leaves the service unit naming the OLD model.
+    Left stale, systemd respawns that copy in a restart loop against whatever holds
+    the port — and wins outright after a reboot, serving the previous embedder
+    against vectors of a different dimension."""
+
+    ARGV_NEW = ["/usr/bin/python3", "/home/u/.yggdrasil/scripts/ygg_memory_server.py",
+                "--embed-model", "text-embedding-bge-m3"]
+    ARGV_OLD = ["/usr/bin/python3", "/home/u/.yggdrasil/scripts/ygg_memory_server.py",
+                "--embed-model", "paraphrase-multilingual"]
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self._orig_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.unit_dir = pathlib.Path(self.home) / ".config" / "systemd" / "user"
+        self.unit_dir.mkdir(parents=True)
+        self._orig_manager = service._manager
+        service._manager = lambda: "systemd"
+
+    def tearDown(self):
+        service._manager = self._orig_manager
+        if self._orig_home is not None:
+            os.environ["HOME"] = self._orig_home
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _write_unit(self, argv):
+        (self.unit_dir / f"{service.UNIT}.service").write_text(service.systemd_unit(argv))
+
+    def test_reads_argv_back_from_the_unit(self):
+        self._write_unit(self.ARGV_NEW)
+        self.assertEqual(service.installed_unit_argv(), self.ARGV_NEW)
+
+    def test_stale_unit_is_detected(self):
+        self._write_unit(self.ARGV_OLD)
+        self.assertTrue(service.unit_is_stale(self.ARGV_NEW))
+
+    def test_current_unit_is_not_stale(self):
+        self._write_unit(self.ARGV_NEW)
+        self.assertFalse(service.unit_is_stale(self.ARGV_NEW))
+
+    def test_missing_unit_is_not_stale(self):
+        """No unit at all means lazy-spawn owns the daemon — nothing to refresh."""
+        self.assertIsNone(service.installed_unit_argv())
+        self.assertFalse(service.unit_is_stale(self.ARGV_NEW))
+
+    def test_install_restarts_a_running_service(self):
+        """`enable --now` only starts a STOPPED unit. Without an explicit restart a
+        redeploy rewrote the unit while the engine kept running the old flags."""
+        calls = []
+
+        class _R:
+            returncode = 0
+
+        def fake_run(argv, **kwargs):  # noqa: ARG001
+            calls.append(argv)
+            return _R()
+
+        orig_run, orig_which = service.subprocess.run, service.shutil.which
+        service.subprocess.run = fake_run
+        service.shutil.which = lambda name: "/usr/bin/systemctl"
+        try:
+            self.assertEqual(service._install_systemd(self.ARGV_NEW), "systemd")
+        finally:
+            service.subprocess.run, service.shutil.which = orig_run, orig_which
+        verbs = [c[2] for c in calls if len(c) > 2]
+        self.assertIn("daemon-reload", verbs)
+        self.assertIn("enable", verbs)
+        self.assertIn("restart", verbs)
+        self.assertLess(verbs.index("daemon-reload"), verbs.index("restart"))
+
+
 if __name__ == "__main__":
     unittest.main()

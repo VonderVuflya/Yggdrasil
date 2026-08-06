@@ -62,6 +62,16 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
                         "long transcripts into low-quality lessons."),
     "bg_model": (("YGG_BG_MODEL",), "qwen2.5:1.5b",
                  "Local model used for distillation and consolidation."),
+    "distill_ttl": (("YGG_DISTILL_TTL",), "0",
+                    "Seconds of idle time after which the runtime may unload the distill "
+                    "model (LM Studio's per-request `ttl`). 0 keeps it resident. A distill "
+                    "model is the big one — set e.g. 600 so it frees the GPU between runs "
+                    "but survives the gaps WITHIN a `ygg seed` (per-file reloads are slow)."),
+    "distill_reasoning": (("YGG_DISTILL_REASONING",), "auto",
+                          "Whether a hybrid/reasoning bg_model may think before answering: "
+                          "`auto` (off for models known to support it — extraction gains "
+                          "nothing from a <think> trace and pays 3-6x the time), `off` "
+                          "(always suppress), `on` (never suppress)."),
     "embed_model": (("YGG_EMBED_MODEL",), "",
                     "Embedding model (daemon-level; change needs `ygg redeploy`)."),
     "embed_url": (("YGG_EMBED_URL",), "http://127.0.0.1:11434",
@@ -74,6 +84,11 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "embed_api_key": (("YGG_EMBED_API_KEY", "OPENROUTER_API_KEY"), "",
                       "Bearer key for the openai backend (e.g. OpenRouter). "
                       "Empty for a local llama-server."),
+    "embed_ttl": (("YGG_EMBED_TTL",), "0",
+                  "Seconds of idle time after which the runtime may unload the embedding "
+                  "model (LM Studio's per-request `ttl`; needs `ygg redeploy`). 0 keeps it "
+                  "resident. Set e.g. 300 so a GPU isn't held hostage by a daemon that "
+                  "wakes up in bursts — the model is reloaded on demand."),
     "user_id": (("YGG_USER_ID",), DEFAULT_USER_ID, "Identity stored memories are written under."),
     "namespace": (("YGG_NAMESPACE",), DEFAULT_NAMESPACE, "Memory namespace."),
     "sync_repo": (("YGG_SYNC_REPO",), "",
@@ -88,9 +103,10 @@ SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
 # of it. Group by the job the setting does, in the order a user meets them.
 GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Embeddings — dense/semantic search",
-     ("embed_model", "embed_backend", "embed_url", "embed_api_key")),
+     ("embed_model", "embed_backend", "embed_url", "embed_api_key", "embed_ttl")),
     ("Distillation — `ygg seed`, consolidation",
-     ("bg_model", "distill_url", "distill_api_key", "distill_timeout", "distill_num_ctx")),
+     ("bg_model", "distill_url", "distill_api_key", "distill_timeout", "distill_num_ctx",
+      "distill_reasoning", "distill_ttl")),
     ("Identity — who memories belong to",
      ("user_id", "namespace")),
     ("Sync — cross-machine, no cloud",
@@ -227,6 +243,18 @@ def distill_num_ctx(flag: str | int | None = None) -> int:
 
 def bg_model(flag: str | None = None) -> str:
     return resolve("bg_model", flag)
+
+
+def distill_ttl(flag: str | int | None = None) -> int:
+    try:
+        return max(0, int(resolve("distill_ttl", str(flag) if flag not in (None, "") else None)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def distill_reasoning(flag: str | None = None) -> str:
+    value = (resolve("distill_reasoning", flag) or "auto").strip().lower()
+    return value if value in ("auto", "off", "on") else "auto"
 
 
 def user_id(flag: str | None = None) -> str:

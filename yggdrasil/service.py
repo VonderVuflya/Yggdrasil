@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shlex
 import shutil
 import socket
 import subprocess
@@ -41,6 +42,10 @@ EMBED_KEY_FILE = YGG_HOME / "embed_api_key"  # 0600; passed to the engine by PAT
 PIDFILE = YGG_HOME / "daemon.pid"
 MARKER = YGG_HOME / "service.json"  # records which manager set up autostart
 ENGINE_LOG = LOGS / "engine.log"
+
+# The endpoint an unconfigured install talks to — i.e. "this is plain local
+# Ollama", the one case where `ollama pull` is the right way to fetch a model.
+OLLAMA_DEFAULT = "http://127.0.0.1:11434"
 
 LABEL = os.environ.get("YGG_LABEL", "com.yggdrasil.memory")   # launchd label
 UNIT = os.environ.get("YGG_UNIT", "yggdrasil")                # systemd unit name
@@ -120,6 +125,14 @@ def engine_argv(tok: str, embed_model: str = "") -> list[str]:  # noqa: ARG001 �
     embed_backend = cfg.get("embed_backend")
     if embed_backend and str(embed_backend).lower() != "ollama":
         argv += ["--embed-backend", str(embed_backend)]
+    # Idle-unload window for the embedding model, so a runtime like LM Studio
+    # doesn't have to keep it pinned in VRAM for a daemon that wakes up in bursts.
+    try:
+        embed_ttl = int(cfg.get("embed_ttl") or 0)
+    except (TypeError, ValueError):
+        embed_ttl = 0
+    if embed_ttl > 0:
+        argv += ["--embed-ttl", str(embed_ttl)]
     # The api key rides by FILE PATH, never by value — exactly like --token-file.
     # One line here keeps the secret out of `ps`, the launchd plist, the systemd
     # unit and the schtasks command, with no per-service-manager special casing.
@@ -157,6 +170,75 @@ def _spawn_detached(argv: list[str]) -> int:
     return proc.pid
 
 
+def installed_unit_argv() -> list[str] | None:
+    """The argv the OS service manager will launch on the next boot, or None when
+    no manager owns the daemon (lazy-spawn) or its unit can't be read."""
+    mgr = _manager()
+    if mgr == "systemd":
+        unit = Path.home() / ".config" / "systemd" / "user" / f"{UNIT}.service"
+        try:
+            text = unit.read_text()
+        except OSError:
+            return None
+        for line in text.splitlines():
+            if line.startswith("ExecStart="):
+                try:
+                    return shlex.split(line[len("ExecStart="):])
+                except ValueError:
+                    return None
+        return None
+    if mgr == "launchd":
+        try:
+            import plistlib
+            with _launchd_plist_path().open("rb") as fh:
+                return list(plistlib.load(fh).get("ProgramArguments") or []) or None
+        except (OSError, ValueError, ImportError):
+            return None
+    return None
+
+
+def unit_is_stale(argv: list[str]) -> bool:
+    """Does the service manager still launch a DIFFERENT command than `argv`?
+
+    The classic case is `ygg config set embed_model …` without a redeploy: the
+    config names the new model, the unit still names the old one. Left alone it
+    fails twice over — the manager respawns the stale copy in a restart loop
+    against whatever holds the port now, and after a reboot the stale copy wins
+    outright, serving the PREVIOUS embedding model against vectors written by the
+    new one (different dimensions, silently broken dense recall)."""
+    installed = installed_unit_argv()
+    return installed is not None and installed != list(argv)
+
+
+def refresh_unit(argv: list[str]) -> bool:
+    """Rewrite the manager's unit so it launches `argv`. True if it was rewritten."""
+    mgr = _manager()
+    installer = {"systemd": _install_systemd, "launchd": _install_launchd,
+                 "schtasks": _install_schtasks}.get(mgr)
+    if installer is None:
+        return False
+    return installer(argv) is not None
+
+
+def _start_via_manager() -> bool:
+    """Ask the configured manager to start the service. False if none is set up."""
+    mgr = _manager()
+    if mgr == "launchd":
+        p = _launchd_plist_path()
+        if subprocess.run(["launchctl", "bootstrap", _launchd_domain(), str(p)],
+                          capture_output=True).returncode != 0:
+            subprocess.run(["launchctl", "load", "-w", str(p)], capture_output=True)
+        return True
+    if mgr == "systemd":
+        subprocess.run(["systemctl", "--user", "restart", f"{UNIT}.service"],
+                       capture_output=True)
+        return True
+    if mgr == "schtasks":
+        subprocess.run(["schtasks", "/run", "/tn", TASK], capture_output=True)
+        return True
+    return False
+
+
 def ensure_running(embed_model: str | None = None, wait: float = 12.0) -> bool:
     """Start the daemon if it isn't already reachable. The universal safety net:
     works on any OS, with or without a configured service. Idempotent."""
@@ -166,12 +248,28 @@ def ensure_running(embed_model: str | None = None, wait: float = 12.0) -> bool:
         deploy_files()
     tok = token() or ensure_token()
     embed = embed_model if embed_model is not None else _config().get("embed_model", "")
-    _spawn_detached(engine_argv(tok, embed or ""))
-    deadline = wait
+    argv = engine_argv(tok, embed or "")
+    # Go THROUGH the service manager when one owns the daemon. Spawning directly
+    # here used to win the port while systemd kept respawning its own (stale) copy
+    # every RestartSec — observed as `restart counter is at 167` with a healthy
+    # engine running beside it. Refresh the unit first so the manager starts the
+    # same command we would have spawned.
+    if unit_is_stale(argv):
+        refresh_unit(argv)
+    via_manager = _start_via_manager()
+    if not via_manager:
+        _spawn_detached(argv)
     waited = 0.0
-    while waited < deadline:
+    spawned_directly = not via_manager
+    while waited < wait:
         if health():
             return True
+        # The manager is configured but isn't bringing the engine up (masked unit,
+        # broken systemctl in a container, …). Don't spend the whole budget waiting
+        # on it — fall back to the direct spawn that always worked.
+        if not spawned_directly and waited >= wait / 2:
+            _spawn_detached(argv)
+            spawned_directly = True
         time.sleep(0.25)
         waited += 0.25
     return False
@@ -448,9 +546,15 @@ def _install_systemd(argv: list[str]) -> str | None:
     (unit_dir / f"{UNIT}.service").write_text(systemd_unit(argv))
     env = dict(os.environ)
     r1 = subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, env=env)
-    r2 = subprocess.run(["systemctl", "--user", "enable", "--now", f"{UNIT}.service"],
+    r2 = subprocess.run(["systemctl", "--user", "enable", f"{UNIT}.service"],
                         capture_output=True, env=env)
-    if r1.returncode == 0 and r2.returncode == 0:
+    # `enable --now` only STARTS a stopped service: an already-running daemon keeps
+    # its old ExecStart, so a redeploy after `ygg config set embed_model|embed_ttl`
+    # left the engine running the previous flags while the unit on disk advertised
+    # the new ones. Restart unconditionally — it starts a stopped service too.
+    r3 = subprocess.run(["systemctl", "--user", "restart", f"{UNIT}.service"],
+                        capture_output=True, env=env)
+    if r1.returncode == 0 and r2.returncode == 0 and r3.returncode == 0:
         return "systemd"
     return None  # caller falls back to lazy-spawn
 
@@ -483,8 +587,31 @@ def _manager() -> str:
 # Public lifecycle
 # --------------------------------------------------------------------------- #
 
+def models_to_pull(embed_model: str, bg_model: str, cfg: dict, pull: bool = True) -> list[str]:
+    """Which of the two models `ollama pull` is the right way to fetch.
+
+    Only Ollama-served ones. A model configured against an OpenAI-dialect
+    endpoint (LM Studio, llama.cpp, OpenRouter) lives inside that runtime, so
+    demanding `ollama pull` for it — or worse, warning that Ollama is "missing" —
+    reports a working install as broken. The two halves are judged separately:
+    embeddings on LM Studio and distillation on Ollama is a normal setup."""
+    if not pull:
+        return []
+    out = []
+    if embed_model and str(cfg.get("embed_backend") or "ollama").lower() == "ollama":
+        out.append(embed_model)
+    if bg_model and str(cfg.get("distill_url") or "").rstrip("/") in ("", OLLAMA_DEFAULT):
+        out.append(bg_model)
+    return out
+
+
 def install(embed_model: str = "", bg_model: str = "", enable_hooks: bool = False,
-            enable_stop: bool = False) -> int:
+            enable_stop: bool = False, pull: bool = True) -> int:
+    """Deploy the engine, wire up autostart, register MCP.
+
+    `pull=False` says the caller already put the models on disk. The wizard does:
+    it knows WHICH runtime owns each model, and `ollama pull` on an LM Studio id
+    only produces a confusing failure."""
     print(f"==> installing into {YGG_HOME} ({current_os()})")
     deploy_files()
     tok = ensure_token()
@@ -499,7 +626,7 @@ def install(embed_model: str = "", bg_model: str = "", enable_hooks: bool = Fals
     cfg.update({"embed_model": embed_model, "bg_model": bg_model})
     cfg_path.write_text(json.dumps(cfg, indent=2))
 
-    wanted = [m for m in (embed_model, bg_model) if m]
+    wanted = models_to_pull(embed_model, bg_model, cfg, pull)
     if wanted:
         if shutil.which("ollama"):
             for m in wanted:
@@ -569,16 +696,7 @@ def install(embed_model: str = "", bg_model: str = "", enable_hooks: bool = Fals
 
 
 def start() -> int:
-    mgr = _manager()
-    if mgr == "launchd":
-        p = _launchd_plist_path()
-        if subprocess.run(["launchctl", "bootstrap", _launchd_domain(), str(p)],
-                          capture_output=True).returncode != 0:
-            subprocess.run(["launchctl", "load", "-w", str(p)], capture_output=True)
-    elif mgr == "systemd":
-        subprocess.run(["systemctl", "--user", "start", f"{UNIT}.service"], capture_output=True)
-    elif mgr == "schtasks":
-        subprocess.run(["schtasks", "/run", "/tn", TASK], capture_output=True)
+    _start_via_manager()
     ok = ensure_running()
     print("started" if ok else "failed to start (see logs)")
     return 0 if ok else 1

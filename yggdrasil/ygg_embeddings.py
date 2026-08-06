@@ -128,7 +128,8 @@ class OpenAIEmbedder:
     Same duck-typed contract as OllamaEmbedder — ``.model``, ``embed(text)`` and
     ``embed_batch(texts)`` — so MemoryStore uses either interchangeably."""
 
-    def __init__(self, url: str, model: str, api_key: str = "", timeout: int = 120):
+    def __init__(self, url: str, model: str, api_key: str = "", timeout: int = 120,
+                 ttl: int = 0):
         base = url.rstrip("/")
         # Accept either the /v1 base or a full .../embeddings URL, so a user who
         # pastes the complete endpoint isn't punished with a 404.
@@ -136,6 +137,13 @@ class OpenAIEmbedder:
         self.model = model
         self.api_key = api_key or ""
         self.timeout = timeout
+        # LM Studio honours a per-request `ttl` (seconds) on JIT-loaded models and
+        # unloads them after that much idle time. Without it a user has to keep the
+        # embedder pinned in VRAM around the clock for a daemon that wakes up for
+        # a few hundred milliseconds at a time. Off by default: it is a non-standard
+        # field, so we only send it when explicitly configured.
+        self.ttl = max(0, int(ttl or 0))
+        self._warned_substitution = False
 
     def _headers(self) -> dict[str, str]:
         h = dict(_HTTP_HEADERS)
@@ -143,16 +151,58 @@ class OpenAIEmbedder:
             h["Authorization"] = "Bearer " + self.api_key
         return h
 
+    @staticmethod
+    def _norm_model(name: str) -> str:
+        """Strip the cosmetic differences between how a server echoes a model id
+        and how the user wrote it: publisher prefix, .gguf suffix, separators."""
+        n = (name or "").strip().lower().rsplit("/", 1)[-1]
+        for suffix in (".gguf", ".bin", ".safetensors"):
+            if n.endswith(suffix):
+                n = n[: -len(suffix)]
+        return n.replace("_", "-").replace(" ", "")
+
+    def _served_by_requested_model(self, echoed: object) -> bool:
+        """Guard against a server answering with a DIFFERENT model than asked for.
+
+        LM Studio's /v1/embeddings does exactly this: ask for a model that is not
+        loaded (typo in config, model deleted from disk) and it returns HTTP 200
+        with a vector from whatever embedder happens to be resident, naming it
+        honestly in `model`. The vectors look fine and land in the store tagged
+        with the REQUESTED model, so a later reindex considers them current and
+        the store silently mixes two vector spaces. Its /v1/chat/completions
+        rejects the same request with 400 — only embeddings substitute.
+
+        Absent/blank `model` in the response is accepted: several OpenAI-compatible
+        servers (older llama-server builds) simply don't echo it."""
+        if not isinstance(echoed, str) or not echoed.strip():
+            return True
+        got, want = self._norm_model(echoed), self._norm_model(self.model)
+        if got == want or got in want or want in got:
+            return True
+        if not self._warned_substitution:
+            self._warned_substitution = True
+            print(
+                f"ygg: embedding server answered with '{echoed}' but "
+                f"'{self.model}' was requested — refusing the vector so the store "
+                f"doesn't mix vector spaces. Check `ygg config get embed_model` "
+                f"and that the model is present on the server.",
+                flush=True,
+            )
+        return False
+
     def _post(self, inputs: Sequence[str]) -> list[list[float] | None] | None:
         """One POST. Returns a list aligned with ``inputs`` (None per empty item),
         or None on any transport/HTTP/shape error so the caller can fall back."""
-        body = json.dumps({"model": self.model, "input": list(inputs)}).encode("utf-8")
+        payload = {"model": self.model, "input": list(inputs)}
+        if self.ttl:
+            payload["ttl"] = self.ttl
+        body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self.endpoint, data=body, headers=self._headers(), method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read()).get("data")
+                payload = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             # 413/500 on a too-long input: signal overflow so embed() can shorten.
             if exc.code in (413, 500):
@@ -160,6 +210,9 @@ class OpenAIEmbedder:
             return None
         except (urllib.error.URLError, TimeoutError, ValueError):
             return None
+        if not self._served_by_requested_model(payload.get("model")):
+            return None
+        data = payload.get("data")
         if not isinstance(data, list) or len(data) != len(inputs):
             return None
         out: list[list[float] | None] = [None] * len(inputs)
@@ -220,7 +273,11 @@ def get_embedder() -> OllamaEmbedder | OpenAIEmbedder | None:
     backend = (os.environ.get("YGG_EMBED_BACKEND") or "ollama").strip().lower()
     if backend in ("openai", "openai-compatible", "llamacpp", "llama.cpp", "openrouter"):
         api_key = os.environ.get("YGG_EMBED_API_KEY") or os.environ.get("OPENROUTER_API_KEY") or ""
-        return OpenAIEmbedder(url, model, api_key)
+        try:
+            ttl = int(os.environ.get("YGG_EMBED_TTL") or 0)
+        except ValueError:
+            ttl = 0
+        return OpenAIEmbedder(url, model, api_key, ttl=ttl)
     return OllamaEmbedder(url, model)
 
 
