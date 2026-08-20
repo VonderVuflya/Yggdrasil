@@ -27,14 +27,18 @@ class MergeMemoryTest(unittest.TestCase):
         self.assertEqual(ygg_sync.merge_memory(_rec(archived=1), _rec(archived=0))["archived"], 1)
         self.assertEqual(ygg_sync.merge_memory(_rec(archived=0), _rec(archived=1))["archived"], 1)
 
-    def test_longer_content_wins_tie_goes_local(self):
+    def test_longer_content_wins_and_equal_lengths_tie_break_by_value(self):
         m = ygg_sync.merge_memory(_rec(content="short", content_hash="hl"),
                                   _rec(content="a much longer edited fact", content_hash="hr"))
         self.assertEqual(m["content"], "a much longer edited fact")
         self.assertEqual(m["content_hash"], "hr")
-        m2 = ygg_sync.merge_memory(_rec(content="local", content_hash="hl"),
-                                   _rec(content="remot", content_hash="hr"))
-        self.assertEqual((m2["content"], m2["content_hash"]), ("local", "hl"))
+        # Equal lengths used to resolve to "local". That made the result depend on
+        # which side was merging, so two machines each kept their own text and the
+        # stores never converged — harmless while sync was a manual git command,
+        # fatal for a live uplink. The tie-break now looks only at the values.
+        a, b = _rec(content="local", content_hash="hl"), _rec(content="remot", content_hash="hr")
+        self.assertEqual(ygg_sync.merge_memory(dict(a), dict(b)),
+                         ygg_sync.merge_memory(dict(b), dict(a)))
 
     def test_confidence_max_and_pinned_or(self):
         m = ygg_sync.merge_memory(
