@@ -13,6 +13,9 @@ reports/
 vault/04-learnings/*.md
 vault/99-review/*.md
 
+# --- Design/brainstorming notes (local working material, never committed) ---
+docs/superpowers/
+
 # --- Stray runtime artifacts ---
 debugging_lesson_record.json
 .cache/
