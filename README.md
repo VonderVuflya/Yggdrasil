@@ -290,6 +290,69 @@ The engine itself is swappable — any service meeting the `MemoryBackend` contr
 
 </details>
 
+## 🔗 One memory across your machines
+
+Work on a laptop and a beefier box? Link them once and they stop being two brains.
+
+```text
+# on the laptop
+$ ygg link
+🔗 pairing code   valid 5 minutes · single use
+
+    ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
+
+# on the other machine — paste it
+$ ygg link ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
+  ✓ linked with laptop   https://192.168.3.152:42070
+  ✓ laptop: fetch 84 · push 12 · delete 0 · tombstones 0
+```
+
+That's it. From then on a memory written on one machine is on the other in about
+a second, `ygg delete` removes it from **both**, and either machine keeps working
+with its own local copy when the other is asleep — reads never wait for the
+network. When a machine comes back, the two compare fingerprints and repair
+whatever they missed, without you running anything.
+
+There is **no polling**. Yggdrasil is called a handful of times a day, so writes
+push as they happen and a sync is triggered by reads; idle machines send nothing.
+
+**What this is not:** a cloud. There is no relay, no account, no server of ours in
+the path. The machines talk to each other directly over your own network, over
+TLS with each other's certificate pinned at pairing time, using a key pair that
+exists only on those two machines. Nothing binds a network port until you run
+`ygg link` — install Yggdrasil and it stays on loopback, exactly as before.
+
+```text
+ygg link --list          # what's linked, and where
+ygg link --sync          # reconcile now, don't wait for a read
+ygg unlink <name>        # revoke that machine's key here
+```
+
+<details>
+<summary>Details: what travels, what stays, and when to use <code>ygg sync</code> instead</summary>
+
+**Travels:** memories, their relations, and deletions. **Stays put:** how often
+*you* opened a memory and which machine you read it on — that's local ranking,
+not knowledge. Embedding vectors normally stay local too, with one exception: if
+both machines run the same embedding model, the vector rides along, so a compute
+box can do the embedding for the laptop and the laptop never runs a model.
+
+**Deletions win.** If you delete a memory on one machine and edit it on the other
+at the same time, the deletion wins and the edit is lost. That's deliberate:
+"I deleted the leaked token" has to hold even when two clocks disagree. When you
+mean *changed my mind*, archive it instead — archives merge without losing
+anything.
+
+**`ygg sync` (git) is still there** and does a different job: machines that can't
+see each other, a work laptop behind a different network, a bare repo on a USB
+stick you carry. Use `ygg link` for machines on one network, `ygg sync` for
+everything else. Both share the same merge rules, so you can run both.
+
+**If the pairing code shows the wrong address** (a VPN or a Thunderbolt bridge
+can outrank your real LAN), pin it: `ygg config set sync_host 192.168.3.152`.
+
+</details>
+
 ## 📊 The numbers
 
 Measured by [`eval/ygg_eval.py`](./eval/ygg_eval.py) — 232 memories, 110 labelled queries, ranking weights tuned on the *dev* split only, so **holdout is the unbiased number** (recall@1, with the `paraphrase-multilingual` model):
@@ -350,6 +413,8 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | `ygg seed --dry-run` · `--force` | Discover + estimate only · re-distill everything |
 | `ygg seed --schedule 03:30` | Nightly auto-distill (launchd) — memory keeps itself fresh; `off` / `status` |
 | `ygg sync --repo <your-git-repo>` | Sync memory across machines through **your own** git repo — plain JSON files, no cloud in the loop |
+| `ygg link` · `ygg link <code>` | Link two of **your** machines directly on one network — live shared memory, pinned TLS, no relay |
+| `ygg link --list` · `ygg unlink <name>` | Show linked machines · revoke one |
 | `ygg distill --source PATH` | Distill one dir/file into lessons |
 | `ygg reindex` | Backfill missing embeddings (restores dense recall) |
 
@@ -385,6 +450,8 @@ Built-in memories are per-vendor, per-repo, per-machine, and retrieved by litera
 <summary><b>Does it send my code or memory to the cloud?</b></summary>
 
 No. The engine, the database, and the optional models all run locally. No account, no telemetry. The only outbound call is a version check against PyPI.
+
+If you link two of your own machines with `ygg link`, memories travel **between those two machines** over your own network — directly, over TLS with a pinned certificate, with no relay and no server of ours in the path. Until you run that command nothing listens beyond loopback.
 </details>
 
 <details>

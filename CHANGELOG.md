@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.16.0] — 2026-08-20 — one memory across your machines
+
+### Added
+- **`ygg link` — two of your machines, one memory.** Pair them once with a
+  one-time code; after that a memory written on one is on the other in about a
+  second, and `ygg delete` removes it from both. Direct machine-to-machine over
+  your own network — TLS with the certificate pinned at pairing, a key pair that
+  exists only on those two machines, no relay and no account. Nothing listens
+  beyond loopback until you run it. Also `ygg link --list` and `ygg unlink <name>`.
+- A machine that was off catches up by itself when it comes back; reads never
+  wait for the network, and idle machines send nothing.
+- When both machines run the same embedding model the vector travels with the
+  memory, so a compute box can do the embedding for a laptop.
+
+### Changed
+- **Hard deletes now propagate.** Previously `ygg delete` on one machine was
+  quietly undone by the next sync from a machine that still had the record.
+- `ygg sync` and `ygg link` now share one merge policy, and it no longer depends
+  on which machine is running it — two machines merging the same edit from
+  opposite directions reach the same result. Equal-length edits used to resolve
+  to whichever copy was local, so the two never converged.
+- The database migrates itself on first start. Nothing to run.
+
+### Note
+- A delete racing an edit on the other machine resolves to the delete, even if
+  the edit looks newer — clock drift must not resurrect something you deleted.
+  When you mean "changed my mind", archive instead: archives merge losslessly.
+
 ## [0.15.0] — 2026-08-06 — distillation that stays on task
 
 ### Added
