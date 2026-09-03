@@ -149,6 +149,7 @@ class SyncNode:
         self._stopping = threading.Event()
         self._last_reconcile = 0.0
         self._lock = threading.Lock()
+        self._reconciling = threading.Event()
         if not self.peers_path.exists():
             _peers.save(self.peers_state, self.peers_path)
 
@@ -383,6 +384,32 @@ class SyncNode:
                 self._last_reconcile = now
                 self.store.needs_reconcile = False
             return {"ran": True, "peers": len(targets), "errors": errors, "detail": summary}
+
+    def maybe_reconcile_async(self) -> bool:
+        """Trigger a reconcile from a READ, without making the read wait for it.
+
+        A downed peer must never add a network timeout to `ygg_recall` — freshness
+        is not worth an unresponsive memory, and the hot push path is what
+        actually keeps the two machines current. Returns whether one was started.
+        """
+        if self._reconciling.is_set() or self._stopping.is_set():
+            return False
+        if (time.time() - self._last_reconcile) < RECONCILE_TTL and not self.store.needs_reconcile:
+            return False
+        if not self.peers_state.get("peers"):
+            return False
+        self._reconciling.set()
+
+        def run() -> None:
+            try:
+                self.reconcile()
+            except Exception:  # noqa: BLE001 — a background repair must never take the engine down
+                pass
+            finally:
+                self._reconciling.clear()
+
+        threading.Thread(target=run, daemon=True).start()
+        return True
 
     def _reconcile_one(self, peer: dict[str, Any]) -> str:
         client = self._client(peer)

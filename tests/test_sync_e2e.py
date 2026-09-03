@@ -162,6 +162,28 @@ class ReconcileTest(Pair):
         self.assertConverged()
 
 
+class ReadTriggerTest(Pair):
+    def test_a_read_starts_a_reconcile_without_waiting_for_it(self):
+        self.add(self.b_store, "written on the other box")
+        self.assertTrue(self.a.maybe_reconcile_async())
+        for _ in range(100):
+            if self.a_store.count():
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.a_store.count(), 1)
+
+    def test_a_fresh_node_does_not_start_one(self):
+        self.a.reconcile(force=True)
+        self.assertFalse(self.a.maybe_reconcile_async())
+
+    def test_a_node_with_no_peers_never_starts_one(self):
+        state = peers.load(self.a.peers_path)
+        state["peers"] = {}
+        peers.save(state, self.a.peers_path)
+        self.a.reload_peers()
+        self.assertFalse(self.a.maybe_reconcile_async())
+
+
 @unittest.skipUnless(peers.openssl_available(), "openssl not on PATH")
 class TlsTest(Pair):
     insecure = False

@@ -36,12 +36,14 @@ import json
 import math
 import os
 import re
+import socket
 import sqlite3
 import sys
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -1437,6 +1439,120 @@ class MemoryStore:
             self._reindex_gate.release()
 
 
+def _private_addresses() -> list[str]:
+    """Every IPv4 address this host answers on, most-likely-LAN first.
+
+    Two sources, because neither is reliable alone: asking the routing table
+    which source address reaches a given target, and asking the resolver about
+    our own hostname. On a machine with a VPN or a Thunderbolt bridge the
+    default route often points at a link-local (169.254.x) interface, which is
+    useless for reaching the box in the next room — so candidates are filtered
+    down to RFC1918 space and ordered by how plausibly local they are.
+    """
+    found: list[str] = []
+
+    def remember(addr: str) -> None:
+        if addr and addr not in found:
+            found.append(addr)
+
+    for target in ("192.168.0.1", "10.0.0.1", "172.16.0.1", "8.8.8.8"):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect((target, 9))  # UDP connect sends nothing; it only picks a route
+            remember(probe.getsockname()[0])
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            remember(info[4][0])
+    except OSError:
+        pass
+
+    def rank(addr: str) -> int:
+        if addr.startswith("192.168."):
+            return 0
+        if addr.startswith("10."):
+            return 1
+        if addr.startswith("172.") and 16 <= int(addr.split(".")[1] or 0) <= 31:
+            return 2
+        return 9
+
+    return sorted((a for a in found if rank(a) < 9), key=rank)
+
+
+def _lan_address() -> str:
+    """Best guess at the address peers should reach us on. Loopback when there is
+    no private address at all — the uplink is then useless but the engine still
+    starts, and `ygg config set sync_host` overrides this in one command."""
+    candidates = _private_addresses()
+    return candidates[0] if candidates else "127.0.0.1"
+
+
+class _Uplink:
+    """Lazily-started holder for the peer-sync node.
+
+    Nothing binds a network interface until the user actually links two machines.
+    An always-on memory daemon should not open a port to the LAN merely because
+    the feature exists — so the listener starts on the first `ygg link`, and on
+    every subsequent boot only if peers.json already has someone in it.
+    """
+
+    def __init__(self) -> None:
+        self.node = None
+        self.error: str | None = None
+
+    def ensure(self, store, *, name: str | None = None):
+        if self.node is not None:
+            return self.node
+        try:
+            try:
+                from . import ygg_sync_node as _node
+            except ImportError:  # flat layout
+                import ygg_sync_node as _node
+            home = Path(os.environ.get("YGG_HOME") or str(Path.home() / ".yggdrasil"))
+            host = _cfg.resolve("sync_host", None) or _lan_address()
+            node = _node.SyncNode(
+                store, home=home, name=name or socket.gethostname().split(".")[0],
+                host=host, port=int(_cfg.resolve("sync_port", None) or 42070),
+                insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"))
+            node.start()
+            node.start_sender()
+        except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
+            self.error = str(exc)
+            return None
+        self.node = node
+        return node
+
+    def start_if_paired(self, store) -> None:
+        try:
+            from . import ygg_sync_peers as _p
+        except ImportError:  # flat layout
+            import ygg_sync_peers as _p
+        if _p.load()["peers"]:
+            self.ensure(store)
+
+    def trigger(self) -> None:
+        """Called from read routes. Never blocks and never raises: a peer that is
+        down must not add a timeout to every recall."""
+        if self.node is not None:
+            self.node.maybe_reconcile_async()
+
+
+def _public_peer(peer: dict[str, Any]) -> dict[str, Any]:
+    """A peer as the CLI may see it. The per-pair keys NEVER leave the engine —
+    not over the local API either, so a curious agent cannot read itself a
+    credential to the other machine."""
+    return {"node_id": peer.get("node_id"), "name": peer.get("name"),
+            "url": peer.get("url"), "embed_model": peer.get("embed_model"),
+            "fingerprint": (peer.get("fingerprint") or "")[:16],
+            "last_seen": peer.get("last_seen")}
+
+
+UPLINK = _Uplink()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "YggMemory/0.1"
     store: MemoryStore = None  # type: ignore[assignment]
@@ -1549,6 +1665,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             self._send(401, {"success": False, "error": "unauthorized"})
+            return
+        if parsed.path == "/sync/peers":
+            node = UPLINK.node
+            try:
+                from . import ygg_sync_peers as _p
+            except ImportError:
+                import ygg_sync_peers as _p
+            state = node.peers_state if node is not None else _p.load()
+            self._send(200, {"success": True, "data": {
+                "running": node is not None,
+                "url": node.url if node is not None else None,
+                "error": UPLINK.error,
+                "peers": [_public_peer(x) for x in state.get("peers", {}).values()]}})
             return
         if parsed.path == "/get_all":
             qs = parse_qs(parsed.query)
@@ -1691,6 +1820,49 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"success": True, "data": self.store.relations_for(str(memory_id))})
             return
+        if parsed.path == "/sync/link/issue":
+            node = UPLINK.ensure(self.store)
+            if node is None:
+                self._send(500, {"success": False,
+                                 "error": UPLINK.error or "could not start the sync listener"})
+                return
+            self._send(200, {"success": True,
+                             "data": {"code": node.issue_pairing_code(), "url": node.url}})
+            return
+        if parsed.path == "/sync/link/redeem":
+            node = UPLINK.ensure(self.store)
+            if node is None:
+                self._send(500, {"success": False,
+                                 "error": UPLINK.error or "could not start the sync listener"})
+                return
+            try:
+                peer = node.pair_with(str(body.get("code") or ""), name=body.get("name") or None)
+            except (RuntimeError, ValueError) as exc:
+                self._send(400, {"success": False, "error": str(exc)})
+                return
+            self._send(200, {"success": True, "data": _public_peer(peer)})
+            return
+        if parsed.path == "/sync/peers/remove":
+            try:
+                from . import ygg_sync_peers as _p
+            except ImportError:
+                import ygg_sync_peers as _p
+            node = UPLINK.node
+            state = node.peers_state if node is not None else _p.load()
+            removed = _p.remove_peer(state, str(body.get("name") or ""))
+            if removed:
+                _p.save(state)
+            self._send(200, {"success": True, "data": {"removed": removed}})
+            return
+        if parsed.path == "/sync/reconcile":
+            node = UPLINK.ensure(self.store)
+            if node is None:
+                self._send(500, {"success": False,
+                                 "error": UPLINK.error or "could not start the sync listener"})
+                return
+            self._send(200, {"success": True,
+                             "data": node.reconcile(force=bool(body.get("force")))})
+            return
         if parsed.path == "/sync_export":
             self._send(200, {"success": True, "data": self.store.sync_export()})
             return
@@ -1708,6 +1880,9 @@ class Handler(BaseHTTPRequestHandler):
                 namespaces=body.get("namespaces") if isinstance(body.get("namespaces"), list) else None,
             )
             self.store.record_access([r.get("id") for r in data])
+            # Reads are what pull a peer's changes across — there is no polling
+            # timer. Fire-and-forget: recall must not wait on the network.
+            UPLINK.trigger()
             self._send(200, {"success": True, "data": data})
             return
         self._send(404, {"success": False, "error": f"not found: {parsed.path}"})
@@ -1848,6 +2023,14 @@ def main() -> int:
         f"dense={args.embed_model or 'off'}",
         flush=True,
     )
+
+    # Bring the peer link up only if machines are already paired — see _Uplink.
+    UPLINK.start_if_paired(store)
+    if UPLINK.node is not None:
+        print(f"ygg-memory: peer sync on {UPLINK.node.url}  "
+              f"peers={len(UPLINK.node.peers_state.get('peers', {}))}", flush=True)
+    elif UPLINK.error:
+        print(f"ygg-memory: peer sync off ({UPLINK.error})", file=sys.stderr, flush=True)
 
     # Periodically refresh the 'newer version available' cache (the CLI/MCP just
     # read it, so they never block on the network). Best-effort, daemon thread.
