@@ -5,11 +5,14 @@ the LAN listener gets its own per-peer keys instead of reusing the local token,
 which sits in every agent config on the machine.
 """
 
-import json
 import os
 import sys
 import tempfile
 import unittest
+
+# POSIX file modes are the mechanism; on Windows os.chmod only toggles a
+# read-only bit, so asserting them there tests the platform, not the code.
+POSIX_MODES = os.name == "posix"
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "yggdrasil"))
@@ -76,6 +79,7 @@ class RegistryTest(unittest.TestCase):
         peers.save(state, self.path)
         self.assertEqual(peers.load(self.path)["peers"]["n-box"]["name"], "box")
 
+    @unittest.skipUnless(POSIX_MODES, "file modes are POSIX-only")
     def test_the_file_is_not_world_readable(self):
         """It holds the keys to the whole store."""
         peers.save(peers.blank_state(), self.path)
@@ -131,6 +135,7 @@ class CertificateTest(unittest.TestCase):
         self.assertEqual((cert, key), again)
         self.assertEqual(peers.cert_fingerprint(cert), peers.cert_fingerprint(cert))
 
+    @unittest.skipUnless(POSIX_MODES, "file modes are POSIX-only")
     def test_the_private_key_is_not_world_readable(self):
         _, key = peers.ensure_cert(self.home)
         self.assertEqual(os.stat(key).st_mode & 0o077, 0)
