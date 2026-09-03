@@ -16,9 +16,10 @@ Per-machine state (access counts, last-accessed, embedding vectors) is NOT
 synced — vectors are recomputed locally (`ygg reindex` backfills after a pull
 brings new memories).
 
-Semantics are ADDITIVE (v1): memories propagate everywhere, edits merge by the
-rules in merge_memory(); deletions do not propagate (no tombstones yet — a
-hard-deleted memory returns on the next sync from a machine that still has it).
+Semantics are ADDITIVE here: memories propagate everywhere and edits merge by
+the rules in ygg_sync_merge (shared with the peer uplink). This transport does
+not carry tombstones — a hard-deleted memory returns on the next git sync from a
+machine that still has it. The peer uplink (`ygg link`) does propagate deletes.
 
 Flow (one command, converges without manual conflict resolution):
   export → commit → pull -X ours → import+merge → re-export → commit → push
@@ -38,45 +39,20 @@ from typing import Any
 try:  # package + flat-layout imports
     from . import ygg_config as _cfg
     from .ygg import request_json
+    from .ygg_sync_merge import merge_memory
 except ImportError:  # pragma: no cover
     import ygg_config as _cfg
     from ygg import request_json
+    from ygg_sync_merge import merge_memory
+
+# Re-exported: `ygg sync` and the peer uplink MUST resolve conflicts identically,
+# so there is exactly one implementation and it lives in ygg_sync_merge.
+__all__ = ["merge_memory", "render_memory", "render_relations", "parse_relations", "sync", "main"]
 
 
 # --------------------------------------------------------------------------- #
 # pure pieces (unit-tested)
 # --------------------------------------------------------------------------- #
-
-def merge_memory(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic union of two versions of the SAME memory (same id).
-
-    Rules, in the spirit of archive-never-delete:
-      - archived: OR — an archive decision made anywhere holds everywhere
-      - confidence / importance: max — trust the stronger signal
-      - content: the longer text wins (edits add information); tie -> local
-      - metadata_json: union of keys, local values win; `pinned` is OR'd
-    """
-    merged = dict(remote)
-    merged["archived"] = 1 if (local.get("archived") or remote.get("archived")) else 0
-    for field in ("confidence", "importance"):
-        vals = [v for v in (local.get(field), remote.get(field)) if v is not None]
-        merged[field] = max(vals) if vals else None
-    lc, rc = local.get("content") or "", remote.get("content") or ""
-    if len(lc) >= len(rc):
-        merged["content"] = lc
-        merged["content_hash"] = local.get("content_hash")
-    try:
-        lmd = json.loads(local.get("metadata_json") or "{}")
-        rmd = json.loads(remote.get("metadata_json") or "{}")
-        if isinstance(lmd, dict) and isinstance(rmd, dict):
-            md = {**rmd, **lmd}
-            if lmd.get("pinned") or rmd.get("pinned"):
-                md["pinned"] = True
-            merged["metadata_json"] = json.dumps(md, sort_keys=True)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return merged
-
 
 def render_memory(rec: dict[str, Any]) -> str:
     """Byte-deterministic file body for one memory."""
