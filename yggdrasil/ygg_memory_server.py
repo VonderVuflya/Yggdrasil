@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import base64
 import hashlib
 import hmac
 import json
@@ -51,8 +52,10 @@ except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
 
 try:
     from . import ygg_config as _cfg
+    from . import ygg_sync_merge as _merge
 except ImportError:
     import ygg_config as _cfg
+    import ygg_sync_merge as _merge
 
 
 # Identity migration: rebrand legacy demo memory to the configured default once.
@@ -246,6 +249,11 @@ def expand_identifiers(text: str) -> str:
 class MemoryStore:
     """SQLite-backed memory store with FTS5 (or in-Python fallback) search."""
 
+    # Ceiling on unsent uplink work. Past it the queue is dropped and a full
+    # reconcile is requested instead: a peer that has been off for a week is not
+    # worth unbounded disk, and the digest comparison catches up regardless.
+    OUTBOX_MAX = 10_000
+
     def __init__(self, db_path: str, embedder: Any = None):
         self.db_path = db_path
         self.embedder = embedder
@@ -284,6 +292,10 @@ class MemoryStore:
         # no-op; `_reindex_progress` is what the CLI polls to draw a bar.
         self._reindex_gate = threading.Lock()
         self._reindex_progress = {"running": False, "done": 0, "total": 0}
+        # Uplink bookkeeping. `outbox_signal` wakes the sender thread the moment a
+        # write lands, so a push costs the caller nothing but a set() call.
+        self.needs_reconcile = False
+        self.outbox_signal = threading.Event()
         # seq -> unit vector. Built once at startup (single-threaded here) and
         # kept warm incrementally on every write; None-guarded so lexical-only
         # runs pay nothing.
@@ -353,6 +365,44 @@ class MemoryStore:
             cur.execute("ALTER TABLE memories ADD COLUMN embedding_blob BLOB")
         if "embed_model" not in existing_cols:
             cur.execute("ALTER TABLE memories ADD COLUMN embed_model TEXT")
+        if "updated_at" not in existing_cols:
+            # Last mutation time. created_at alone cannot see a metadata- or
+            # importance-only edit: the text is untouched, so content_hash matches
+            # and a peer's digest would call the two rows identical.
+            cur.execute("ALTER TABLE memories ADD COLUMN updated_at REAL")
+            cur.execute("UPDATE memories SET updated_at=created_at WHERE updated_at IS NULL")
+        # Digests fingerprint a record through content_hash. Rows written before
+        # it was routinely set would all share the empty hash and compare equal to
+        # each other, so backfill once here rather than hashing on every reconcile.
+        for row in cur.execute(
+                "SELECT seq, content FROM memories WHERE content_hash IS NULL OR content_hash=''").fetchall():
+            cur.execute("UPDATE memories SET content_hash=? WHERE seq=?",
+                        (hashlib.sha256((row["content"] or "").encode("utf-8")).hexdigest(), row["seq"]))
+        # A deletion has to travel, or the machine that still has the record puts
+        # it back on the next reconcile — and "I deleted the leaked token" would be
+        # a lie. Collected after ygg_sync_merge.TOMBSTONE_TTL.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tombstones (
+                id         TEXT PRIMARY KEY,
+                deleted_at REAL NOT NULL,
+                origin     TEXT
+            )
+            """
+        )
+        # Outbox: what changed locally and still owes the peers a push. UNIQUE
+        # gives coalescing for free — one row per entity, not one per edit.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS outbox (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind       TEXT NOT NULL,
+                ref_id     TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(kind, ref_id)
+            )
+            """
+        )
         # One-time backfill: convert any legacy JSON-text embeddings to packed
         # float32 blobs (tagged '(legacy)' so a later reindex re-embeds them with
         # the real model name). Bounded, runs once — after it, only blobs matter.
@@ -501,18 +551,19 @@ class MemoryStore:
                 cur = self._conn.execute(
                     """
                     INSERT INTO memories
-                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding_blob,embed_model)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?)
+                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,updated_at,access_count,archived,metadata_json,embedding_blob,embed_model)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?)
                     """,
                     (
                         memory_id, user_id, namespace, scope, project, mem_type, content,
-                        content_hash, source, confidence, importance, created_at,
+                        content_hash, source, confidence, importance, created_at, created_at,
                         json.dumps(metadata, sort_keys=True), embedding_blob, embed_model,
                     ),
                 )
                 seq = cur.lastrowid
                 if self.use_fts:
                     self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, expand_identifiers(content)))
+                self._enqueue_locked("memory", memory_id)
             if vec:  # keep the warm cache in sync
                 unit = _unit(vec)
                 if unit is not None:
@@ -553,7 +604,7 @@ class MemoryStore:
 
             with self._conn:  # row + FTS in one transaction (rollback on error)
                 self._conn.execute(
-                    "UPDATE memories SET content=?, content_hash=?, project=?, type=?, source=?, archived=?, metadata_json=? WHERE seq=?",
+                    "UPDATE memories SET content=?, content_hash=?, project=?, type=?, source=?, archived=?, metadata_json=?, updated_at=? WHERE seq=?",
                     (
                         content,
                         content_hash,
@@ -562,11 +613,13 @@ class MemoryStore:
                         metadata.get("source", row["source"]),
                         archived_flag,
                         json.dumps(metadata, sort_keys=True),
+                        time.time(),
                         seq,
                     ),
                 )
                 if data is not None and self.use_fts:
                     self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
+                self._enqueue_locked("memory", memory_id)
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         if data is not None and self.embedder is not None:
             vec = self._embed_raw(content)  # network call outside the lock
@@ -732,6 +785,11 @@ class MemoryStore:
                 self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
                 self._conn.execute("DELETE FROM relations WHERE from_id=? OR to_id=?",
                                    (memory_id, memory_id))
+                # Same transaction as the DELETE on purpose: a crash between the
+                # two would let the peer that still has the row put it straight
+                # back on the next reconcile.
+                self._tombstone_locked(memory_id, time.time(), "local")
+                self._enqueue_locked("tombstone", memory_id)
             self._vec_cache.pop(row["seq"], None)
         return True
 
@@ -768,6 +826,10 @@ class MemoryStore:
                     self._conn.execute(
                         f"DELETE FROM relations WHERE from_id IN ({marks}) OR to_id IN ({marks})",
                         chunk + chunk)
+                deleted_at = time.time()
+                for mid in ids:
+                    self._tombstone_locked(mid, deleted_at, "local")
+                    self._enqueue_locked("tombstone", mid)
             for s in seqs:
                 self._vec_cache.pop(s, None)
         return len(seqs)
@@ -838,14 +900,204 @@ class MemoryStore:
         return out
 
     # ------------------------------------------------------------------ #
+    # peer uplink primitives — tombstones, the outbox, and remote import.
+    # The engine owns the transactions; the POLICY (what beats what) lives
+    # in ygg_sync_merge and the WIRE FORMAT in ygg_sync_protocol, so the
+    # git transport and the live uplink can never disagree.
+    # ------------------------------------------------------------------ #
+
+    def _tombstone_locked(self, memory_id: str, deleted_at: float, origin: str) -> None:
+        """Record a deletion. The caller holds the lock and owns the transaction.
+
+        On conflict the EARLIER stamp wins: whichever machine deleted first is
+        the one that decided, and keeping the earliest makes the row identical on
+        every node instead of drifting with arrival order.
+        """
+        self._conn.execute(
+            "INSERT INTO tombstones (id, deleted_at, origin) VALUES (?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET deleted_at=MIN(tombstones.deleted_at, excluded.deleted_at)",
+            (memory_id, float(deleted_at), origin))
+
+    def _enqueue_locked(self, kind: str, ref_id: str) -> None:
+        """Note that something changed locally and still owes the peers a push.
+
+        References, not bodies — the sender reads current state at send time, so
+        three quick edits ship one final version instead of three stale ones.
+        Called INSIDE the mutation's own transaction, so a crash can never leave
+        a change that no one will ever send.
+        """
+        self._conn.execute(
+            "INSERT OR IGNORE INTO outbox (kind, ref_id, created_at) VALUES (?,?,?)",
+            (kind, ref_id, time.time()))
+        if self._conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] > self.OUTBOX_MAX:
+            self._conn.execute("DELETE FROM outbox")
+            self.needs_reconcile = True
+        self.outbox_signal.set()
+
+    def tombstones(self) -> dict[str, float]:
+        with self._lock:
+            return {r["id"]: r["deleted_at"]
+                    for r in self._conn.execute("SELECT id, deleted_at FROM tombstones")}
+
+    def gc_tombstones(self, *, now: float | None = None) -> int:
+        """Forget deletions old enough that no peer can still be carrying the
+        record. Returns how many were collected."""
+        now = time.time() if now is None else now
+        dead = _merge.expired_tombstones(self.tombstones(), now=now)
+        if not dead:
+            return 0
+        with self._lock, self._conn:
+            for i in range(0, len(dead), 500):
+                chunk = dead[i:i + 500]
+                marks = ",".join("?" for _ in chunk)
+                self._conn.execute(f"DELETE FROM tombstones WHERE id IN ({marks})", chunk)
+        return len(dead)
+
+    def outbox_pending(self, limit: int = 500) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT seq, kind, ref_id FROM outbox ORDER BY seq LIMIT ?", (limit,))]
+
+    def outbox_ack(self, seqs: list[int]) -> int:
+        """Drop rows the peer has confirmed. Acking by seq (not by ref_id) is what
+        keeps a write that landed mid-flight from being swallowed by the ack for
+        the batch before it."""
+        if not seqs:
+            return 0
+        with self._lock, self._conn:
+            for i in range(0, len(seqs), 500):
+                chunk = seqs[i:i + 500]
+                marks = ",".join("?" for _ in chunk)
+                self._conn.execute(f"DELETE FROM outbox WHERE seq IN ({marks})", chunk)
+        return len(seqs)
+
+    def outbox_count(self) -> int:
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0])
+
+    def records_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Sync-shaped rows for the given ids, in the order SQLite finds them.
+        Missing ids are simply absent — a peer asking for something we deleted is
+        normal, not an error."""
+        out: list[dict[str, Any]] = []
+        if not ids:
+            return out
+        fields = ",".join(self.SYNC_FIELDS)
+        with self._lock:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" for _ in chunk)
+                out.extend(dict(r) for r in self._conn.execute(
+                    f"SELECT {fields} FROM memories WHERE id IN ({marks})", chunk))
+        return out
+
+    def export_vector(self, memory_id: str) -> dict[str, Any] | None:
+        """The stored vector, base64'd, tagged with the model that produced it.
+
+        Vectors are per-machine state and normally stay home, with one deliberate
+        exception: when both machines run the SAME embedding model, shipping the
+        vector saves the receiver a reindex — which matters when one box does the
+        computing for both. The model tag is what makes that safe.
+        """
+        if not self._embed_model:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT embedding_blob, embed_model FROM memories WHERE id=?", (memory_id,)).fetchone()
+        if row is None or not row["embedding_blob"] or not row["embed_model"]:
+            return None
+        return {"embedding": base64.b64encode(row["embedding_blob"]).decode("ascii"),
+                "embed_model": row["embed_model"]}
+
+    def _accept_vectors_locked(self, vectors: dict[str, str]) -> int:
+        stored = 0
+        for memory_id, encoded in vectors.items():
+            row = self._conn.execute("SELECT seq FROM memories WHERE id=?", (memory_id,)).fetchone()
+            if row is None:
+                continue
+            try:
+                blob = base64.b64decode(encoded)
+                unit = _unit(_blob_to_array(blob))
+            except (ValueError, TypeError):
+                continue
+            if unit is None:
+                continue
+            self._conn.execute("UPDATE memories SET embedding_blob=?, embed_model=? WHERE seq=?",
+                               (blob, self._embed_model, row["seq"]))
+            self._vec_cache[row["seq"]] = unit
+            stored += 1
+        return stored
+
+    def apply_remote(self, *, memories: list[dict[str, Any]] | None = None,
+                     tombstones: dict[str, float] | None = None,
+                     relations: list[dict[str, Any]] | None = None,
+                     now: float | None = None) -> dict[str, int]:
+        """Import what a peer sent us: delete what they deleted, merge the rest.
+
+        NEVER enqueues. Anything that arrived from a peer must not be queued back
+        towards that peer, or the two nodes bounce one record between them
+        forever; the digest comparison is what propagates it onward.
+        """
+        now = time.time() if now is None else now
+        incoming = {str(k): float(v) for k, v in (tombstones or {}).items()}
+        deleted = 0
+        if incoming:
+            with self._lock, self._conn:
+                for memory_id, deleted_at in incoming.items():
+                    self._tombstone_locked(memory_id, deleted_at, "remote")
+                    row = self._conn.execute("SELECT seq FROM memories WHERE id=?", (memory_id,)).fetchone()
+                    if row is None:
+                        continue
+                    if self.use_fts:
+                        self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
+                    self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
+                    self._conn.execute("DELETE FROM relations WHERE from_id=? OR to_id=?",
+                                       (memory_id, memory_id))
+                    self._vec_cache.pop(row["seq"], None)
+                    deleted += 1
+
+        graveyard = self.tombstones()
+        candidates = [r for r in (memories or []) if r.get("id") and r.get("content")]
+        mine = {r["id"]: r for r in self.records_by_ids([r["id"] for r in candidates])}
+        merged: list[dict[str, Any]] = []
+        vectors: dict[str, str] = {}
+        blocked = 0
+        for rec in candidates:
+            memory_id = rec["id"]
+            buried = graveyard.get(memory_id)
+            if buried is not None and _merge.tombstone_wins(deleted_at=buried, record=rec, now=now):
+                blocked += 1
+                continue
+            local = mine.get(memory_id)
+            merged.append(_merge.merge_memory(dict(local), rec) if local else dict(rec))
+            if rec.get("embedding") and rec.get("embed_model") == self._embed_model:
+                vectors[memory_id] = rec["embedding"]
+
+        counts = {"added": 0, "updated": 0, "unchanged": 0,
+                  "relations_added": 0, "relations_skipped": 0}
+        if merged or relations:
+            counts.update(self.sync_upsert(merged, relations))
+        stored = 0
+        if vectors:
+            with self._lock, self._conn:
+                stored = self._accept_vectors_locked(vectors)
+        counts.update({"deleted": deleted, "blocked": blocked, "vectors": stored})
+        return counts
+
+    # ------------------------------------------------------------------ #
     # git-backed sync — stable export + id-preserving upsert. The MERGE
-    # policy lives in ygg_sync (pure, unit-tested); the engine only reads
-    # and writes exactly what it's told.
+    # policy lives in ygg_sync_merge (pure, unit-tested); the engine only
+    # reads and writes exactly what it's told.
     # ------------------------------------------------------------------ #
 
     SYNC_FIELDS = ("id", "user_id", "namespace", "scope", "project", "type", "content",
                    "content_hash", "source", "confidence", "importance", "created_at",
-                   "archived", "metadata_json")
+                   "updated_at", "archived", "metadata_json")
+
+    # What decides "this row already matches what arrived". updated_at is excluded
+    # deliberately: two machines that imported the same record at different moments
+    # must not rewrite it (and re-push it) on every single sync.
+    COMPARE_FIELDS = tuple(f for f in SYNC_FIELDS if f != "updated_at")
 
     def sync_export(self) -> dict[str, Any]:
         """Everything another machine needs to reproduce this store: all memories
@@ -882,8 +1134,8 @@ class MemoryStore:
                         cur = self._conn.execute(
                             """
                             INSERT INTO memories
-                                (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)
+                                (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,updated_at,access_count,archived,metadata_json)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)
                             """,
                             (mid, rec.get("user_id") or "global_user", rec.get("namespace"),
                              rec.get("scope"), rec.get("project"), rec.get("type"),
@@ -891,26 +1143,28 @@ class MemoryStore:
                              rec.get("confidence"),
                              rec.get("importance") if rec.get("importance") is not None else 0.5,
                              rec.get("created_at") or time.time(),
+                             rec.get("updated_at") or rec.get("created_at") or time.time(),
                              1 if rec.get("archived") else 0, rec.get("metadata_json")))
                         if self.use_fts:
                             self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)",
                                                (cur.lastrowid, expand_identifiers(rec["content"])))
                         added += 1
                         continue
-                    same = all((dict(row).get(f) == rec.get(f)) for f in self.SYNC_FIELDS)
+                    same = all((dict(row).get(f) == rec.get(f)) for f in self.COMPARE_FIELDS)
                     if same:
                         unchanged += 1
                         continue
                     content_changed = row["content"] != rec["content"]
                     self._conn.execute(
                         "UPDATE memories SET scope=?, project=?, type=?, content=?, content_hash=?, "
-                        "source=?, confidence=?, importance=?, archived=?, metadata_json=?"
+                        "source=?, confidence=?, importance=?, archived=?, metadata_json=?, updated_at=?"
                         + (", embedding_blob=NULL, embed_model=NULL" if content_changed else "")
                         + " WHERE seq=?",
                         (rec.get("scope"), rec.get("project"), rec.get("type"), rec["content"],
                          rec.get("content_hash"), rec.get("source"), rec.get("confidence"),
                          rec.get("importance") if rec.get("importance") is not None else 0.5,
-                         1 if rec.get("archived") else 0, rec.get("metadata_json"), row["seq"]))
+                         1 if rec.get("archived") else 0, rec.get("metadata_json"),
+                         rec.get("updated_at") or row["updated_at"] or time.time(), row["seq"]))
                     if content_changed:
                         if self.use_fts:
                             self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
