@@ -1188,6 +1188,20 @@ class MemoryStore:
         return {"added": added, "updated": updated, "unchanged": unchanged,
                 "relations_added": rel_added, "relations_skipped": rel_skipped}
 
+    def close(self) -> None:
+        """Release the database file.
+
+        The daemon runs until the machine does, so it never needed this — but
+        anything embedding a store (tests, tooling) does: on Windows an open
+        SQLite handle makes the containing directory undeletable, so a caller
+        with no way to close is a caller that leaks temp directories.
+        """
+        self._vec_cache.clear()
+        try:
+            self._conn.close()
+        except sqlite3.Error:
+            pass
+
     def count(self) -> int:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]

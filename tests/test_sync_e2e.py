@@ -33,6 +33,10 @@ class Pair(unittest.TestCase):
         root = Path(self._tmp.name)
         self.a_store = MemoryStore(str(root / "a" / "m.sqlite"))
         self.b_store = MemoryStore(str(root / "b" / "m.sqlite"))
+        # Cleanups run LIFO, so these close before the temp tree is removed —
+        # Windows will not delete a directory holding an open SQLite file.
+        self.addCleanup(self.b_store.close)
+        self.addCleanup(self.a_store.close)
         self.a = SyncNode(self.a_store, home=root / "a", name="alpha", insecure=self.insecure)
         self.b = SyncNode(self.b_store, home=root / "b", name="beta", insecure=self.insecure)
         for node in (self.a, self.b):

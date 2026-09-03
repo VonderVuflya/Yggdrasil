@@ -32,7 +32,11 @@ def _add(store, content="a fact", **meta):
 class UpdatedAtTest(unittest.TestCase):
     def setUp(self):
         self.store, self._tmp = _store()
+        # LIFO: the directory is registered first so it is removed LAST, after the
+        # database handle is closed. Windows refuses to delete a directory that
+        # still holds an open SQLite file.
         self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(self.store.close)
 
     def test_add_stamps_updated_at(self):
         rec = _add(self.store)
@@ -63,7 +67,11 @@ class UpdatedAtTest(unittest.TestCase):
 class OutboxTest(unittest.TestCase):
     def setUp(self):
         self.store, self._tmp = _store()
+        # LIFO: the directory is registered first so it is removed LAST, after the
+        # database handle is closed. Windows refuses to delete a directory that
+        # still holds an open SQLite file.
         self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(self.store.close)
 
     def _kinds(self):
         return [(r["kind"], r["ref_id"]) for r in self.store.outbox_pending()]
@@ -132,7 +140,11 @@ class OutboxTest(unittest.TestCase):
 class TombstoneTest(unittest.TestCase):
     def setUp(self):
         self.store, self._tmp = _store()
+        # LIFO: the directory is registered first so it is removed LAST, after the
+        # database handle is closed. Windows refuses to delete a directory that
+        # still holds an open SQLite file.
         self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(self.store.close)
 
     def test_delete_records_a_tombstone(self):
         rec = _add(self.store)
@@ -169,7 +181,11 @@ class TombstoneTest(unittest.TestCase):
 class ApplyRemoteTest(unittest.TestCase):
     def setUp(self):
         self.store, self._tmp = _store()
+        # LIFO: the directory is registered first so it is removed LAST, after the
+        # database handle is closed. Windows refuses to delete a directory that
+        # still holds an open SQLite file.
         self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(self.store.close)
 
     def test_a_diverged_record_is_merged_not_overwritten(self):
         rec = _add(self.store, content="short")
