@@ -23,6 +23,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 
+# Ceiling on one response body. A digest of a 10k-memory store is ~400 KB and a
+# push batch with vectors a few MB; anything past this is a broken or hostile
+# peer, and reading it whole would let that peer exhaust our memory.
+MAX_RESPONSE = 64 * 1024 * 1024
+
+
 class SyncError(RuntimeError):
     """Anything that stopped an exchange: unreachable, unauthorised, wrong
     certificate, incompatible protocol."""
@@ -39,10 +45,13 @@ def _unverified_context() -> ssl.SSLContext:
 
 class PeerClient:
     def __init__(self, url: str, *, key: str = "", fingerprint: str | None = None,
-                 timeout: float = 10.0) -> None:
+                 pin_prefix: str | None = None, timeout: float = 10.0) -> None:
         self.url = url.rstrip("/")
         self.key = key
         self.fingerprint = fingerprint
+        # The leading part of the fingerprint carried in a pairing code — what
+        # the very first connection is checked against, before any pin exists.
+        self.pin_prefix = (pin_prefix or "").lower() or None
         self.timeout = timeout
         self.observed_fingerprint: str | None = None
 
@@ -66,6 +75,13 @@ class PeerClient:
             raise SyncError(
                 "certificate fingerprint does not match the one pinned at pairing.\n"
                 "  either the peer was reinstalled (re-pair it) or something is impersonating it")
+        if self.pin_prefix and not hmac.compare_digest(
+                self.observed_fingerprint[:len(self.pin_prefix)], self.pin_prefix):
+            conn.close()
+            raise SyncError(
+                "the machine that answered is not the one that issued this pairing code.\n"
+                "  nothing was sent. check the address, or something on the network is "
+                "intercepting the connection")
         return conn
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None,
@@ -75,16 +91,23 @@ class PeerClient:
         token = self.key if key is None else key
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        conn = self._connect()
+        # The connect belongs inside the try: over TLS it runs eagerly in
+        # _connect, and a refused or timed-out handshake escaping as a raw
+        # OSError used to kill the background sender thread.
+        conn = None
         try:
+            conn = self._connect()
             conn.request(method, path, body=payload, headers=headers)
             response = conn.getresponse()
-            raw = response.read()
+            raw = response.read(MAX_RESPONSE + 1)
+            if len(raw) > MAX_RESPONSE:
+                raise SyncError(f"{self.url}: response larger than {MAX_RESPONSE} bytes")
             status, header_items = response.status, response.getheaders()
-        except OSError as exc:
+        except (OSError, http.client.HTTPException) as exc:
             raise SyncError(f"{self.url}: {exc}") from exc
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
         try:
             parsed = json.loads(raw.decode("utf-8")) if raw else {}
         except ValueError:

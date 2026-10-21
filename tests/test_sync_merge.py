@@ -34,6 +34,9 @@ class ConvergenceTest(unittest.TestCase):
         (_rec(importance=0.2, updated_at=100.0), _rec(importance=0.8, updated_at=300.0)),
         (_rec(metadata_json='{"pinned": true}'), _rec(metadata_json='{"tag": "x"}')),
         (_rec(confidence=None), _rec(confidence=0.4)),
+        (_rec(content="a long original version", updated_at=100.0),
+         _rec(content="short fix", content_hash="h3", updated_at=200.0)),
+        (_rec(metadata_json='{"k": 1}'), _rec(metadata_json='{"k": "1"}')),
     )
 
     def test_merge_is_commutative(self):
@@ -60,7 +63,16 @@ class FieldRulesTest(unittest.TestCase):
         self.assertEqual(m["confidence"], 0.9)
         self.assertEqual(m["importance"], 0.8)
 
-    def test_longer_content_wins_and_carries_its_own_hash(self):
+    def test_a_newer_edit_wins_even_when_it_is_shorter(self):
+        """Corrections shrink text. Under "longer wins" a fix that tightened a
+        memory was reverted by every peer that still had the wordier copy."""
+        old = _rec(content="a long, wordy and partly wrong version", content_hash="ho", updated_at=100.0)
+        new = _rec(content="the fix", content_hash="hn", updated_at=200.0)
+        for a, b in ((old, new), (new, old)):
+            m = merge.merge_memory(dict(a), dict(b))
+            self.assertEqual((m["content"], m["content_hash"]), ("the fix", "hn"))
+
+    def test_on_equal_stamps_longer_content_wins_and_carries_its_own_hash(self):
         m = merge.merge_memory(_rec(content="short", content_hash="hs"),
                                _rec(content="a longer text", content_hash="hl"))
         self.assertEqual((m["content"], m["content_hash"]), ("a longer text", "hl"))
@@ -74,6 +86,17 @@ class FieldRulesTest(unittest.TestCase):
         self.assertEqual(merge.merge_memory(dict(a), dict(b)),
                          merge.merge_memory(dict(b), dict(a)))
         self.assertEqual(merge.merge_memory(dict(a), dict(b))["content"], "remot")
+
+    def test_a_tie_between_values_of_different_types_is_symmetric(self):
+        """str() makes 1 and "1" look identical, so the old tie-break returned
+        whichever argument came first."""
+        a, b = _rec(metadata_json='{"k": 1}'), _rec(metadata_json='{"k": "1"}')
+        self.assertEqual(merge.merge_memory(dict(a), dict(b))["metadata_json"],
+                         merge.merge_memory(dict(b), dict(a))["metadata_json"])
+
+    def test_a_value_beats_a_missing_one_on_a_tie(self):
+        self.assertEqual(merge.merge_memory(_rec(source=None), _rec(source="agent"))["source"], "agent")
+        self.assertEqual(merge.merge_memory(_rec(source="agent"), _rec(source=None))["source"], "agent")
 
     def test_metadata_unions_and_pinned_is_sticky(self):
         m = merge.merge_memory(_rec(metadata_json='{"a": 1, "pinned": true}'),
@@ -91,6 +114,18 @@ class FieldRulesTest(unittest.TestCase):
     def test_corrupt_metadata_json_does_not_stop_a_reconcile(self):
         m = merge.merge_memory(_rec(metadata_json="{not json"), _rec(metadata_json='{"b": 2}'))
         self.assertEqual(m["id"], "ygg_x")
+
+
+class ClockSkewTest(unittest.TestCase):
+    def test_a_stamp_from_the_future_is_clamped(self):
+        """A peer whose clock runs a year ahead would otherwise win every
+        recency-resolved field forever."""
+        self.assertEqual(merge.clamp_stamp(10_000.0, now=100.0), 100.0 + merge.MAX_CLOCK_SKEW)
+
+    def test_a_plausible_stamp_is_left_alone(self):
+        self.assertEqual(merge.clamp_stamp(90.0, now=100.0), 90.0)
+        self.assertEqual(merge.clamp_stamp(100.0 + merge.MAX_CLOCK_SKEW - 1, now=100.0),
+                         100.0 + merge.MAX_CLOCK_SKEW - 1)
 
 
 class TombstoneTest(unittest.TestCase):

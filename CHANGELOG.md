@@ -3,6 +3,55 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+- **Pairing codes now name the issuing machine's certificate.** The first
+  connection of `ygg link` used to trust whatever certificate answered, so a
+  machine on the network path could intercept pairing and join both sides as a
+  peer. The code now ends in `.<fingerprint>`, and the secret is sent only once
+  the certificate matches. Codes from a build without it are refused over TLS.
+- A peer stored without a pinned certificate is refused instead of trusted.
+- The sync listener does the TLS handshake per connection with a timeout; one
+  idle TCP connection used to freeze it for every peer.
+- Request bodies on the sync listener are capped (64 KB on the unauthenticated
+  `/sync/pair`); responses from peers are capped too.
+- Peer timestamps from the future are clamped to five minutes ahead of the
+  local clock, so a skewed box can no longer win every field forever or leave
+  tombstones that never expire.
+- `peers.json` is created `0600` instead of chmodded after writing; the sync
+  key is minted under a `077` umask; concurrent redeems of one code can no
+  longer both succeed; a pairing with an empty or borrowed node id is refused.
+- HTTP MCP facade: constant-time token check, and `Host`/`Origin` are now
+  validated in every mode with `Content-Type: application/json` required —
+  a web page could previously POST to it in open mode. Behind a tunnel, set
+  `YGG_MCP_ALLOWED_HOSTS` to the public hostname (see docs/cross-surface.md).
+- Recalled memory is injected as framed reference notes — not instructions —
+  with its source and an explicit marker for other projects.
+- Transcripts are redacted (Stripe, npm, Hugging Face, Bearer, `.env`-style
+  keys, private key blocks, long hex/base64 blobs) before they reach the
+  distill model, and the write-path secret guard uses the wider patterns.
+
+### Fixed
+- A peer that was offline over TLS killed the background sender; live push
+  stayed dead until the daemon restarted.
+- An edit made while the previous version of the same memory was in flight
+  was dropped by that flight's ack.
+- Delivery is tracked per peer: one sleeping machine no longer stalls the
+  queue for the others, and a backlog past one batch now drains.
+- A newer edit wins a merge even when it is shorter — corrections used to be
+  reverted by every peer still holding the wordier copy. Equal stamps still
+  prefer the longer text.
+- Merge tie-breaks no longer depend on argument order for values of different
+  types (`1` vs `"1"`).
+- A namespace or user change from a peer is written instead of being reported
+  as different on every reconcile.
+- A local delete landing during an incoming merge is no longer undone.
+- `ygg sync` (git) honours deletes: tombstones travel in `tombstones.json`,
+  deleted memories are removed from the repo and are not re-imported.
+- MCP tools called without a required argument now say which one
+  (`missing required argument: project`) instead of returning `'project'`.
+
 ## [0.16.0] — 2026-08-20 — one memory across your machines
 
 ### Added

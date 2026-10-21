@@ -14,7 +14,9 @@ test exhaustively (see tests/test_sync_merge.py).
 Field rules, in the spirit of archive-never-delete:
   - archived            OR   — an archive decision made anywhere holds everywhere
   - confidence/importance max  — trust the stronger signal
-  - content             longer wins (an edit adds information)
+  - content             the more recently updated record wins; on an equal
+                        stamp the longer text (corrections shrink text, so
+                        "longer always wins" reverted every tightening edit)
   - created_at          min  — the earliest creation is the true one
   - updated_at          max
   - metadata_json       union of keys; `pinned` is OR'd
@@ -34,6 +36,11 @@ from typing import Any
 # weight in every digest.
 TOMBSTONE_TTL = 90 * 24 * 3600.0
 
+# How far ahead of our clock a peer's stamp may be. A box whose clock runs a
+# year fast would otherwise win every recency-resolved field forever, and its
+# tombstones would never expire. Generous enough for ordinary NTP drift.
+MAX_CLOCK_SKEW = 300.0
+
 # Fields with no semantic ordering of their own — resolved by recency.
 _BY_RECENCY = ("user_id", "namespace", "scope", "project", "type", "source")
 
@@ -48,15 +55,28 @@ def _ts(rec: dict[str, Any]) -> float:
     return 0.0
 
 
+def clamp_stamp(stamp: float, *, now: float) -> float:
+    """A peer's timestamp, bounded by what our own clock finds plausible."""
+    return min(float(stamp), now + MAX_CLOCK_SKEW)
+
+
+def _order(value: Any) -> tuple:
+    """Total order for tie-breaks. A missing value always loses; the type name
+    keeps 1 and "1" apart (str() made them equal, and max() then returned
+    whichever argument came first)."""
+    return (value is not None, type(value).__name__,
+            json.dumps(value, sort_keys=True, default=str))
+
+
 def _pick(lv: Any, rv: Any, lts: float, rts: float) -> Any:
     """Symmetric choice between two values: newer wins; on an equal stamp the
-    larger string form wins. Symmetric because the tie-break looks only at the
+    larger value wins. Symmetric because the tie-break looks only at the
     values, never at which argument they arrived in."""
     if lv == rv:
         return lv
     if lts != rts:
         return lv if lts > rts else rv
-    return max((lv, rv), key=lambda v: "" if v is None else str(v))
+    return max((lv, rv), key=_order)
 
 
 def _loads(raw: Any) -> dict[str, Any]:
@@ -86,7 +106,7 @@ def merge_memory(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any
         merged["content"] = lc
         merged["content_hash"] = _pick(local.get("content_hash"), remote.get("content_hash"), lts, rts)
     else:
-        winner = local if (len(lc), lc) > (len(rc), rc) else remote
+        winner = local if (lts, len(lc), lc) > (rts, len(rc), rc) else remote
         merged["content"] = winner.get("content")
         merged["content_hash"] = winner.get("content_hash")
 

@@ -200,71 +200,7 @@ Check it took with `ygg doctor` — dense should name your model:
 ✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
 ```
 
-<details>
-<summary><b>LM Studio: the four things that catch people out</b></summary>
-
-`ygg install` handles all of this. Read on only if you're wiring it by hand.
-
-**1. Two settings, two different shapes of the same URL.** `embed_url` is the
-`/v1` base; `distill_url` is the host root. Same server, and swapping them gets
-you a 404 that reads like the endpoint is simply wrong.
-
-```bash
-ygg config set embed_backend openai
-ygg config set embed_url    http://127.0.0.1:1234/v1
-ygg config set distill_url  http://127.0.0.1:1234
-```
-
-**2. The model id is not what you downloaded.** `lms get nomic-embed-text` puts
-a model on disk that the API answers to as
-`text-embedding-nomic-embed-text-v1.5`. Ask the server, don't guess:
-
-```bash
-curl -s http://127.0.0.1:1234/api/v0/models | grep '"id"'
-```
-
-**3. Turn on Just-In-Time model loading** (Developer tab). Without it nothing is
-loaded when the daemon calls, and every request 404s.
-
-**4. Turn on "run the server on login".** The Yggdrasil daemon starts at boot; if
-LM Studio's server doesn't, dense search silently degrades to lexical until you
-next open the app.
-
-</details>
-
-<details>
-<summary><b>OpenRouter: two settings that will bite you</b></summary>
-
-**1. Use an inference key, not a provisioning key.** Keys from
-[openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys)
-can only mint other keys — embedding calls with one return a baffling
-`401 User not found`. Create a normal key at
-[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) instead.
-
-Note that `GET /api/v1/models` answers `200 OK` for *any* key, valid or not —
-it ignores auth entirely, so it can't tell you whether your key works. Check
-`GET /api/v1/key` instead: it returns `is_provisioning_key`, and fails outright
-on a bad key.
-
-**2. Privacy settings silently hide most models.** If a model 404s with
-`All providers have been ignored`, the model is fine — your account is
-filtering out every provider that serves it. Fix it at
-[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy).
-That filter is also why `openai/text-embedding-3-*` can come back `403` on a
-provider's terms of service.
-
-Browse what's actually available at
-[openrouter.ai/models?output_modalities=embeddings](https://openrouter.ai/models?fmt=cards&output_modalities=embeddings)
-(26 models at the time of writing). Useful ones:
-
-| Model | Price / 1M tokens |
-| --- | --- |
-| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | **$0** |
-| `perplexity/pplx-embed-v1-0.6b` | $0.004 |
-| `intfloat/multilingual-e5-large` | $0.01 — multilingual |
-| `google/gemini-embedding-2` | $0.20 |
-
-</details>
+Wiring LM Studio or OpenRouter by hand? The gotchas (two URL shapes, model ids, JIT loading, inference vs provisioning keys, privacy filters) are in [docs/model-backends.md](./docs/model-backends.md).
 
 Staying local still wins on quality *and* privacy: on the 232-memory / 110-query
 corpus, local `paraphrase-multilingual` scores recall@1 **0.964** vs **0.946**
@@ -318,8 +254,10 @@ push as they happen and a sync is triggered by reads; idle machines send nothing
 
 **What this is not:** a cloud. There is no relay, no account, no server of ours in
 the path. The machines talk to each other directly over your own network, over
-TLS with each other's certificate pinned at pairing time, using a key pair that
-exists only on those two machines. Nothing binds a network port until you run
+TLS with each other's certificate pinned, using a key pair that exists only on
+those two machines. The pairing code itself names the issuing machine's
+certificate, so even the very first connection is verified — something else on
+the network answering in its place gets refused before the code's secret is sent. Nothing binds a network port until you run
 `ygg link` — install Yggdrasil and it stays on loopback, exactly as before.
 
 ```text
@@ -336,6 +274,9 @@ ygg unlink <name>        # revoke that machine's key here
 not knowledge. Embedding vectors normally stay local too, with one exception: if
 both machines run the same embedding model, the vector rides along, so a compute
 box can do the embedding for the laptop and the laptop never runs a model.
+
+**The newer edit wins.** Edit a memory on both machines before they talk and the
+more recent edit is kept on both (a shorter correction included).
 
 **Deletions win.** If you delete a memory on one machine and edit it on the other
 at the same time, the deletion wins and the edit is lost. That's deliberate:
@@ -363,6 +304,8 @@ Measured by [`eval/ygg_eval.py`](./eval/ygg_eval.py) — 232 memories, 110 label
 | **Whole store** (no filter, pool 232) | 0.72 | 0.87 | 0.69 |
 
 **Within a project — the path you use — the right memory is #1 for 0.94 of queries and in the top 3 every time (recall@3 = 1.00).** Searching the whole store with no filter is harder (recall@1 0.72, recall@3 0.87 across all 232). Zero-dep lexical mode already solves keyword and code-identifier queries (1.00); the local model adds meaning and cross-language (crosslingual 0.25 → 0.95). The [full breakdown in BENCHMARKS.md](./BENCHMARKS.md) has 95% CIs, pool sizes, and per-class scores — rerun it in a minute: `python3 eval/ygg_eval.py --report`.
+
+**Corpus size is part of the number.** On a real 4,799-memory store the default multilingual embedder falls to the lexical baseline (recall@1 0.55); `bge-m3` holds 0.775 there. If your store grows into the thousands, pick `bge-m3` — details in [BENCHMARKS.md](./BENCHMARKS.md).
 
 ## 🆚 Yggdrasil vs the rest
 
@@ -455,6 +398,12 @@ If you link two of your own machines with `ygg link`, memories travel **between 
 </details>
 
 <details>
+<summary><b>Can a malicious repo plant instructions in my memory?</b></summary>
+
+Recalled memory is injected as clearly-framed *reference notes, not instructions*, with where each note came from and a marker when it belongs to a different project — so the agent treats it as data and asks before acting on anything in it. Secrets are redacted from transcripts before distillation and refused on write. Still: memory is only as trustworthy as what wrote it — review `ygg review` now and then.
+</details>
+
+<details>
 <summary><b>Does it automatically remember everything?</b></summary>
 
 No — by design. Retrieval is automatic; *writing* is deliberate (the agent calls `ygg_remember` for durable lessons). Capture-everything pollutes memory and burns tokens, so we don't. The optional background model consolidates what's already saved (propose-only).
@@ -475,14 +424,16 @@ The engine idles at **~21 MB RAM** (lexical default) with ~0% CPU; disk is tens 
 <details>
 <summary><b>Can I edit or delete memories by hand?</b></summary>
 
-Yes. Memories materialize to Markdown notes in an Obsidian vault — read, edit, or remove them like any file. The engine never hard-deletes; it archives (reversible).
+Yes. Memories materialize to Markdown notes in an Obsidian vault — read, edit, or remove them like any file. Governance and review never delete anything — they archive, which is reversible. Only you hard-delete, explicitly, with `ygg delete` (and on linked machines that delete reaches both).
 </details>
 
 ## 🚦 Status & roadmap
 
 **Alpha.** The happy path and the governance loop are gate-tested (`scripts/run_gates.sh`); not yet hardened for multi-user or production use. macOS today; Linux/Windows service installers are built and in final on-device testing.
 
-Next: 🛰️ cross-surface sync (one memory across CLI, web, and phone) · 🔗 relation graph (`SOLVES` / `SUPERSEDES` / `CONTRADICTS`) · 🐧 Linux/Windows GA.
+Shipped recently: 🔗 machine-to-machine memory (`ygg link`) · relation graph (`ygg relate`: `solves` / `supersedes` / `contradicts`).
+
+Next: 🛰️ cross-surface (one memory across CLI, web, and phone — the HTTP facade is in, see [docs/cross-surface.md](./docs/cross-surface.md)) · 🐧 Linux/Windows GA.
 
 ## 🤝 Contributing
 

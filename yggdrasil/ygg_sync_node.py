@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,12 +50,58 @@ RECONCILE_TTL = 60.0
 # request without needing a resumable protocol.
 PUSH_BATCH = 500
 
+# Request body ceilings. /sync/pair is the one route reachable without a key,
+# so it gets a tiny one; authenticated pushes carry up to PUSH_BATCH records
+# with vectors. Trusting Content-Length unbounded let anyone on the LAN make
+# the engine allocate whatever they claimed.
+MAX_PAIR_BODY = 64 * 1024
+MAX_BODY = 64 * 1024 * 1024
+
+# A peer that connects and then says nothing must cost one thread for a bounded
+# time, not one forever.
+CONNECTION_TIMEOUT = 30.0
+
+
+class _BodyTooLarge(Exception):
+    pass
+
+
+class _SyncServer(ThreadingHTTPServer):
+    """Threaded server that does the TLS handshake per connection, in that
+    connection's own thread.
+
+    Wrapping the LISTENING socket instead runs every handshake inside accept(),
+    on the single serve_forever thread, with no timeout — one idle TCP
+    connection then froze the listener for every peer.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, address: Any, handler: Any, context: ssl.SSLContext | None) -> None:
+        self.tls_context = context
+        super().__init__(address, handler)
+
+    def finish_request(self, request: Any, client_address: Any) -> None:
+        request.settimeout(CONNECTION_TIMEOUT)
+        if self.tls_context is None:
+            super().finish_request(request, client_address)
+            return
+        try:
+            tls = self.tls_context.wrap_socket(request, server_side=True)
+        except (OSError, ValueError):
+            return  # silent, slow or not speaking TLS: drop it, nothing to answer
+        try:
+            super().finish_request(tls, client_address)
+        finally:
+            tls.close()
+
 
 class SyncHandler(BaseHTTPRequestHandler):
     """/sync/* only. Everything else is 404 — this socket must never become a
     second door to the full engine API."""
 
     server_version = "yggdrasil-sync"
+    timeout = CONNECTION_TIMEOUT
 
     def __init__(self, node: "SyncNode", *args: Any) -> None:
         self.node = node
@@ -75,8 +122,13 @@ class SyncHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _body(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+    def _body(self, limit: int = MAX_BODY) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            length = 0
+        if length > limit:
+            raise _BodyTooLarge()
         if length <= 0:
             return {}
         try:
@@ -106,11 +158,19 @@ class SyncHandler(BaseHTTPRequestHandler):
             self._send(200, {"success": True, "data": self.node.local_digest()})
 
     def do_POST(self) -> None:  # noqa: N802
+        try:
+            self._post()
+        except _BodyTooLarge:
+            self.close_connection = True  # the unread body must not become the next request
+            self._send(413, {"success": False, "error": "request body too large"})
+
+    def _post(self) -> None:
         path = urlparse(self.path).path
         if path == "/sync/pair":
             # The only unauthenticated route: the one-time code IS the credential.
             try:
-                self._send(200, {"success": True, "data": self.node.accept_pairing(self._body())})
+                body = self._body(MAX_PAIR_BODY)
+                self._send(200, {"success": True, "data": self.node.accept_pairing(body)})
             except PermissionError as exc:
                 self._send(403, {"success": False, "error": str(exc)})
             return
@@ -182,13 +242,13 @@ class SyncNode:
         if self._httpd is not None:
             return self.port
         self._stopping.clear()
-        httpd = ThreadingHTTPServer((self.host, self.port),
-                                    lambda *args: SyncHandler(self, *args))
+        context = None
         if not self.insecure:
             cert, key = _peers.ensure_cert(self.home)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(str(cert), str(key))
-            httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+        httpd = _SyncServer((self.host, self.port),
+                            lambda *args: SyncHandler(self, *args), context)
         self.port = httpd.server_address[1]
         self._httpd = httpd
         self._thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -219,7 +279,11 @@ class SyncNode:
                 self.store.outbox_signal.clear()
                 if self._stopping.is_set():
                     return
-                result = self.flush_outbox()
+                try:
+                    result = self.flush_outbox()
+                except Exception as exc:  # noqa: BLE001 — the sender must outlive any one bad flush
+                    print(f"[ygg-sync] push failed: {exc}", file=sys.stderr, flush=True)
+                    result = {"errors": [str(exc)]}
                 # Exponential backoff to a five-minute ceiling: a peer that is off
                 # should cost a handful of connection attempts an hour, not one a
                 # second, and the queue survives regardless.
@@ -256,12 +320,19 @@ class SyncNode:
         That is safe because the one-time secret already authenticated this
         exchange; from the next request on, the pin does the work.
         """
+        node_id = str(body.get("node_id") or "")
+        # Checked before the code is redeemed, so a malformed request cannot
+        # burn it — and an empty or borrowed id would overwrite another peer.
+        if not node_id or node_id == self.node_id:
+            raise PermissionError("pairing request names no usable node id")
+        if not self.insecure and not body.get("fingerprint"):
+            raise PermissionError("pairing request carries no certificate to pin")
         if not self._pending.redeem(str(body.get("pairing_id") or ""),
                                     str(body.get("secret") or "")):
             raise PermissionError("pairing code is unknown, expired, or already used")
         mine = _peers.new_secret()
         _peers.add_peer(self.peers_state,
-                        node_id=str(body.get("node_id") or ""),
+                        node_id=node_id,
                         name=str(body.get("name") or "peer"),
                         url=str(body.get("url") or ""),
                         key_out=str(body.get("key") or ""),
@@ -276,14 +347,19 @@ class SyncNode:
     # ---- client-side ------------------------------------------------------
 
     def issue_pairing_code(self) -> str:
-        return self._pending.issue(self.host, self.port)
+        return self._pending.issue(self.host, self.port, fingerprint=self.fingerprint)
 
     def pair_with(self, code: str, *, name: str | None = None) -> dict[str, Any]:
         parsed = _peers.parse_code(code)
         scheme = "http" if self.insecure else "https"
         url = f"{scheme}://{parsed['host']}:{parsed['port']}"
+        if not self.insecure and not parsed["fingerprint"]:
+            raise RuntimeError(
+                "this pairing code does not name the issuing machine's certificate, so the\n"
+                "  connection could not be verified. update Yggdrasil there and run `ygg link` again")
         mine = _peers.new_secret()
-        client = PeerClient(url)
+        # The secret is sent only after the certificate matches the code.
+        client = PeerClient(url, pin_prefix=parsed["fingerprint"])
         try:
             answer = client.pair({
                 "pairing_id": parsed["pairing_id"], "secret": parsed["secret"],
@@ -313,6 +389,10 @@ class SyncNode:
             return {"status": 0, "headers": [], "body": {"error": str(exc)}}
 
     def _client(self, peer: dict[str, Any]) -> PeerClient:
+        url = peer.get("url") or ""
+        if url.startswith("https://") and not peer.get("fingerprint"):
+            # Fail closed: an empty pin used to mean "accept any certificate".
+            raise SyncError(f"no pinned certificate for {peer.get('name')} — unlink and link it again")
         return PeerClient(peer.get("url") or "", key=peer.get("key_out") or "",
                           fingerprint=peer.get("fingerprint") or None)
 
@@ -332,36 +412,55 @@ class SyncNode:
     # ---- the two paths ----------------------------------------------------
 
     def flush_outbox(self) -> dict[str, Any]:
-        """Send everything queued. Acks only when EVERY peer took it — a partial
-        ack would silently strand a change on one machine."""
-        pending = self.store.outbox_pending()
-        if not pending:
-            return {"sent": 0, "errors": []}
+        """Send everything queued, tracking delivery PER PEER.
+
+        Each peer carries a high-water mark: the last outbox seq it confirmed.
+        Rows are dropped once every peer is past them. A single all-or-nothing
+        ack used to let one sleeping machine stall the queue for the others —
+        they re-received the same first batch on every backoff tick, and rows
+        past it never moved. Seqs are AUTOINCREMENT and an edit re-enqueues
+        with a fresh one, so "past the mark" really means "already delivered".
+        """
         targets = list(self.peers_state.get("peers", {}).values())
         if not targets:
             # Nothing to deliver to. Dropping beats letting the queue grow until
             # it overflows and pointlessly demands a reconcile.
-            self.store.outbox_ack([row["seq"] for row in pending])
+            while pending := self.store.outbox_pending():
+                self.store.outbox_ack_through(pending[-1]["seq"])
             return {"sent": 0, "errors": []}
 
-        memory_ids = [r["ref_id"] for r in pending if r["kind"] == "memory"]
-        tombstone_ids = {r["ref_id"] for r in pending if r["kind"] == "tombstone"}
-        graveyard = self.store.tombstones()
-        payload_memories = self._with_vectors(self.store.records_by_ids(memory_ids))
-        payload_tombs = {mid: graveyard[mid] for mid in tombstone_ids if mid in graveyard}
-
         errors: list[str] = []
+        sent = 0
+        marks_before = [peer.get("outbox_hwm") for peer in targets]
         for peer in targets:
             try:
-                client = self._client(peer)
-                for i in range(0, max(len(payload_memories), 1), PUSH_BATCH):
-                    client.push(memories=payload_memories[i:i + PUSH_BATCH],
-                                tombstones=payload_tombs if i == 0 else {})
+                sent += self._flush_to(peer)
             except SyncError as exc:
                 errors.append(f"{peer.get('name')}: {exc}")
-        if not errors:
-            self.store.outbox_ack([row["seq"] for row in pending])
-        return {"sent": len(payload_memories) + len(payload_tombs), "errors": errors}
+        floor = min(int(peer.get("outbox_hwm") or 0) for peer in targets)
+        if floor:
+            self.store.outbox_ack_through(floor)
+        if [peer.get("outbox_hwm") for peer in targets] != marks_before:
+            self._save_peers()
+        return {"sent": sent, "errors": errors}
+
+    def _flush_to(self, peer: dict[str, Any]) -> int:
+        client = self._client(peer)
+        sent = 0
+        while True:
+            rows = self.store.outbox_pending(after=int(peer.get("outbox_hwm") or 0),
+                                             limit=PUSH_BATCH)
+            if not rows:
+                return sent
+            memory_ids = [r["ref_id"] for r in rows if r["kind"] == "memory"]
+            tombstone_ids = {r["ref_id"] for r in rows if r["kind"] == "tombstone"}
+            graveyard = self.store.tombstones() if tombstone_ids else {}
+            memories = self._with_vectors(self.store.records_by_ids(memory_ids))
+            tombs = {mid: graveyard[mid] for mid in tombstone_ids if mid in graveyard}
+            if memories or tombs:
+                client.push(memories=memories, tombstones=tombs)
+            peer["outbox_hwm"] = rows[-1]["seq"]
+            sent += len(memories) + len(tombs)
 
     def reconcile(self, *, force: bool = False) -> dict[str, Any]:
         """Digest exchange and repair. Skipped while a recent one still holds,

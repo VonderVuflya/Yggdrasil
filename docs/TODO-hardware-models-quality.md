@@ -56,7 +56,7 @@ Tell the user **plainly** when their GPU will NOT be used, and why — instead o
 - Annotate each catalog entry with: **language coverage** (esp. the user's content language), **thinking vs non-thinking**, **CPU speed tier**.
 - Stretch: auto-detect the dominant language of existing memory and steer the recommendation (RU/ZH → Qwen/Gemma, never Llama).
 
-## 4. New CLI: `ygg delete` / `ygg reset` (currently MISSING)
+## 4. New CLI: `ygg delete` / `ygg reset` — ✅ DONE
 There is **no CLI way to delete memories or reset the store** today — this session required manual `sqlite3` surgery. Make it first-class.
 
 - `ygg delete --id <id> | --source <pat> | --project <p> | --type <t>` — selective deletion.

@@ -5,7 +5,9 @@ byte-identical state. One assertion that catches almost any mistake in merging,
 digesting, or ordering.
 """
 
+import http.client
 import json
+import socket
 import sys
 import tempfile
 import time
@@ -75,6 +77,32 @@ class PairingTest(Pair):
         with self.assertRaises(RuntimeError):
             self.b.pair_with(code, name="alpha-third")
 
+    def test_a_pairing_without_a_node_id_is_refused(self):
+        parsed = peers.parse_code(self.a.issue_pairing_code())
+        with self.assertRaises(PermissionError):
+            self.a.accept_pairing({"pairing_id": parsed["pairing_id"], "secret": parsed["secret"],
+                                   "node_id": "", "name": "x", "url": "http://h:1", "key": "k"})
+        self.assertEqual(len(peers.load(self.a.peers_path)["peers"]), 1)
+
+    def test_a_pairing_claiming_our_own_node_id_is_refused(self):
+        parsed = peers.parse_code(self.a.issue_pairing_code())
+        with self.assertRaises(PermissionError):
+            self.a.accept_pairing({"pairing_id": parsed["pairing_id"], "secret": parsed["secret"],
+                                   "node_id": self.a.node_id, "name": "x", "url": "http://h:1",
+                                   "key": "k"})
+
+    def test_an_oversized_body_is_refused_unread(self):
+        """/sync/pair is unauthenticated; trusting Content-Length there lets
+        anyone on the LAN make the engine allocate whatever they claim."""
+        conn = http.client.HTTPConnection(self.a.host, self.a.port, timeout=5)
+        self.addCleanup(conn.close)
+        conn.putrequest("POST", "/sync/pair")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", str(10 ** 10))
+        conn.endheaders()
+        conn.send(b"{}")
+        self.assertEqual(conn.getresponse().status, 413)
+
     def test_no_cors_headers_are_ever_emitted(self):
         headers = self.a.probe(self.b.url, key="whatever")["headers"]
         self.assertFalse([h for h in headers if h.lower().startswith("access-control")])
@@ -100,6 +128,42 @@ class PushTest(Pair):
         self.b.stop()
         self.a.flush_outbox()
         self.assertEqual(self.a_store.outbox_count(), 1)
+
+    def test_one_offline_peer_does_not_hold_back_the_others(self):
+        """Acks used to require EVERY peer, so one sleeping machine made the
+        healthy ones re-receive the same first batch on every backoff tick."""
+        root = Path(self._tmp.name)
+        c_store = MemoryStore(str(root / "c" / "m.sqlite"))
+        self.addCleanup(c_store.close)
+        c = SyncNode(c_store, home=root / "c", name="gamma", insecure=self.insecure)
+        c.start()
+        self.addCleanup(c.stop)
+        c.pair_with(self.a.issue_pairing_code(), name="alpha")
+        self.a.reload_peers()
+        c.stop()
+
+        first = self.add(self.a_store, "first while gamma sleeps")
+        self.assertTrue(self.a.flush_outbox()["errors"])
+        self.assertEqual(len(self.b_store.records_by_ids([first["id"]])), 1)
+        # beta already has it: a second flush must not count it as sent again
+        self.assertEqual(self.a.flush_outbox()["sent"], 0)
+        self.assertEqual(self.a_store.outbox_count(), 1)  # still owed to gamma
+
+        c.start()
+        self.assertEqual(self.a.flush_outbox()["errors"], [])
+        self.assertEqual(len(c_store.records_by_ids([first["id"]])), 1)
+        self.assertEqual(self.a_store.outbox_count(), 0)
+
+    def test_a_large_backlog_drains_in_one_flush(self):
+        import ygg_sync_node as node_mod
+        old = node_mod.PUSH_BATCH
+        node_mod.PUSH_BATCH = 2
+        self.addCleanup(setattr, node_mod, "PUSH_BATCH", old)
+        for i in range(5):
+            self.add(self.a_store, f"backlog fact {i}")
+        self.a.flush_outbox()
+        self.assertEqual(self.b_store.count(), 5)
+        self.assertEqual(self.a_store.outbox_count(), 0)
 
     def test_an_arrival_is_not_queued_back_towards_its_sender(self):
         """The ping-pong guard. Without it these two would trade one record forever."""
@@ -207,6 +271,66 @@ class TlsTest(Pair):
         self.add(self.b_store, "must not leave this machine")
         self.b.flush_outbox()
         self.assertEqual(self.b_store.outbox_count(), 1)
+
+    def _code_parts(self):
+        code = self.a.issue_pairing_code()
+        head, _, fp = code.rpartition(".")
+        return code, head, fp
+
+    def test_a_code_whose_fingerprint_does_not_match_is_refused_before_the_secret_leaves(self):
+        """The man-in-the-middle case: whoever answers the connection must hold
+        the certificate named in the code, or the secret is never sent."""
+        code, head, fp = self._code_parts()
+        with self.assertRaises(RuntimeError):
+            self.b.pair_with(f"{head}.{'0' * len(fp)}", name="impostor")
+        # had the secret gone out, alpha would have burned the code
+        self.b.pair_with(code, name="alpha-again")
+
+    def test_a_code_without_a_fingerprint_is_refused_over_tls(self):
+        _, head, _ = self._code_parts()
+        with self.assertRaises(RuntimeError):
+            self.b.pair_with(head, name="unpinned")
+
+    def test_a_peer_with_no_pin_is_refused_not_trusted(self):
+        state = peers.load(self.b.peers_path)
+        for peer in state["peers"].values():
+            peer["fingerprint"] = ""
+        peers.save(state, self.b.peers_path)
+        self.b.reload_peers()
+        self.add(self.b_store, "must not leave this machine")
+        self.assertTrue(self.b.flush_outbox()["errors"])
+        self.assertEqual(self.b_store.outbox_count(), 1)
+
+    def test_an_offline_peer_is_an_error_not_an_exception(self):
+        self.b.stop()
+        self.add(self.a_store, "written while beta sleeps")
+        self.assertTrue(self.a.flush_outbox()["errors"])
+        self.assertFalse(self.a.reconcile(force=True)["errors"] == [])
+
+    def test_the_sender_survives_an_offline_peer(self):
+        """A refused TLS connect used to escape as a raw OSError and kill the
+        sender thread — live push then stayed dead until the daemon restarted."""
+        self.a.start_sender()
+        self.b.stop()
+        self.add(self.a_store, "written while beta sleeps")
+        time.sleep(0.5)
+        self.assertTrue(self.a._sender.is_alive())
+        self.b.start()
+        later = self.add(self.a_store, "written after beta woke")
+        for _ in range(100):
+            if self.b_store.records_by_ids([later["id"]]):
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.b_store.count(), 2)
+
+    def test_a_silent_connection_does_not_block_the_listener(self):
+        """The handshake used to run in the accept loop, so one idle TCP
+        connection froze the listener for everyone."""
+        idle = socket.create_connection((self.a.host, self.a.port))
+        self.addCleanup(idle.close)
+        time.sleep(0.2)
+        self.add(self.b_store, "still gets through")
+        self.assertEqual(self.b.flush_outbox()["errors"], [])
 
     def test_paired_nodes_still_converge_over_tls(self):
         self.add(self.a_store, "from the laptop")

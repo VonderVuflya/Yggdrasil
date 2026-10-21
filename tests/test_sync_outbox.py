@@ -7,14 +7,19 @@ enqueueing happens inside the mutation's own transaction, and anything that
 arrived FROM a peer never enqueues (or two nodes ping-pong one record forever).
 """
 
+import json
 import sys
 import tempfile
+import threading
 import time
 import unittest
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "yggdrasil"))
 import ygg_sync_merge as merge  # noqa: E402
+import ygg_memory_server as engine  # noqa: E402
 from ygg_memory_server import MemoryStore  # noqa: E402
 
 
@@ -106,6 +111,29 @@ class OutboxTest(unittest.TestCase):
         in_flight = self.store.outbox_pending()
         second = _add(self.store, content="second")
         self.store.outbox_ack([r["seq"] for r in in_flight])
+        self.assertEqual([r["ref_id"] for r in self.store.outbox_pending()], [second["id"]])
+
+    def test_an_edit_to_the_same_memory_mid_flight_survives_the_ack(self):
+        """Coalescing by (kind, ref_id) used to keep the OLD seq, so the ack for
+        the batch that carried the previous version swallowed the new edit."""
+        rec = _add(self.store, content="first version")
+        in_flight = self.store.outbox_pending()
+        self.store.update(rec["id"], data="second version", metadata_patch=None, archived=None)
+        self.store.outbox_ack([r["seq"] for r in in_flight])
+        self.assertEqual([r["ref_id"] for r in self.store.outbox_pending()], [rec["id"]])
+
+    def test_pending_can_resume_after_a_given_seq(self):
+        first = _add(self.store, content="first")
+        second = _add(self.store, content="second")
+        seq = self.store.outbox_pending()[0]["seq"]
+        self.assertEqual([r["ref_id"] for r in self.store.outbox_pending(after=seq)], [second["id"]])
+        self.assertNotEqual(first["id"], second["id"])
+
+    def test_ack_through_drops_everything_up_to_a_seq(self):
+        _add(self.store, content="first")
+        second = _add(self.store, content="second")
+        seq = self.store.outbox_pending()[0]["seq"]
+        self.store.outbox_ack_through(seq)
         self.assertEqual([r["ref_id"] for r in self.store.outbox_pending()], [second["id"]])
 
     def test_imports_from_a_peer_never_enqueue(self):
@@ -203,10 +231,80 @@ class ApplyRemoteTest(unittest.TestCase):
         self.assertEqual(self.store.records_by_ids([rec["id"]]), [])
         self.assertIn(rec["id"], self.store.tombstones())
 
+    def test_a_stamp_from_the_future_is_clamped_on_arrival(self):
+        rec = _add(self.store, content="short")
+        remote = dict(self.store.records_by_ids([rec["id"]])[0],
+                      content="pushed by a box whose clock is a year ahead", content_hash="hf",
+                      updated_at=time.time() + 365 * 24 * 3600)
+        self.store.apply_remote(memories=[remote])
+        got = self.store.records_by_ids([rec["id"]])[0]
+        self.assertLessEqual(got["updated_at"], time.time() + merge.MAX_CLOCK_SKEW)
+
+    def test_a_tombstone_from_the_future_is_clamped_so_it_can_expire(self):
+        rec = _add(self.store)
+        self.store.apply_remote(tombstones={rec["id"]: time.time() + 10 * merge.TOMBSTONE_TTL})
+        self.assertLessEqual(self.store.tombstones()[rec["id"]], time.time() + merge.MAX_CLOCK_SKEW)
+
+    def test_a_namespace_change_from_a_peer_is_written(self):
+        """merge resolves user_id/namespace and the digest hashes them — a writer
+        that skipped them left the record "different" on every reconcile, forever."""
+        rec = _add(self.store)
+        remote = dict(self.store.records_by_ids([rec["id"]])[0],
+                      namespace="work", updated_at=time.time() + 5)
+        self.store.apply_remote(memories=[remote])
+        self.assertEqual(self.store.records_by_ids([rec["id"]])[0]["namespace"], "work")
+        self.assertEqual(self.store.apply_remote(memories=[remote])["updated"], 0)
+
+    def test_the_writer_never_resurrects_a_tombstoned_id(self):
+        """apply_remote checks tombstones before it takes the write lock; a local
+        delete that lands in between must still hold."""
+        rec = _add(self.store, content="leaked token")
+        row = self.store.records_by_ids([rec["id"]])[0]
+        self.store.delete_by_id(rec["id"])
+        self.store.sync_upsert([dict(row)])
+        self.assertEqual(self.store.records_by_ids([rec["id"]]), [])
+
     def test_counters_report_what_happened(self):
         rec = _add(self.store)
         out = self.store.apply_remote(tombstones={rec["id"]: time.time()})
         self.assertEqual(out["deleted"], 1)
+
+
+class GitTransportRouteTest(unittest.TestCase):
+    """The routes `ygg sync` (git) talks to. They used to carry memories and
+    relations only, so the git transport could neither learn about a delete nor
+    pass one on — and re-imported deleted memories on every run."""
+
+    def setUp(self):
+        self.store, self._tmp = _store()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(self.store.close)
+        handler = type("H", (engine.Handler,), {"store": self.store, "token": "t"})
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+
+    def post(self, path, body):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.httpd.server_address[1]}{path}",
+            data=json.dumps(body).encode(), method="POST",
+            headers={"Authorization": "Bearer t", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())["data"]
+
+    def test_export_carries_the_tombstones(self):
+        rec = _add(self.store)
+        self.store.delete_by_id(rec["id"])
+        self.assertIn(rec["id"], self.post("/sync_export", {})["tombstones"])
+
+    def test_upsert_applies_tombstones_before_records(self):
+        rec = _add(self.store, content="leaked token")
+        row = self.store.records_by_ids([rec["id"]])[0]
+        self.post("/sync_upsert", {"memories": [row], "relations": [],
+                                   "tombstones": {rec["id"]: time.time()}})
+        self.assertEqual(self.store.records_by_ids([rec["id"]]), [])
+        self.assertIn(rec["id"], self.store.tombstones())
 
 
 if __name__ == "__main__":

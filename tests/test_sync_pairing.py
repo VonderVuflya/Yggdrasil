@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 # POSIX file modes are the mechanism; on Windows os.chmod only toggles a
 # read-only bit, so asserting them there tests the platform, not the code.
@@ -25,6 +26,21 @@ class CodeTest(unittest.TestCase):
         parsed = peers.parse_code(code)
         self.assertEqual((parsed["host"], parsed["port"]), ("192.168.3.150", 42070))
         self.assertEqual((parsed["pairing_id"], parsed["secret"]), ("pid", "s3cret"))
+
+    def test_code_carries_the_certificate_fingerprint(self):
+        """Without it the first connection is trust-on-first-use, and anything on
+        the network path can answer it with its own certificate."""
+        fp = "ab" * 32
+        parsed = peers.parse_code(peers.make_code("h", 1, "pid", "s3cret", fingerprint=fp))
+        self.assertEqual(parsed["secret"], "s3cret")
+        self.assertEqual(parsed["fingerprint"], fp[:peers.CODE_FP_CHARS])
+
+    def test_a_code_without_a_fingerprint_says_so(self):
+        self.assertIsNone(peers.parse_code(peers.make_code("h", 1, "pid", "s3cret"))["fingerprint"])
+
+    def test_issued_codes_carry_the_fingerprint(self):
+        code = peers.PendingPairings().issue("h", 1, fingerprint="cd" * 32, now=0.0)
+        self.assertEqual(peers.parse_code(code)["fingerprint"], ("cd" * 32)[:peers.CODE_FP_CHARS])
 
     def test_garbage_is_rejected_not_guessed(self):
         for bad in ("", "http://host/x#y", "ygg://host/x", "ygg://host:notaport/x#y"):
@@ -83,6 +99,14 @@ class RegistryTest(unittest.TestCase):
     def test_the_file_is_not_world_readable(self):
         """It holds the keys to the whole store."""
         peers.save(peers.blank_state(), self.path)
+        self.assertEqual(os.stat(self.path).st_mode & 0o077, 0)
+
+    @unittest.skipUnless(POSIX_MODES, "file modes are POSIX-only")
+    def test_the_file_is_created_private_not_chmodded_afterwards(self):
+        """write_text creates with the umask (usually 0644); a chmod afterwards
+        leaves a window where the keys are world-readable."""
+        with mock.patch("os.chmod"):
+            peers.save(peers.blank_state(), self.path)
         self.assertEqual(os.stat(self.path).st_mode & 0o077, 0)
 
     def test_a_missing_file_is_an_empty_registry_not_an_error(self):

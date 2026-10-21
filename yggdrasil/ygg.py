@@ -38,8 +38,13 @@ DEFAULT_USER = _cfg.user_id()
 SEMDEDUP_THRESHOLD = float(os.environ.get("YGG_SEMDEDUP_AT", "0.92"))
 
 SECRET_PATTERNS = [
-    re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----"),
+    # PEM private key: the whole block when it has an END line, else just the header.
+    re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----)?"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),                       # OpenAI-style
+    re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b"),         # Stripe secret/restricted
+    re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b"),                        # npm token
+    re.compile(r"\bhf_[A-Za-z0-9]{30,}\b"),                         # Hugging Face token
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),           # Authorization: Bearer <token>
     re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),                        # GitHub classic PAT
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),               # GitHub fine-grained PAT
     re.compile(r"\bgh[opsu]_[A-Za-z0-9]{20,}\b"),                  # GitHub OAuth/app/refresh tokens
@@ -51,7 +56,23 @@ SECRET_PATTERNS = [
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),                      # Google API key
     re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s:@]+@"),  # scheme://user:PASSWORD@host
     re.compile(r"(?i)\b(api[_-]?key|token|password|passwd|secret|client_secret)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{12,}"),
+    # .env-style assignment: any UPPER_SNAKE name containing KEY/TOKEN/SECRET/PASSWORD/CREDENTIAL
+    re.compile(r"\b[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)[A-Z0-9_]*\s*=\s*['\"]?[^\s'\"]{8,}"),
 ]
+
+# Shape-only heuristics. Good enough to scrub transcripts before they reach a
+# model — losing a digest there costs nothing — but never grounds to REFUSE a
+# write: every memory carries a sha256 content_hash, and digests are ordinary
+# in engineering notes.
+REDACT_ONLY_PATTERNS = [
+    # Long hex blob (> 40 chars, so a 40-char git SHA is left alone)
+    re.compile(r"(?<![A-Za-z0-9])[0-9A-Fa-f]{41,}(?![A-Za-z0-9])"),
+    # Long mixed-case+digit base64/url-safe blob (needs upper, lower AND digit: skips paths/prose)
+    re.compile(r"(?<![A-Za-z0-9+/=_-])(?=[A-Za-z0-9+/_-]*[A-Z])(?=[A-Za-z0-9+/_-]*[a-z])"
+               r"(?=[A-Za-z0-9+/_-]*\d)[A-Za-z0-9+/_-]{40,}={0,2}(?![A-Za-z0-9+/=_-])"),
+]
+
+REDACTION = "[REDACTED]"
 
 
 def env_default(name: str, fallback: str) -> str:
@@ -104,6 +125,14 @@ def scan_for_secrets(text: str) -> list[str]:
         if found:
             matches.append(found.group(0)[:80])
     return matches
+
+
+def redact_secrets(text: str) -> str:
+    """Replace anything SECRET_PATTERNS (the guard's list) or the shape-only
+    REDACT_ONLY_PATTERNS match with [REDACTED]."""
+    for pattern in SECRET_PATTERNS + REDACT_ONLY_PATTERNS:
+        text = pattern.sub(REDACTION, text or "")
+    return text
 
 
 def require_safe_memory(content: str, metadata: dict[str, Any]) -> None:

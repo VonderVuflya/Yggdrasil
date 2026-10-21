@@ -12,6 +12,9 @@ The engine has no authorization levels — whoever authenticates can call
   * Transport is TLS with the certificate PINNED at pairing time. Pinning is what
     lets a self-signed certificate be strictly better than a CA here: there is no
     third party to trust and no name resolution to spoof.
+  * The pairing code itself names the issuer's certificate. Without that the
+    very first connection is trust-on-first-use, and anything on the network
+    path could answer it with its own certificate and walk off with the secret.
 
 The certificate is minted by shelling out to `openssl`. stdlib `ssl` can use
 certificates but cannot create them, and the package promises zero runtime
@@ -28,6 +31,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -38,6 +42,10 @@ from urllib.parse import urlparse
 # enough to do that unhurried, short enough that a shoulder-surfed screenshot
 # stops being useful.
 CODE_TTL = 300.0
+
+# How much of the issuer's certificate SHA-256 travels in the code: 128 bits,
+# far past any second-preimage search, while keeping the code pasteable.
+CODE_FP_CHARS = 32
 
 CERT_NAME = "sync-cert.pem"
 KEY_NAME = "sync-key.pem"
@@ -51,11 +59,15 @@ def new_secret() -> str:
     return secrets.token_urlsafe(32)
 
 
-def make_code(host: str, port: int, pairing_id: str, secret: str) -> str:
-    """`ygg://host:port/pairing_id#secret` — the secret lives in the fragment so
-    that pasting the code into anything URL-shaped keeps it out of request
-    lines and access logs."""
-    return f"ygg://{host}:{int(port)}/{pairing_id}#{secret}"
+def make_code(host: str, port: int, pairing_id: str, secret: str,
+              fingerprint: str = "") -> str:
+    """`ygg://host:port/pairing_id#secret.fingerprint` — the secret lives in the
+    fragment so that pasting the code into anything URL-shaped keeps it out of
+    request lines and access logs. The fingerprint is absent only on --insecure
+    nodes, which have no certificate to name. `.` cannot occur in a urlsafe
+    secret, so it separates the two unambiguously."""
+    tail = f".{fingerprint[:CODE_FP_CHARS]}" if fingerprint else ""
+    return f"ygg://{host}:{int(port)}/{pairing_id}#{secret}{tail}"
 
 
 def parse_code(code: str) -> dict[str, Any]:
@@ -69,8 +81,9 @@ def parse_code(code: str) -> dict[str, Any]:
     pairing_id = (parsed.path or "").lstrip("/")
     if not port or not pairing_id:
         raise ValueError("bad pairing code: missing port or pairing id")
-    return {"host": parsed.hostname, "port": int(port),
-            "pairing_id": pairing_id, "secret": parsed.fragment}
+    secret, _, fingerprint = parsed.fragment.partition(".")
+    return {"host": parsed.hostname, "port": int(port), "pairing_id": pairing_id,
+            "secret": secret, "fingerprint": fingerprint.lower() or None}
 
 
 class PendingPairings:
@@ -82,26 +95,32 @@ class PendingPairings:
 
     def __init__(self) -> None:
         self._open: dict[str, tuple[str, float]] = {}
+        # The listener is threaded: without this two concurrent redeems of one
+        # code could both pass the check before either pops it.
+        self._lock = threading.Lock()
 
-    def issue(self, host: str, port: int, *, now: float | None = None) -> str:
+    def issue(self, host: str, port: int, *, fingerprint: str = "",
+              now: float | None = None) -> str:
         now = time.time() if now is None else now
         pairing_id, secret = uuid.uuid4().hex[:12], new_secret()
-        self._open = {k: v for k, v in self._open.items() if now - v[1] < CODE_TTL}
-        self._open[pairing_id] = (secret, now)
-        return make_code(host, port, pairing_id, secret)
+        with self._lock:
+            self._open = {k: v for k, v in self._open.items() if now - v[1] < CODE_TTL}
+            self._open[pairing_id] = (secret, now)
+        return make_code(host, port, pairing_id, secret, fingerprint)
 
     def redeem(self, pairing_id: str, secret: str, *, now: float | None = None) -> bool:
         """One success per code. A WRONG secret does not consume it — otherwise
         anyone able to reach the port could burn a code the user is mid-way
         through typing."""
         now = time.time() if now is None else now
-        entry = self._open.get(pairing_id)
-        if entry is None or now - entry[1] >= CODE_TTL:
-            return False
-        if not hmac.compare_digest(entry[0], secret or ""):
-            return False
-        self._open.pop(pairing_id, None)
-        return True
+        with self._lock:
+            entry = self._open.get(pairing_id)
+            if entry is None or now - entry[1] >= CODE_TTL:
+                return False
+            if not hmac.compare_digest(entry[0], secret or ""):
+                return False
+            self._open.pop(pairing_id, None)
+            return True
 
 
 # --------------------------------------------------------------------------- #
@@ -135,8 +154,13 @@ def save(state: dict[str, Any], path: Path | None = None) -> None:
     path = Path(path or default_path())
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-    os.chmod(tmp, 0o600)  # set before the rename: never briefly world-readable
+    tmp.unlink(missing_ok=True)  # O_CREAT keeps an existing file's mode
+    # Created 0600 rather than chmodded afterwards: write_text would create it
+    # with the umask (usually 0644), and the keys would be world-readable until
+    # the chmod landed.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(state, indent=2, sort_keys=True))
     tmp.replace(path)
 
 
@@ -192,11 +216,17 @@ def ensure_cert(home: Path) -> tuple[Path, Path]:
         raise RuntimeError(
             "openssl not found — needed once to mint this machine's sync certificate.\n"
             "  install it, or pair with --insecure to sync over plain HTTP on a LAN you trust")
-    result = subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-         "-keyout", str(key), "-out", str(cert), "-days", "3650",
-         "-subj", "/CN=yggdrasil-sync"],
-        capture_output=True, text=True)
+    # Whether openssl creates the key 0600 depends on the build (LibreSSL on
+    # macOS need not), so the umask makes sure it is never readable in between.
+    previous = os.umask(0o077)
+    try:
+        result = subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", str(key), "-out", str(cert), "-days", "3650",
+             "-subj", "/CN=yggdrasil-sync"],
+            capture_output=True, text=True)
+    finally:
+        os.umask(previous)
     if result.returncode != 0:
         raise RuntimeError(f"openssl failed to mint a certificate:\n{result.stderr.strip()}")
     os.chmod(key, 0o600)

@@ -195,38 +195,7 @@ ygg redeploy
 ✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
 ```
 
-<details>
-<summary><b>OpenRouter：两个容易踩坑的设置</b></summary>
-
-**1. 用推理密钥，不要用配置密钥。**
-[openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys)
-里的密钥只能用来铸造其他密钥——用它调用嵌入接口，会得到一个令人困惑的
-`401 User not found`。请改到
-[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) 创建一个普通密钥。
-
-注意 `GET /api/v1/models` 无论密钥是否有效都会返回 `200 OK`——它完全
-不检查鉴权，所以没法靠它判断密钥能不能用。改查 `GET /api/v1/key`：
-它会返回 `is_provisioning_key`，密钥不对时也会直接报错。
-
-**2. 隐私设置会悄悄隐藏大多数模型。** 如果某个模型报 404 并提示
-`All providers have been ignored`，模型本身没问题——是你的账号把提供
-该模型的所有服务商都过滤掉了。到
-[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy) 修改设置。
-同一个过滤器也是 `openai/text-embedding-3-*` 有时会返回 `403`
-（服务商条款限制）的原因。
-
-到
-[openrouter.ai/models?output_modalities=embeddings](https://openrouter.ai/models?fmt=cards&output_modalities=embeddings)
-（截稿时共 26 个模型）看看实际能用哪些。比较好用的：
-
-| 模型 | 每百万 token 价格 |
-| --- | --- |
-| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | **$0** |
-| `perplexity/pplx-embed-v1-0.6b` | $0.004 |
-| `intfloat/multilingual-e5-large` | $0.01——多语言 |
-| `google/gemini-embedding-2` | $0.20 |
-
-</details>
+如需手动接入 LM Studio 或 OpenRouter，相关注意事项（两种 URL 格式、模型 ID、JIT 加载、推理密钥与配置密钥的区别、隐私过滤）见 [docs/model-backends.md](../docs/model-backends.md)。
 
 保持本地，在质量*和*隐私上依然更胜一筹：在 232 条记忆 / 110 条查询的语料库上，
 本地的 `paraphrase-multilingual` 拿到 recall@1 **0.964**，高于免费托管模型的
@@ -250,6 +219,50 @@ ygg redeploy
 
 </details>
 
+## 🔗 跨机器共享一份记忆
+
+在笔记本和更强的主机之间工作？把它们链接一次，它们就不再是两个大脑了。
+
+```text
+# on the laptop
+$ ygg link
+🔗 pairing code   valid 5 minutes · single use
+
+    ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
+
+# on the other machine — paste it
+$ ygg link ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
+  ✓ linked with laptop   https://192.168.3.152:42070
+  ✓ laptop: fetch 84 · push 12 · delete 0 · tombstones 0
+```
+
+就这么简单。从那以后，在一台机器上写下的记忆大约一秒内就会出现在另一台上；在一台机器上执行 `ygg delete`，两台机器上都会删除它；而另一台机器睡着时，每台机器仍能用自己的本地副本正常工作——读取从不等待网络。机器重新上线后，两者会比对指纹，并修补它们错过的内容，无需你做任何操作。
+
+系统**没有轮询**。Yggdrasil 每天只会被调用几次，因此写入会在发生时立即推送，同步由读取触发；空闲的机器什么都不发送。
+
+**它不是什么：** 不是云。没有中继、没有账号，链路上也没有我们的任何服务器。机器之间直接通过你自己的网络通信，使用彼此固定（pinned）证书的 TLS，并使用只存在于这两台机器上的密钥对。配对码本身就包含签发机器的证书，所以即使是第一次连接也会被验证——如果网络上有别的东西冒充应答，会在配对密钥发送之前被拒绝。在你运行 `ygg link` 之前，不会绑定任何网络端口——安装 Yggdrasil 后它仍像以前一样只监听回环地址。
+
+```text
+ygg link --list          # what's linked, and where
+ygg link --sync          # reconcile now, don't wait for a read
+ygg unlink <name>        # revoke that machine's key here
+```
+
+<details>
+<summary>详情：什么会同步、什么留在本地，以及何时改用 <code>ygg sync</code></summary>
+
+**同步的内容：** 记忆、它们之间的关系，以及删除操作。**留在本地的：** 你打开某条记忆的次数，以及你在哪台机器上读取它——这属于本地排序，而不是知识。嵌入向量通常也留在本地，但有一个例外：如果两台机器运行相同的嵌入模型，向量会随之同步，因此计算机可以替笔记本完成嵌入，笔记本永远不需要运行模型。
+
+**较新的编辑胜出。** 如果在两台机器通信之前，你在两台机器上都编辑了同一条记忆，那么较新的编辑会在两台机器上都保留下来（即使它更短，比如一次更正）。
+
+**删除优先。** 如果你在一台机器上删除了某条记忆，同时在另一台机器上编辑了它，删除会胜出，编辑会丢失。这是有意为之的：“我删掉了泄露的 token”必须成立，即使两台机器的时钟不一致。如果你的意思是“我改主意了”，请改为归档——归档合并时不会丢失任何东西。
+
+**`ygg sync`（git）依然存在**，它做的是另一件事：彼此看不见的机器、位于不同网络里的工作笔记本、你随身携带的 U 盘上的裸仓库。同一网络内的机器用 `ygg link`，其他情况用 `ygg sync`。两者共享相同的合并规则，因此可以同时使用。
+
+**如果配对码显示的地址不对**（VPN 或雷电桥接可能会压过你真正的局域网），请固定它：`ygg config set sync_host 192.168.3.152`。
+
+</details>
+
 ## 📊 关键数据
 
 由 [`eval/ygg_eval.py`](../eval/ygg_eval.py) 测得——232 条记忆、110 个带标注的查询，排序权重仅在 *dev* 划分上调优，所以 **holdout 才是无偏的数字**（使用 `paraphrase-multilingual` 模型）：
@@ -260,6 +273,8 @@ ygg redeploy
 | **整个存储库**（无过滤，候选池 232） | 0.72 | **0.87** | 0.69 |
 
 **在项目内——你实际使用的路径——正确的记忆在 0.94 的查询中排在第 1，并且每次都落在前 3 名里（recall@3 = 1.00）。** 不加过滤地搜索整个存储库更难（recall@1 0.72，recall@3 0.87，覆盖全部 232 条）。零依赖词法模式已经能解决关键词和代码标识符类查询（1.00）；本地模型则补上了含义和跨语言能力（crosslingual 0.25 → 0.95）。[BENCHMARKS.md 中的完整拆解](../BENCHMARKS.md)给出了 95% 置信区间、候选池大小和分类得分——你也可以花一分钟左右自己重跑一遍：`python3 eval/ygg_eval.py --report`。
+
+**语料库规模也是数字的一部分。** 在一个真实的 4,799 条记忆的存储上，默认的多语言嵌入模型会跌回词法基线（recall@1 0.55）；`bge-m3` 在那里能保持 0.775。如果你的存储增长到数千条，就选 `bge-m3`——详情见 [BENCHMARKS.md](../BENCHMARKS.md)。
 
 ## 🆚 Yggdrasil 与同类方案对比
 
@@ -307,6 +322,8 @@ ygg redeploy
 | --- | --- |
 | `ygg seed` | 提炼 Claude Code + Codex 会话记录、Obsidian 库和 `CLAUDE.md` 仓库——增量、去重、完全本地 |
 | `ygg seed --dry-run` · `--force` | 仅发现 + 估算 · 重新提炼所有内容 |
+| `ygg link` · `ygg link <code>` | 在同一网络上直接链接**你自己的**两台机器——实时共享记忆、固定 TLS、无中继 |
+| `ygg link --list` · `ygg unlink <name>` | 查看已链接的机器 · 撤销某一台 |
 | `ygg distill --source PATH` | 把单个目录/文件提炼为教训 |
 | `ygg reindex` | 补建缺失的嵌入（恢复稠密检索） |
 
@@ -342,6 +359,14 @@ ygg redeploy
 <summary><b>它会把我的代码或记忆发到云端吗？</b></summary>
 
 不会。引擎、数据库以及可选的模型全都在本地运行。没有账号，没有遥测。唯一的对外请求是向 PyPI 检查版本。
+
+如果你用 `ygg link` 把自己的两台机器链接起来，记忆会通过你自己的网络在**这两台机器之间**传输——直接连接，使用固定证书的 TLS，链路上没有中继，也没有我们的服务器。在你运行该命令之前，除回环地址外没有任何监听。
+</details>
+
+<details>
+<summary><b>恶意仓库能在我的记忆里埋入指令吗？</b></summary>
+
+召回的记忆会被注入为明确标注的*参考笔记，而非指令*，并附带每条笔记的来源；若其属于另一个项目，还会有标记。因此智能体把它当作数据对待，并在根据其中内容采取任何行动前先询问。转录内容中的密钥在提炼前会被脱敏，写入时也会被拒绝。尽管如此：记忆的可信度取决于写入它的内容——所以请时不时地运行 `ygg review` 审查一下。
 </details>
 
 <details>
@@ -365,14 +390,16 @@ ygg redeploy
 <details>
 <summary><b>我可以手动编辑或删除记忆吗？</b></summary>
 
-可以。记忆会物化为 Obsidian 库中的 Markdown 笔记——像对待任何文件一样读取、编辑或删除它们。引擎从不硬删除；它只做归档（可逆）。
+可以。记忆会物化为 Obsidian 库中的 Markdown 笔记——像对待任何文件一样读取、编辑或删除它们。治理与审查从不删除任何东西——它们只做归档，这是可逆的。只有你自己，通过 `ygg delete` 明确地执行硬删除（在已链接的机器上，该删除会同时作用于两端）。
 </details>
 
 ## 🚦 状态与路线图
 
 **Alpha 阶段。** 常规流程和治理闭环都有门禁测试覆盖（`scripts/run_gates.sh`）；尚未针对多用户或生产环境做加固。目前支持 macOS；Linux/Windows 服务安装器已经构建完成，正在做最后的真机测试。
 
-接下来：🛰️ 跨界面同步（一份记忆贯通 CLI、网页和手机）· 🔗 关系图谱（`SOLVES` / `SUPERSEDES` / `CONTRADICTS`）· 🐧 Linux/Windows 正式发布。
+最近发布：🔗 机器之间的记忆同步（`ygg link`）· 关系图谱（`ygg relate`：`solves` / `supersedes` / `contradicts`）。
+
+接下来：🛰️ 跨界面同步（一份记忆贯通 CLI、网页和手机——HTTP 接口已就绪，见 [docs/cross-surface.md](../docs/cross-surface.md)）· 🐧 Linux/Windows 正式发布。
 
 ## 🤝 参与贡献
 

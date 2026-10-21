@@ -20,7 +20,7 @@ def _hit(text="Switched the bg model to qwen2.5:3b", project="yggdrasil-demo", m
             "metadata": {"project": project, "type": mtype}}
 
 
-def _run(hits, prompt="how do I configure the embedding backend for openrouter?"):
+def _run(hits, prompt="how do I configure the embedding backend for openrouter?", cwd=None):
     """Run the hook against a stubbed engine; return its stdout."""
     payload = json.dumps({"data": hits}).encode()
     resp = mock.MagicMock()
@@ -28,7 +28,7 @@ def _run(hits, prompt="how do I configure the embedding backend for openrouter?"
     resp.__exit__.return_value = False
     buf = io.StringIO()
     with mock.patch.object(h.urllib.request, "urlopen", lambda *a, **k: resp), \
-         mock.patch.object(h.sys, "stdin", io.StringIO(json.dumps({"prompt": prompt}))), \
+         mock.patch.object(h.sys, "stdin", io.StringIO(json.dumps({"prompt": prompt, "cwd": cwd}))), \
          redirect_stdout(buf):
         h.main()
     return buf.getvalue()
@@ -59,6 +59,47 @@ class CitationMarkerTest(unittest.TestCase):
         ctx = _context(_run([_hit()])).lower()
         for jargon in ("auto-recall", "ygg_recall", "additionalcontext", "cosine"):
             self.assertNotIn(jargon, ctx)
+
+
+class InjectionHardeningTest(unittest.TestCase):
+    """Memories can come from untrusted places (a README-tricked agent, a paired
+    peer), so they must reach the model as labelled data, never as user orders."""
+
+    def test_block_says_notes_are_data_not_instructions(self):
+        ctx = _context(_run([_hit()])).lower()
+        self.assertIn("not instructions", ctx)
+        self.assertIn("confirm", ctx)
+
+    def test_provenance_source_is_shown(self):
+        hit = _hit()
+        hit["source"] = "peer"
+        self.assertIn("peer", _context(_run([hit])))
+
+    def test_source_falls_back_to_metadata(self):
+        hit = _hit()
+        hit["metadata"]["source"] = "import"
+        self.assertIn("import", _context(_run([hit])))
+
+    def test_foreign_project_is_marked(self):
+        ctx = _context(_run([_hit(project="other-repo")], cwd="/tmp/not-a-repo/mine"))
+        self.assertIn("other project: other-repo", ctx)
+
+    def test_same_project_is_not_marked_foreign(self):
+        ctx = _context(_run([_hit(project="mine")], cwd="/tmp/not-a-repo/mine"))
+        self.assertNotIn("other project", ctx)
+
+    def test_no_token_skips_quietly_without_demo_fallback(self):
+        with mock.patch.dict(h.os.environ, {}, clear=False), \
+             mock.patch.object(h.Path, "read_text", side_effect=OSError):
+            h.os.environ.pop("YGG_ENGINE_TOKEN", None)
+            self.assertEqual(h.token(), "")
+            called = []
+            buf = io.StringIO()
+            with mock.patch.object(h.urllib.request, "urlopen", lambda *a, **k: called.append(1)), \
+                 mock.patch.object(h.sys, "stdin", io.StringIO(json.dumps({"prompt": "a real question here?"}))), \
+                 redirect_stdout(buf):
+                rc = h.main()
+        self.assertEqual((rc, buf.getvalue(), called), (0, "", []))
 
 
 class ContractTest(unittest.TestCase):

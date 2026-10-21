@@ -9,6 +9,7 @@ account, nothing readable leaves your infrastructure.
 Layout inside the repo:
 
     memories/<id>.json    one file per memory (sorted keys, byte-deterministic)
+    tombstones.json       {id: deleted_at} for hard-deleted memories (sorted)
     relations.jsonl       one edge per line (merged with git's union driver)
     .gitattributes        relations.jsonl merge=union
 
@@ -16,10 +17,11 @@ Per-machine state (access counts, last-accessed, embedding vectors) is NOT
 synced — vectors are recomputed locally (`ygg reindex` backfills after a pull
 brings new memories).
 
-Semantics are ADDITIVE here: memories propagate everywhere and edits merge by
-the rules in ygg_sync_merge (shared with the peer uplink). This transport does
-not carry tombstones — a hard-deleted memory returns on the next git sync from a
-machine that still has it. The peer uplink (`ygg link`) does propagate deletes.
+Memories propagate everywhere and edits merge by the rules in ygg_sync_merge
+(shared with the peer uplink). Deletes follow the SAME policy as the uplink:
+tombstones are unioned (per-id MIN deleted_at, so merging is commutative), a live
+tombstone removes the memory file and blocks re-import (ygg_sync_merge.
+tombstone_wins), and tombstones older than TOMBSTONE_TTL are dropped.
 
 Flow (one command, converges without manual conflict resolution):
   export → commit → pull -X ours → import+merge → re-export → commit → push
@@ -33,21 +35,23 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 try:  # package + flat-layout imports
     from . import ygg_config as _cfg
     from .ygg import request_json
-    from .ygg_sync_merge import merge_memory
+    from .ygg_sync_merge import expired_tombstones, merge_memory, tombstone_wins
 except ImportError:  # pragma: no cover
     import ygg_config as _cfg
     from ygg import request_json
-    from ygg_sync_merge import merge_memory
+    from ygg_sync_merge import expired_tombstones, merge_memory, tombstone_wins
 
 # Re-exported: `ygg sync` and the peer uplink MUST resolve conflicts identically,
 # so there is exactly one implementation and it lives in ygg_sync_merge.
-__all__ = ["merge_memory", "render_memory", "render_relations", "parse_relations", "sync", "main"]
+__all__ = ["merge_memory", "render_memory", "render_relations", "parse_relations",
+           "merge_tombstones", "render_tombstones", "parse_tombstones", "sync", "main"]
 
 
 # --------------------------------------------------------------------------- #
@@ -79,6 +83,42 @@ def parse_relations(text: str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return out
+
+
+def merge_tombstones(*maps: dict[str, float]) -> dict[str, float]:
+    """Union; the earliest deleted_at wins per id (commutative, like the engine)."""
+    out: dict[str, float] = {}
+    for m in maps:
+        for mid, ts in m.items():
+            out[mid] = min(out[mid], float(ts)) if mid in out else float(ts)
+    return out
+
+
+def render_tombstones(tombs: dict[str, float]) -> str:
+    return json.dumps({k: float(v) for k, v in tombs.items()},
+                      sort_keys=True, indent=1, ensure_ascii=False) + "\n"
+
+
+def parse_tombstones(text: str) -> dict[str, float]:
+    try:
+        raw = json.loads(text or "")
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, float] = {}
+    for k, v in (raw.items() if isinstance(raw, dict) else ()):
+        try:
+            out[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _read_tombstones(repo: Path) -> dict[str, float]:
+    f = repo / "tombstones.json"
+    try:
+        return parse_tombstones(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except OSError:
+        return {}
 
 
 # --------------------------------------------------------------------------- #
@@ -119,9 +159,14 @@ def _resolve_repo(flag: str) -> Path:
     return repo
 
 
-def _export(repo: Path, data: dict[str, Any]) -> int:
+def _export(repo: Path, data: dict[str, Any], now: float | None = None) -> int:
     """Write the store into the repo working tree. Returns how many memory
-    files changed on disk (additive — never deletes: see module docstring)."""
+    files changed on disk. Tombstones (local ∪ repo, minus expired) are written
+    to tombstones.json and their memory files are removed."""
+    now = time.time() if now is None else now
+    tombs = merge_tombstones(_read_tombstones(repo), data.get("tombstones") or {})
+    for mid in expired_tombstones(tombs, now=now):
+        del tombs[mid]
     mem_dir = repo / "memories"
     mem_dir.mkdir(exist_ok=True)
     ga = repo / ".gitattributes"
@@ -129,7 +174,16 @@ def _export(repo: Path, data: dict[str, Any]) -> int:
     if not ga.exists() or want not in ga.read_text(encoding="utf-8"):
         ga.write_text(want, encoding="utf-8")
     changed = 0
+    for mid in tombs:
+        (mem_dir / f"{mid}.json").unlink(missing_ok=True)
+    tomb_file = repo / "tombstones.json"
+    body = render_tombstones(tombs)
+    if tombs or tomb_file.exists():
+        if not tomb_file.exists() or tomb_file.read_text(encoding="utf-8") != body:
+            tomb_file.write_text(body, encoding="utf-8")
     for rec in data["memories"]:
+        if rec["id"] in tombs:
+            continue
         f = mem_dir / f"{rec['id']}.json"
         body = render_memory(rec)
         if not f.exists() or f.read_text(encoding="utf-8") != body:
@@ -150,6 +204,15 @@ def _commit_if_dirty(repo: Path, msg: str) -> bool:
         return False
     _git(repo, "commit", "-q", "-m", msg)
     return True
+
+
+def _remote_tombstones(repo: Path) -> dict[str, float]:
+    """Tombstones in the remote-tracking branch. `pull -X ours` may keep OUR
+    tombstones.json on a conflicting hunk and silently drop theirs; reading the
+    fetched ref directly means no delete is ever lost to the merge."""
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
+    r = _git(repo, "show", f"origin/{branch}:tombstones.json", check=False)
+    return parse_tombstones(r.stdout) if r.returncode == 0 else {}
 
 
 def _has_remote(repo: Path) -> bool:
@@ -188,7 +251,13 @@ def sync(args: argparse.Namespace) -> int:
             print(f"  {ygg_ui.mark_warn(p)} pull: {(r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else 'nothing to pull'}")
 
     # Import: every repo record that's new or different gets merged and upserted.
+    now = time.time()
     local_by_id = {m["id"]: m for m in data["memories"]}
+    repo_tombs = merge_tombstones(_read_tombstones(repo), _remote_tombstones(repo))
+    tombs = merge_tombstones(repo_tombs, data.get("tombstones") or {})
+    for mid in expired_tombstones(tombs, now=now):
+        del tombs[mid]
+        repo_tombs.pop(mid, None)
     winners: list[dict[str, Any]] = []
     for f in sorted((repo / "memories").glob("ygg_*.json")):
         try:
@@ -198,6 +267,8 @@ def sync(args: argparse.Namespace) -> int:
         mid = rec.get("id")
         if not mid:
             continue
+        if mid in tombs and tombstone_wins(deleted_at=tombs[mid], record=rec, now=now):
+            continue
         mine = local_by_id.get(mid)
         if mine is None:
             winners.append(rec)
@@ -206,10 +277,11 @@ def sync(args: argparse.Namespace) -> int:
     rel_file = repo / "relations.jsonl"
     rels = parse_relations(rel_file.read_text(encoding="utf-8")) if rel_file.exists() else []
     counts = {"added": 0, "updated": 0, "unchanged": 0, "relations_added": 0, "relations_skipped": 0}
-    for i in range(0, len(winners), 500):
+    for i in range(0, max(len(winners), 1 if repo_tombs else 0), 500):
         got = request_json("POST", "/sync_upsert",
                            {"memories": winners[i:i + 500],
-                            "relations": rels if i == 0 else []})["data"]
+                            "relations": rels if i == 0 else [],
+                            "tombstones": repo_tombs if i == 0 else {}})["data"]
         for k in counts:
             counts[k] += got.get(k, 0)
     print(f"  {ygg_ui.mark_ok(p)} imported   +{counts['added']} new · {counts['updated']} merged · "

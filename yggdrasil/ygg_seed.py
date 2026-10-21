@@ -783,7 +783,9 @@ def _extract_text(path: Path) -> str:
 
 def distill_text(text: str, *, project: str, source: str, model: str,
                  user_id: str, namespace: str) -> dict[str, int]:
-    text = text.strip()
+    # Redact BEFORE windowing and before anything leaves the machine: distill_url
+    # may be a hosted endpoint, and raw transcripts carry pasted keys/tokens.
+    text = _ygg.redact_secrets(text).strip()
     if not text:
         return {"added": 0, "dup": 0, "errors": 0, "timed_out": False}
     text = text[-MAX_CHARS_PER_FILE:]  # keep the most recent window

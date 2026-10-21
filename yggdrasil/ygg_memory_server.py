@@ -928,8 +928,12 @@ class MemoryStore:
         Called INSIDE the mutation's own transaction, so a crash can never leave
         a change that no one will ever send.
         """
+        # Re-enqueue with a FRESH seq rather than keeping the old row: an edit
+        # landing while the previous version is in flight must outlive the ack
+        # for that flight, and acks are by seq.
+        self._conn.execute("DELETE FROM outbox WHERE kind=? AND ref_id=?", (kind, ref_id))
         self._conn.execute(
-            "INSERT OR IGNORE INTO outbox (kind, ref_id, created_at) VALUES (?,?,?)",
+            "INSERT INTO outbox (kind, ref_id, created_at) VALUES (?,?,?)",
             (kind, ref_id, time.time()))
         if self._conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] > self.OUTBOX_MAX:
             self._conn.execute("DELETE FROM outbox")
@@ -955,10 +959,18 @@ class MemoryStore:
                 self._conn.execute(f"DELETE FROM tombstones WHERE id IN ({marks})", chunk)
         return len(dead)
 
-    def outbox_pending(self, limit: int = 500) -> list[dict[str, Any]]:
+    def outbox_pending(self, limit: int = 500, *, after: int = 0) -> list[dict[str, Any]]:
+        """Queued rows in order — those past `after`, for a peer that has
+        already confirmed everything up to it."""
         with self._lock:
             return [dict(r) for r in self._conn.execute(
-                "SELECT seq, kind, ref_id FROM outbox ORDER BY seq LIMIT ?", (limit,))]
+                "SELECT seq, kind, ref_id FROM outbox WHERE seq > ? ORDER BY seq LIMIT ?",
+                (int(after), limit))]
+
+    def outbox_ack_through(self, seq: int) -> int:
+        """Drop every row up to and including `seq` — what all peers have taken."""
+        with self._lock, self._conn:
+            return self._conn.execute("DELETE FROM outbox WHERE seq <= ?", (int(seq),)).rowcount
 
     def outbox_ack(self, seqs: list[int]) -> int:
         """Drop rows the peer has confirmed. Acking by seq (not by ref_id) is what
@@ -1041,7 +1053,10 @@ class MemoryStore:
         forever; the digest comparison is what propagates it onward.
         """
         now = time.time() if now is None else now
-        incoming = {str(k): float(v) for k, v in (tombstones or {}).items()}
+        # A peer's clock is not ours: a stamp from the future would win every
+        # recency-resolved field forever, and a tombstone from the future would
+        # never expire. Bound both by what our own clock finds plausible.
+        incoming = {str(k): _merge.clamp_stamp(v, now=now) for k, v in (tombstones or {}).items()}
         deleted = 0
         if incoming:
             with self._lock, self._conn:
@@ -1059,7 +1074,15 @@ class MemoryStore:
                     deleted += 1
 
         graveyard = self.tombstones()
-        candidates = [r for r in (memories or []) if r.get("id") and r.get("content")]
+        candidates = []
+        for rec in memories or []:
+            if not (rec.get("id") and rec.get("content")):
+                continue
+            rec = dict(rec)
+            for stamp in ("created_at", "updated_at"):
+                if rec.get(stamp) is not None:
+                    rec[stamp] = _merge.clamp_stamp(rec[stamp], now=now)
+            candidates.append(rec)
         mine = {r["id"]: r for r in self.records_by_ids([r["id"] for r in candidates])}
         merged: list[dict[str, Any]] = []
         vectors: dict[str, str] = {}
@@ -1133,6 +1156,15 @@ class MemoryStore:
                         rec.get("user_id"), rec.get("namespace"))
                     row = self._conn.execute("SELECT * FROM memories WHERE id=?", (mid,)).fetchone()
                     if row is None:
+                        # Re-checked under the write lock: callers look at the
+                        # graveyard before taking it, and a local delete landing
+                        # in between must not be undone by this insert.
+                        buried = self._conn.execute(
+                            "SELECT deleted_at FROM tombstones WHERE id=?", (mid,)).fetchone()
+                        if buried is not None and _merge.tombstone_wins(
+                                deleted_at=buried["deleted_at"], record=rec, now=time.time()):
+                            unchanged += 1
+                            continue
                         cur = self._conn.execute(
                             """
                             INSERT INTO memories
@@ -1158,11 +1190,13 @@ class MemoryStore:
                         continue
                     content_changed = row["content"] != rec["content"]
                     self._conn.execute(
-                        "UPDATE memories SET scope=?, project=?, type=?, content=?, content_hash=?, "
-                        "source=?, confidence=?, importance=?, archived=?, metadata_json=?, updated_at=?"
+                        "UPDATE memories SET user_id=?, namespace=?, scope=?, project=?, type=?, "
+                        "content=?, content_hash=?, source=?, confidence=?, importance=?, "
+                        "archived=?, metadata_json=?, updated_at=?"
                         + (", embedding_blob=NULL, embed_model=NULL" if content_changed else "")
                         + " WHERE seq=?",
-                        (rec.get("scope"), rec.get("project"), rec.get("type"), rec["content"],
+                        (rec.get("user_id") or row["user_id"], rec.get("namespace"),
+                         rec.get("scope"), rec.get("project"), rec.get("type"), rec["content"],
                          rec.get("content_hash"), rec.get("source"), rec.get("confidence"),
                          rec.get("importance") if rec.get("importance") is not None else 0.5,
                          1 if rec.get("archived") else 0, rec.get("metadata_json"),
@@ -1878,11 +1912,18 @@ class Handler(BaseHTTPRequestHandler):
                              "data": node.reconcile(force=bool(body.get("force")))})
             return
         if parsed.path == "/sync_export":
-            self._send(200, {"success": True, "data": self.store.sync_export()})
+            # Tombstones ride along so the git transport honours deletes the
+            # same way the uplink does instead of re-importing them.
+            data = dict(self.store.sync_export(), tombstones=self.store.tombstones())
+            self._send(200, {"success": True, "data": data})
             return
         if parsed.path == "/sync_upsert":
             mems = body.get("memories") if isinstance(body.get("memories"), list) else []
             rels = body.get("relations") if isinstance(body.get("relations"), list) else []
+            tombs = body.get("tombstones") if isinstance(body.get("tombstones"), dict) else {}
+            if tombs:
+                # Deletes first: sync_upsert then refuses to re-insert their ids.
+                self.store.apply_remote(tombstones=tombs)
             self._send(200, {"success": True, "data": self.store.sync_upsert(mems, rels)})
             return
         if parsed.path == "/search":

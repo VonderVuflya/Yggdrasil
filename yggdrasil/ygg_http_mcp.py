@@ -19,11 +19,13 @@ so the two transports always expose an identical tool surface.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:  # package + flat-layout (deployed scripts dir) imports
     from . import ygg_mcp_server as mcp
@@ -53,6 +55,15 @@ def _transport_token() -> str:
 
 TOKEN = _transport_token()
 
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _allowed_hosts() -> tuple[str, ...]:
+    """Loopback plus any public hostname(s) a tunnel forwards, from the
+    comma-separated ``YGG_MCP_ALLOWED_HOSTS`` (e.g. ``ygg.example.com``)."""
+    extra = os.environ.get("YGG_MCP_ALLOWED_HOSTS", "")
+    return _LOOPBACK + tuple(h.strip().lower() for h in extra.split(",") if h.strip())
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "yggdrasil-http-mcp/0.1"
@@ -60,7 +71,30 @@ class Handler(BaseHTTPRequestHandler):
     def _auth_ok(self) -> bool:
         if not TOKEN:
             return True  # open mode (no token configured)
-        return self.headers.get("Authorization", "") == f"Bearer {TOKEN}"
+        # Constant-time compare — a plain == leaks the token byte-by-byte.
+        return hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {TOKEN}")
+
+    def _host_ok(self) -> bool:
+        """Reject DNS rebinding: a browser lured to attacker.com resolving to
+        127.0.0.1 sends ``Host: attacker.com``. Mirrors the engine's check, plus
+        the operator-configured public hostnames."""
+        if self.server.server_address[0] not in _LOOPBACK:
+            return True  # deliberate non-loopback bind: the operator's choice
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return host in _allowed_hosts() or host == ""
+
+    def _origin_ok(self) -> bool:
+        """Browsers always send Origin on cross-site POSTs; non-browser MCP
+        clients send none. A present Origin must be loopback (or a configured host)."""
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        parsed = urlparse(origin)
+        return parsed.scheme in ("http", "https") and (parsed.hostname or "") in _allowed_hosts()
+
+    def _reject(self, code: int, message: str) -> None:
+        self._json(code, {"jsonrpc": "2.0", "id": None,
+                          "error": {"code": -32600, "message": message}})
 
     def _json(self, code: int, obj) -> None:
         body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
@@ -85,10 +119,20 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/mcp":
             self._json(404, {"error": "not found"})
             return
+        if not self._host_ok():
+            self._reject(403, "forbidden: unexpected Host header")
+            return
+        if not self._origin_ok():
+            self._reject(403, "forbidden: cross-origin request")
+            return
         if not self._auth_ok():
             self.send_response(401)
             self.send_header("WWW-Authenticate", "Bearer")
             self.end_headers()
+            return
+        ctype = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            self._reject(415, "unsupported media type: Content-Type must be application/json")
             return
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""

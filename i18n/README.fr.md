@@ -191,40 +191,7 @@ Vérifiez que c'est pris en compte avec `ygg doctor` — dense doit nommer votre
 ✓ dense    active (nvidia/llama-nemotron-embed-vl-1b-v2:free)
 ```
 
-<details>
-<summary><b>OpenRouter : deux réglages qui vont vous mordre</b></summary>
-
-**1. Utilisez une clé d'inférence, pas une clé de provisioning.** Les clés de
-[openrouter.ai/settings/provisioning-keys](https://openrouter.ai/settings/provisioning-keys)
-ne servent qu'à générer d'autres clés — les appels d'embedding avec l'une d'elles
-renvoient un déroutant `401 User not found`. Créez plutôt une clé normale sur
-[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys).
-
-Notez que `GET /api/v1/models` répond `200 OK` pour *n'importe quelle* clé, valide ou
-non — elle ignore totalement l'authentification, donc elle ne peut pas vous dire si
-votre clé fonctionne. Vérifiez plutôt `GET /api/v1/key` : elle renvoie
-`is_provisioning_key`, et échoue franchement avec une mauvaise clé.
-
-**2. Les réglages de confidentialité cachent silencieusement la plupart des
-modèles.** Si un modèle renvoie un 404 avec `All providers have been ignored`, le
-modèle est en fait très bien — votre compte filtre tous les fournisseurs qui le
-proposent. Corrigez cela sur
-[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy).
-Ce même filtre explique aussi pourquoi `openai/text-embedding-3-*` peut renvoyer
-`403` en raison des conditions d'utilisation d'un fournisseur.
-
-Parcourez ce qui est réellement disponible sur
-[openrouter.ai/models?output_modalities=embeddings](https://openrouter.ai/models?fmt=cards&output_modalities=embeddings)
-(26 modèles au moment de l'écriture). Quelques-uns utiles :
-
-| Modèle | Prix / 1M tokens |
-| --- | --- |
-| `nvidia/llama-nemotron-embed-vl-1b-v2:free` | **$0** |
-| `perplexity/pplx-embed-v1-0.6b` | $0.004 |
-| `intfloat/multilingual-e5-large` | $0.01 — multilingue |
-| `google/gemini-embedding-2` | $0.20 |
-
-</details>
+Vous branchez LM Studio ou OpenRouter à la main ? Les pièges (deux formes d'URL, identifiants de modèles, chargement JIT, clés d'inférence contre clés de provisioning, filtres de confidentialité) sont décrits dans [docs/model-backends.md](../docs/model-backends.md).
 
 Rester en local continue de gagner en qualité *et* en confidentialité : sur le corpus
 de 232 mémoires / 110 requêtes, le modèle local `paraphrase-multilingual` obtient un
@@ -251,6 +218,50 @@ Le moteur lui-même est interchangeable — n'importe quel service respectant le
 
 </details>
 
+## 🔗 Une seule mémoire sur toutes vos machines
+
+Vous travaillez sur un portable et sur une machine plus puissante ? Liez-les une fois, et elles cessent d'être deux cerveaux.
+
+```text
+# on the laptop
+$ ygg link
+🔗 pairing code   valid 5 minutes · single use
+
+    ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
+
+# on the other machine — paste it
+$ ygg link ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
+  ✓ linked with laptop   https://192.168.3.152:42070
+  ✓ laptop: fetch 84 · push 12 · delete 0 · tombstones 0
+```
+
+Voilà. Dès lors, une mémoire écrite sur une machine se retrouve sur l'autre en une seconde environ, `ygg delete` la supprime des **deux**, et chaque machine continue de fonctionner avec sa copie locale quand l'autre est en veille — les lectures n'attendent jamais le réseau. Quand une machine revient, les deux comparent leurs empreintes et rattrapent ce qui leur a échappé, sans que vous ayez rien à lancer.
+
+Il n'y a **aucun polling**. Yggdrasil est sollicité quelques fois par jour : les écritures sont poussées au moment où elles se produisent, et une synchronisation est déclenchée par les lectures ; les machines inactives n'envoient rien.
+
+**Ce que ce n'est pas :** un cloud. Il n'y a ni relais, ni compte, ni serveur à nous sur le chemin. Les machines se parlent directement via votre propre réseau, en TLS avec le certificat de chacune épinglé, à l'aide d'une paire de clés qui n'existe que sur ces deux machines. Le code d'appairage lui-même nomme le certificat de la machine émettrice, donc même la toute première connexion est vérifiée — si quelqu'un d'autre sur le réseau répond à sa place, il est refusé avant que le secret du code ne soit envoyé. Rien n'ouvre de port réseau tant que vous n'avez pas lancé `ygg link` — installer Yggdrasil le laisse sur loopback, comme avant.
+
+```text
+ygg link --list          # what's linked, and where
+ygg link --sync          # reconcile now, don't wait for a read
+ygg unlink <name>        # revoke that machine's key here
+```
+
+<details>
+<summary>Détails : ce qui voyage, ce qui reste, et quand utiliser <code>ygg sync</code> à la place</summary>
+
+**Voyage :** les mémoires, leurs relations et les suppressions. **Reste sur place :** combien de fois *vous* avez ouvert une mémoire et sur quelle machine vous l'avez lue — c'est du classement local, pas du savoir. Les vecteurs d'embedding restent normalement locaux aussi, avec une exception : si les deux machines exécutent le même modèle d'embedding, le vecteur voyage avec, de sorte qu'une machine de calcul peut faire l'embedding pour le portable, et le portable n'exécute jamais de modèle.
+
+**La modification la plus récente gagne.** Modifiez une mémoire sur les deux machines avant qu'elles ne se parlent, et la modification la plus récente est conservée sur les deux (une correction plus courte incluse).
+
+**Les suppressions gagnent.** Si vous supprimez une mémoire sur une machine et la modifiez sur l'autre au même moment, la suppression l'emporte et la modification est perdue. C'est délibéré : « j'ai supprimé le jeton divulgué » doit rester vrai même lorsque deux horloges divergent. Quand vous voulez dire *j'ai changé d'avis*, archivez plutôt : les archives fusionnent sans rien perdre.
+
+**`ygg sync` (git) est toujours là** et fait un autre travail : des machines qui ne se voient pas, un portable professionnel derrière un autre réseau, un dépôt nu sur une clé USB que vous transportez. Utilisez `ygg link` pour des machines sur un même réseau, `ygg sync` pour tout le reste. Les deux partagent les mêmes règles de fusion, vous pouvez donc utiliser les deux.
+
+**Si le code d'appairage affiche la mauvaise adresse** (un VPN ou un pont Thunderbolt peut passer devant votre vrai LAN), épinglez-la : `ygg config set sync_host 192.168.3.152`.
+
+</details>
+
 ## 📊 Les chiffres
 
 Mesuré par [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 232 mémoires, 110 requêtes étiquetées, poids de classement ajustés uniquement sur le split *dev*, donc **le holdout est le chiffre non biaisé** (recall@1, avec le modèle `paraphrase-multilingual`) :
@@ -261,6 +272,8 @@ Mesuré par [`eval/ygg_eval.py`](../eval/ygg_eval.py) — 232 mémoires, 110 req
 | **Base entière** (sans filtre, pool 232) | 0.72 | **0.87** | 0.69 |
 
 **Au sein d'un projet — le chemin que vous utilisez — la bonne mémoire est en position #1 dans 0.94 des requêtes et toujours dans le top 3 (recall@3 = 1.00).** Chercher dans toute la base sans filtre est plus difficile (recall@1 0.72, recall@3 0.87 sur les 232). Le mode lexical zéro dépendance résout déjà les requêtes par mots-clés et par identifiants de code (1.00) ; le modèle local ajoute le sens et le multilingue (crosslingual 0.25 → 0.95). Le [détail complet dans BENCHMARKS.md](../BENCHMARKS.md) présente les IC à 95 %, les tailles de pool et les scores par classe — et vous pouvez tout relancer en une minute : `python3 eval/ygg_eval.py --report`.
+
+**La taille du corpus fait partie du chiffre.** Sur un vrai store de 4 799 mémoires, l'embedder multilingue par défaut retombe au niveau de la référence lexicale (recall@1 0.55) ; `bge-m3` tient 0.775 dans ce cas. Si votre store grandit jusqu'à des milliers d'entrées, choisissez `bge-m3` — détails dans [BENCHMARKS.md](../BENCHMARKS.md).
 
 ## 🆚 Yggdrasil face aux autres
 
@@ -308,6 +321,8 @@ Les agents voient six outils MCP : `ygg_health`, `ygg_bootstrap`, `ygg_search`, 
 | --- | --- |
 | `ygg seed` | Distille les transcriptions Claude Code + Codex, les coffres Obsidian, les dépôts `CLAUDE.md` — incrémental, dédupliqué, entièrement local |
 | `ygg seed --dry-run` · `--force` | Découverte + estimation uniquement · tout redistiller |
+| `ygg link` · `ygg link <code>` | Lie deux de **vos** machines directement sur un même réseau — mémoire partagée en direct, TLS épinglé, sans relais |
+| `ygg link --list` · `ygg unlink <name>` | Affiche les machines liées · révoque-en une |
 | `ygg distill --source PATH` | Distiller un dossier/fichier en leçons |
 | `ygg reindex` | Compléter les embeddings manquants (restaure le rappel dense) |
 
@@ -343,6 +358,14 @@ Les mémoires intégrées sont propres à un éditeur, à un dépôt, à une mac
 <summary><b>Envoie-t-il mon code ou ma mémoire dans le cloud ?</b></summary>
 
 Non. Le moteur, la base de données et les modèles optionnels tournent tous localement. Pas de compte, pas de télémétrie. Le seul appel sortant est une vérification de version auprès de PyPI.
+
+Si vous liez deux de vos propres machines avec `ygg link`, les mémoires voyagent **entre ces deux machines** via votre propre réseau — directement, en TLS avec certificat épinglé, sans relais ni serveur à nous sur le chemin. Tant que vous n'avez pas lancé cette commande, rien n'écoute au-delà du loopback.
+</details>
+
+<details>
+<summary><b>Un dépôt malveillant peut-il glisser des instructions dans ma mémoire ?</b></summary>
+
+Le contenu rappelé est injecté sous forme de *notes de référence, pas d'instructions*, clairement encadrées, avec l'origine de chaque note et un marqueur lorsqu'elle appartient à un autre projet — l'agent la traite donc comme une donnée et demande avant d'agir sur ce qu'elle contient. Les secrets sont masqués dans les transcriptions avant distillation et refusés à l'écriture. Malgré tout : une mémoire ne vaut que ce qui l'a écrite — relisez `ygg review` de temps en temps.
 </details>
 
 <details>
@@ -366,14 +389,16 @@ Le moteur tourne au repos à **~21 Mo de RAM** (mode lexical par défaut) avec ~
 <details>
 <summary><b>Puis-je éditer ou supprimer des mémoires à la main ?</b></summary>
 
-Oui. Les mémoires se matérialisent en notes Markdown dans un coffre Obsidian — lisez-les, éditez-les ou supprimez-les comme n'importe quel fichier. Le moteur ne supprime jamais définitivement ; il archive (réversible).
+Oui. Les mémoires se matérialisent en notes Markdown dans un coffre Obsidian — lisez-les, éditez-les ou supprimez-les comme n'importe quel fichier. La gouvernance et la relecture ne suppriment jamais rien : elles archivent, ce qui est réversible. Vous seul pouvez supprimer définitivement, explicitement, avec `ygg delete` (et sur les machines liées, cette suppression atteint les deux).
 </details>
 
 ## 🚦 Statut et feuille de route
 
 **Alpha.** Le chemin nominal et la boucle de gouvernance sont couverts par des gates (`scripts/run_gates.sh`) ; pas encore durci pour le multi-utilisateur ni la production. macOS aujourd'hui ; les installateurs de service Linux/Windows sont prêts et en phase finale de tests sur appareil.
 
-À venir : 🛰️ synchronisation inter-surfaces (une seule mémoire entre CLI, web et téléphone) · 🔗 graphe de relations (`SOLVES` / `SUPERSEDES` / `CONTRADICTS`) · 🐧 disponibilité générale Linux/Windows.
+Livré récemment : 🔗 mémoire entre machines (`ygg link`) · graphe de relations (`ygg relate` : `solves` / `supersedes` / `contradicts`).
+
+Ensuite : 🛰️ cross-surface (une seule mémoire entre CLI, web et téléphone — la façade HTTP est en place, voir [docs/cross-surface.md](../docs/cross-surface.md)) · 🐧 disponibilité générale Linux/Windows.
 
 ## 🤝 Contribuer
 
