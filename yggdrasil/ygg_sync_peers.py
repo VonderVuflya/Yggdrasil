@@ -30,6 +30,7 @@ import json
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -84,6 +85,22 @@ def parse_code(code: str) -> dict[str, Any]:
     secret, _, fingerprint = parsed.fragment.partition(".")
     return {"host": parsed.hostname, "port": int(port), "pairing_id": pairing_id,
             "secret": secret, "fingerprint": fingerprint.lower() or None}
+
+
+def route_source(host: str) -> str | None:
+    """The local address the kernel would send from to reach `host`.
+
+    A UDP connect transmits nothing — it only consults the routing table — so
+    this is free, and unlike any guess it already knows that the box in the
+    next room sits behind the Wi-Fi card rather than the VPN or a Docker bridge.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect((host, 9))
+            addr = probe.getsockname()[0]
+    except (OSError, UnicodeError):
+        return None
+    return None if addr in ("", "0.0.0.0") else addr
 
 
 class PendingPairings:

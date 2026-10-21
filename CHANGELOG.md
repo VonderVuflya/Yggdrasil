@@ -33,6 +33,10 @@ All notable changes to this project are documented here. Format loosely follows
   distill model, and the write-path secret guard uses the wider patterns.
 
 ### Fixed
+- `ygg link` advertised a VM bridge or VPN address on machines running OrbStack,
+  Docker or a VPN, so the other machine could never push back. The address now
+  comes from the route to the peer; when printing a code, real Ethernet/Wi-Fi
+  interfaces outrank bridges and tunnels.
 - A peer that was offline over TLS killed the background sender; live push
   stayed dead until the daemon restarted.
 - An edit made while the previous version of the same memory was in flight

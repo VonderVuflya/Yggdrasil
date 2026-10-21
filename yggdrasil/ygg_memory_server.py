@@ -38,6 +38,7 @@ import os
 import re
 import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -1487,38 +1488,91 @@ class MemoryStore:
             self._reindex_gate.release()
 
 
-def _private_addresses() -> list[str]:
-    """Every IPv4 address this host answers on, most-likely-LAN first.
+# Interface names that are never the link to another machine on the desk: VM
+# and container bridges (OrbStack, Docker, libvirt, VirtualBox), tunnels and
+# VPNs, Apple's peer-to-peer radios. A name on neither list ranks in between.
+_VIRTUAL_IFACE = re.compile(
+    r"^(lo|bridge|docker|br-|veth|vmnet|vmenet|vboxnet|virbr|utun|tun|tap|wg|zt|"
+    r"tailscale|ipsec|ppp|gif|stf|awdl|llw|anpi|ap\d)", re.I)
+_PHYSICAL_IFACE = re.compile(r"^(en\d|eth|enp|eno|ens|enx|wl)", re.I)
+_IPV4 = r"(\d{1,3}(?:\.\d{1,3}){3})"
 
-    Two sources, because neither is reliable alone: asking the routing table
-    which source address reaches a given target, and asking the resolver about
-    our own hostname. On a machine with a VPN or a Thunderbolt bridge the
-    default route often points at a link-local (169.254.x) interface, which is
-    useless for reaching the box in the next room — so candidates are filtered
-    down to RFC1918 space and ordered by how plausibly local they are.
-    """
+
+def _parse_ifconfig(text: str) -> list[tuple[str, str]]:
+    """(interface, IPv4) pairs from BSD/macOS or net-tools `ifconfig` output."""
+    pairs: list[tuple[str, str]] = []
+    iface = ""
+    for line in text.splitlines():
+        head = re.match(r"^(\S+?):? (?:flags=|Link )", line)
+        if head:
+            iface = head.group(1)
+            continue
+        addr = re.search(r"\binet (?:addr:)?" + _IPV4, line)
+        if addr and iface:
+            pairs.append((iface, addr.group(1)))
+    return pairs
+
+
+def _parse_ip_addr(text: str) -> list[tuple[str, str]]:
+    """(interface, IPv4) pairs from Linux `ip -4 -o addr show` output."""
+    return re.findall(r"^\d+:\s+(\S+)\s+inet\s+" + _IPV4, text, re.M)
+
+
+def _interface_addresses() -> list[tuple[str, str]]:
+    """Every IPv4 address with the interface it lives on. The stdlib cannot
+    enumerate interfaces portably, so ask the OS tool; empty when there is none."""
+    for cmd, parse in ((["ip", "-4", "-o", "addr", "show"], _parse_ip_addr),
+                       (["ifconfig"], _parse_ifconfig)):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        pairs = parse(out)
+        if pairs:
+            return pairs
+    return []
+
+
+def _probed_addresses() -> list[str]:
+    """Addresses the routing table and the resolver hand out, in that order."""
     found: list[str] = []
-
-    def remember(addr: str) -> None:
-        if addr and addr not in found:
-            found.append(addr)
-
     for target in ("192.168.0.1", "10.0.0.1", "172.16.0.1", "8.8.8.8"):
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             probe.connect((target, 9))  # UDP connect sends nothing; it only picks a route
-            remember(probe.getsockname()[0])
+            found.append(probe.getsockname()[0])
         except OSError:
             pass
         finally:
             probe.close()
     try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            remember(info[4][0])
+        found.extend(info[4][0] for info in
+                     socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
     except OSError:
         pass
+    return found
 
-    def rank(addr: str) -> int:
+
+def _private_addresses() -> list[str]:
+    """Every private IPv4 address this host answers on, most-likely-LAN first.
+
+    Only consulted when there is no peer to route towards yet, i.e. when
+    printing a pairing code. Neither the route probes nor the hostname are
+    reliable alone: behind a VPN every probe answers with the tunnel's
+    link-local address, and the hostname resolves to whichever VM bridge
+    registered first. So each address is ranked by the interface it sits on
+    (a real Ethernet or Wi-Fi port beats a bridge or a tunnel), then by how
+    unusual it looks (OrbStack hands its bridge the .0 of a /24), then by
+    RFC1918 block.
+    """
+    pairs = _interface_addresses()
+    iface_of = {addr: iface for iface, addr in pairs}
+    found: list[str] = []
+    for addr in [*_probed_addresses(), *(addr for _, addr in pairs)]:
+        if addr and addr not in found:
+            found.append(addr)
+
+    def block(addr: str) -> int:
         if addr.startswith("192.168."):
             return 0
         if addr.startswith("10."):
@@ -1527,15 +1581,46 @@ def _private_addresses() -> list[str]:
             return 2
         return 9
 
-    return sorted((a for a in found if rank(a) < 9), key=rank)
+    def rank(addr: str) -> tuple[int, int, int]:
+        iface = iface_of.get(addr, "")
+        kind = 0 if _PHYSICAL_IFACE.match(iface) else 2 if _VIRTUAL_IFACE.match(iface) else 1
+        odd = 1 if addr.rsplit(".", 1)[-1] in ("0", "255") else 0
+        return (odd, kind, block(addr))
+
+    return sorted((a for a in found if block(a) < 9), key=rank)
 
 
-def _lan_address() -> str:
-    """Best guess at the address peers should reach us on. Loopback when there is
-    no private address at all — the uplink is then useless but the engine still
-    starts, and `ygg config set sync_host` overrides this in one command."""
+def _lan_address(peer_hosts: list[str] | tuple[str, ...] = ()) -> str:
+    """The address peers should reach us on.
+
+    With a peer already known the routing table answers exactly: whichever
+    local address it would send from to reach that peer. Without one it is a
+    guess — loopback when there is no private address at all, in which case
+    the uplink is useless but the engine still starts, and `ygg config set
+    sync_host` overrides all of this in one command."""
+    try:
+        from . import ygg_sync_peers as _p
+    except ImportError:  # flat layout
+        import ygg_sync_peers as _p
+    for host in peer_hosts:
+        source = _p.route_source(host)
+        if source:
+            return source
     candidates = _private_addresses()
     return candidates[0] if candidates else "127.0.0.1"
+
+
+def _peer_hosts() -> list[str]:
+    """Hosts of the machines already linked, read from peers.json."""
+    try:
+        from . import ygg_sync_peers as _p
+    except ImportError:  # flat layout
+        import ygg_sync_peers as _p
+    try:
+        peers = _p.load()["peers"].values()
+    except Exception:  # noqa: BLE001 — an unreadable registry just means "guess"
+        return []
+    return [h for h in (urlparse(p.get("url") or "").hostname for p in peers) if h]
 
 
 class _Uplink:
@@ -1560,11 +1645,13 @@ class _Uplink:
             except ImportError:  # flat layout
                 import ygg_sync_node as _node
             home = Path(os.environ.get("YGG_HOME") or str(Path.home() / ".yggdrasil"))
-            host = _cfg.resolve("sync_host", None) or _lan_address()
+            pinned = _cfg.resolve("sync_host", None)
+            host = pinned or _lan_address(_peer_hosts())
             node = _node.SyncNode(
                 store, home=home, name=name or socket.gethostname().split(".")[0],
                 host=host, port=int(_cfg.resolve("sync_port", None) or 42070),
-                insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"))
+                insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"),
+                host_pinned=bool(pinned))
             node.start()
             node.start_sender()
         except Exception as exc:  # noqa: BLE001 — sync must never stop the engine

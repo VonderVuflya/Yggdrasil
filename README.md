@@ -289,8 +289,10 @@ see each other, a work laptop behind a different network, a bare repo on a USB
 stick you carry. Use `ygg link` for machines on one network, `ygg sync` for
 everything else. Both share the same merge rules, so you can run both.
 
-**If the pairing code shows the wrong address** (a VPN or a Thunderbolt bridge
-can outrank your real LAN), pin it: `ygg config set sync_host 192.168.3.152`.
+**If the pairing code shows the wrong address** (it prefers real Ethernet and
+Wi-Fi over VM bridges and VPNs, but can still guess wrong), pin it:
+`ygg config set sync_host 192.168.3.152` — or print the code on the other machine:
+the side that pastes it always uses the address the route actually takes.
 
 </details>
 

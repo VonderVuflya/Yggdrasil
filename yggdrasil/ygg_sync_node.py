@@ -193,11 +193,15 @@ class SyncNode:
     """Owns the LAN listener, the peer registry, the sender and reconcile."""
 
     def __init__(self, store: Any, *, home: Path | str, name: str,
-                 host: str = "127.0.0.1", port: int = 0, insecure: bool = False) -> None:
+                 host: str = "127.0.0.1", port: int = 0, insecure: bool = False,
+                 host_pinned: bool = True) -> None:
         self.store = store
         self.home = Path(home)
         self.name = name
         self.host = host
+        # False when `host` was guessed: pairing may then move the listener to
+        # the interface that demonstrably reaches the other machine.
+        self.host_pinned = host_pinned
         self.port = port
         self.insecure = insecure
         self.peers_path = self.home / "peers.json"
@@ -258,6 +262,9 @@ class SyncNode:
     def stop(self) -> None:
         self._stopping.set()
         self.store.outbox_signal.set()  # let a blocked sender notice and exit
+        self._close_listener()
+
+    def _close_listener(self) -> None:
         httpd, self._httpd = self._httpd, None
         if httpd is not None:
             httpd.shutdown()
@@ -265,6 +272,22 @@ class SyncNode:
         if self._thread is not None:
             self._thread.join(timeout=5)
             self._thread = None
+
+    def _rebind(self, host: str) -> None:
+        """Move the listener to `host`, keeping the port. Restores the old
+        address if the new one cannot be bound."""
+        if self._httpd is None:
+            self.host = host
+            return
+        old = self.host
+        self._close_listener()
+        self.host = host
+        try:
+            self.start()
+        except OSError:
+            self.host = old
+            self.start()
+            raise
 
     def start_sender(self) -> None:
         """Background push. Separate from start() so tests (and anything wanting
@@ -357,6 +380,13 @@ class SyncNode:
             raise RuntimeError(
                 "this pairing code does not name the issuing machine's certificate, so the\n"
                 "  connection could not be verified. update Yggdrasil there and run `ygg link` again")
+        if not self.host_pinned:
+            # A guessed address — a VPN, a VM bridge — is what the issuer would
+            # store and push to forever. The interface the kernel routes this
+            # very connection through is the one both machines share.
+            local = _peers.route_source(parsed["host"])
+            if local and local != self.host:
+                self._rebind(local)
         mine = _peers.new_secret()
         # The secret is sent only after the certificate matches the code.
         client = PeerClient(url, pin_prefix=parsed["fingerprint"])
@@ -372,7 +402,9 @@ class SyncNode:
             self.peers_state,
             node_id=str(answer.get("node_id") or ""),
             name=name or str(answer.get("name") or "peer"),
-            url=str(answer.get("url") or url),
+            # The address that just answered, not the one the issuer believes
+            # it has: the former is proven reachable from here.
+            url=url,
             key_out=str(answer.get("key") or ""),
             key_in=mine,
             fingerprint=client.observed_fingerprint or str(answer.get("fingerprint") or ""),

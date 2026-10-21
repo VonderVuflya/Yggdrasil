@@ -108,6 +108,42 @@ class PairingTest(Pair):
         self.assertFalse([h for h in headers if h.lower().startswith("access-control")])
 
 
+class AddressTest(Pair):
+    def test_redeeming_moves_the_listener_to_the_interface_that_reaches_the_issuer(self):
+        """A guessed address (a VPN, a Docker bridge) used to be what the other
+        side stored, so it could never push back. The route the pairing took
+        is the one address both machines provably share."""
+        root = Path(self._tmp.name)
+        c_store = MemoryStore(str(root / "c" / "m.sqlite"))
+        self.addCleanup(c_store.close)
+        c = SyncNode(c_store, home=root / "c", name="gamma", host="localhost",
+                     insecure=self.insecure, host_pinned=False)
+        c.start()
+        self.addCleanup(c.stop)
+        c.pair_with(self.a.issue_pairing_code(), name="alpha")
+        self.assertEqual(c.host, "127.0.0.1")
+        stored = [p for p in self.a.peers_state["peers"].values() if p["name"] == "gamma"][0]
+        self.assertEqual(stored["url"], c.url)
+        rec = self.add(self.a_store, "reaches gamma at the address it advertised")
+        self.a.flush_outbox()
+        self.assertEqual(len(c_store.records_by_ids([rec["id"]])), 1)
+
+    def test_a_pinned_host_is_left_alone(self):
+        root = Path(self._tmp.name)
+        c_store = MemoryStore(str(root / "c" / "m.sqlite"))
+        self.addCleanup(c_store.close)
+        c = SyncNode(c_store, home=root / "c", name="gamma", host="localhost",
+                     insecure=self.insecure)
+        c.start()
+        self.addCleanup(c.stop)
+        c.pair_with(self.a.issue_pairing_code(), name="alpha")
+        self.assertEqual(c.host, "localhost")
+
+    def test_the_redeemer_keeps_the_address_it_actually_reached(self):
+        stored = [p for p in self.b.peers_state["peers"].values() if p["name"] == "alpha"][0]
+        self.assertEqual(stored["url"], self.a.url)
+
+
 class PushTest(Pair):
     def test_a_write_reaches_the_peer(self):
         rec = self.add(self.a_store, "the deploy needs the migration first")

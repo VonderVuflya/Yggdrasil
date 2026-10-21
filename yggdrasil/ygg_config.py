@@ -49,9 +49,9 @@ DEMO_TOKEN = "yggdrasil-demo-token"
 # key -> (env var names in precedence order, default, one-line help)
 SETTINGS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "sync_host": (("YGG_SYNC_HOST",), "",
-                  "Address the peer-sync listener binds to. Empty = auto-detect the LAN "
-                  "interface on the first `ygg link`. Never 0.0.0.0: pick the interface "
-                  "you actually share."),
+                  "Address the peer-sync listener binds to. Empty = the interface that "
+                  "routes to your linked machines (guessed from interface names before "
+                  "the first link). Never 0.0.0.0: pick the interface you actually share."),
     "sync_port": (("YGG_SYNC_PORT",), "42070",
                   "Port for the peer-sync listener. Separate from the engine's own port — "
                   "it serves /sync/* only and answers only paired machines."),
