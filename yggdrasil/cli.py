@@ -72,6 +72,7 @@ Memory ops:
   ygg export-native --project P [--out AGENTS.md]   Write a curated digest into AGENTS.md/MEMORY.md (feeds the native memory)
   ygg import --from mcp-memory|basic-memory --path P   Migrate FROM another memory tool (then delete it)
   ygg review [--apply] [--project P]   Work the governance queue: consolidate duplicates, flag stale/conflicts (archives, reversible)
+  ygg unarchive --id ID    Restore an archived/superseded memory (on linked machines too)
   ygg delete --id ID       Hard-delete ONE memory (irreversible; prefer supersede)
   ygg reset --project P | --source S | --all   Bulk hard-delete (undo a bad seed; confirms first)
 
@@ -84,7 +85,7 @@ SERVICE_CMDS = {
     "consolidate", "unconsolidate",
 }
 MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize",
-               "pin", "unpin", "supersede", "delete", "reset", "export-native", "review",
+               "pin", "unpin", "supersede", "unarchive", "delete", "reset", "export-native", "review",
                "import", "relate", "relations", "quality", "migrate"}
 
 

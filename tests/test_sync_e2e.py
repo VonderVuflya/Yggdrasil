@@ -302,6 +302,21 @@ class TlsNetworkTest(NetworkTest):
     insecure = False
 
 
+class ArchiveTest(Pair):
+    def test_an_unarchive_reaches_the_peer_and_stays(self):
+        rec = self.add(self.a_store, "archived by mistake")
+        self.a_store.update(rec["id"], data=None, metadata_patch=None, archived=True)
+        self.a.flush_outbox()
+        self.assertTrue(self.b_store.records_by_ids([rec["id"]])[0]["archived"])
+        self.a_store.update(rec["id"], data=None, metadata_patch=None, archived=False)
+        self.a.flush_outbox()
+        self.assertConverged()
+        for store in (self.a_store, self.b_store):
+            row = store.records_by_ids([rec["id"]])[0]
+            self.assertFalse(row["archived"])
+            self.assertEqual(json.loads(row["metadata_json"])["status"], "active")
+
+
 class PushTest(Pair):
     def test_a_write_reaches_the_peer(self):
         rec = self.add(self.a_store, "the deploy needs the migration first")

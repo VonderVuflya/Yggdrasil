@@ -37,6 +37,13 @@ class ConvergenceTest(unittest.TestCase):
         (_rec(content="a long original version", updated_at=100.0),
          _rec(content="short fix", content_hash="h3", updated_at=200.0)),
         (_rec(metadata_json='{"k": 1}'), _rec(metadata_json='{"k": "1"}')),
+        (_rec(archived=1, metadata_json='{"status": "archived"}'),
+         _rec(archived=0, updated_at=50.0,
+              metadata_json='{"archived_changed_at": 400.0, "status": "active"}')),
+        (_rec(archived=1, metadata_json='{"archived_changed_at": 300.0, "status": "archived"}'),
+         _rec(archived=0, updated_at=900.0, content="edited", content_hash="he")),
+        (_rec(archived=1, metadata_json='{"archived_changed_at": 300.0}'),
+         _rec(archived=0, metadata_json='{"archived_changed_at": 300.0}')),
     )
 
     def test_merge_is_commutative(self):
@@ -56,6 +63,42 @@ class FieldRulesTest(unittest.TestCase):
     def test_archive_decision_holds_everywhere(self):
         self.assertEqual(merge.merge_memory(_rec(archived=0), _rec(archived=1))["archived"], 1)
         self.assertEqual(merge.merge_memory(_rec(archived=1), _rec(archived=0))["archived"], 1)
+
+    def _both(self, a, b):
+        return [merge.merge_memory(dict(x), dict(y)) for x, y in ((a, b), (b, a))]
+
+    def test_a_later_unarchive_beats_an_archive(self):
+        """Archive merged by OR, so restoring a memory on one machine was undone
+        by the next reconcile with the other: "reversible" was not true."""
+        archived = _rec(archived=1, metadata_json='{"archived_changed_at": 300.0, "status": "archived"}')
+        restored = _rec(archived=0, metadata_json='{"archived_changed_at": 400.0, "status": "active"}')
+        for m in self._both(archived, restored):
+            self.assertEqual(m["archived"], 0)
+            self.assertEqual(json.loads(m["metadata_json"])["status"], "active")
+            self.assertEqual(json.loads(m["metadata_json"])["archived_changed_at"], 400.0)
+
+    def test_an_unarchive_beats_an_archive_from_before_the_stamp_existed(self):
+        legacy = _rec(archived=1, updated_at=900.0, metadata_json='{"status": "archived"}')
+        restored = _rec(archived=0, updated_at=100.0,
+                        metadata_json='{"archived_changed_at": 400.0, "status": "active"}')
+        for m in self._both(legacy, restored):
+            self.assertEqual(m["archived"], 0)
+
+    def test_an_edit_elsewhere_does_not_unarchive(self):
+        """The archive decision has its own clock: a newer CONTENT edit on a
+        machine that never saw the archive must not bring the memory back."""
+        archived = _rec(archived=1, metadata_json='{"archived_changed_at": 300.0, "status": "archived"}')
+        edited = _rec(archived=0, updated_at=900.0, content="edited later", content_hash="he")
+        for m in self._both(archived, edited):
+            self.assertEqual(m["archived"], 1)
+            self.assertEqual(m["content"], "edited later")
+            self.assertEqual(json.loads(m["metadata_json"])["status"], "archived")
+
+    def test_an_equal_archive_stamp_still_archives(self):
+        a = _rec(archived=1, metadata_json='{"archived_changed_at": 300.0}')
+        b = _rec(archived=0, metadata_json='{"archived_changed_at": 300.0}')
+        for m in self._both(a, b):
+            self.assertEqual(m["archived"], 1)
 
     def test_confidence_and_importance_take_the_stronger_signal(self):
         m = merge.merge_memory(_rec(confidence=0.2, importance=0.1),

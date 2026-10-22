@@ -240,6 +240,22 @@ class ApplyRemoteTest(unittest.TestCase):
         got = self.store.records_by_ids([rec["id"]])[0]
         self.assertLessEqual(got["updated_at"], time.time() + merge.MAX_CLOCK_SKEW)
 
+    def test_an_archive_stamp_from_the_future_is_clamped_on_arrival(self):
+        rec = _add(self.store)
+        remote = dict(self.store.records_by_ids([rec["id"]])[0], archived=1,
+                      metadata_json=json.dumps({merge.ARCHIVE_STAMP: time.time() + 365 * 24 * 3600}))
+        self.store.apply_remote(memories=[remote])
+        md = json.loads(self.store.records_by_ids([rec["id"]])[0]["metadata_json"])
+        self.assertLessEqual(md[merge.ARCHIVE_STAMP], time.time() + merge.MAX_CLOCK_SKEW)
+
+    def test_unarchiving_clears_the_status_that_would_still_hide_it(self):
+        rec = _add(self.store)
+        self.store.update(rec["id"], data=None, metadata_patch=None, archived=True)
+        self.store.update(rec["id"], data=None, metadata_patch=None, archived=False)
+        md = json.loads(self.store.records_by_ids([rec["id"]])[0]["metadata_json"])
+        self.assertEqual(md["status"], "active")
+        self.assertIn(merge.ARCHIVE_STAMP, md)
+
     def test_a_tombstone_from_the_future_is_clamped_so_it_can_expire(self):
         rec = _add(self.store)
         self.store.apply_remote(tombstones={rec["id"]: time.time() + 10 * merge.TOMBSTONE_TTL})

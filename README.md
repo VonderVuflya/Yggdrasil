@@ -281,8 +281,8 @@ more recent edit is kept on both (a shorter correction included).
 **Deletions win.** If you delete a memory on one machine and edit it on the other
 at the same time, the deletion wins and the edit is lost. That's deliberate:
 "I deleted the leaked token" has to hold even when two clocks disagree. When you
-mean *changed my mind*, archive it instead — archives merge without losing
-anything.
+mean *changed my mind*, archive it instead — nothing is lost, and
+`ygg unarchive` brings it back on both machines (the later decision wins).
 
 **A firewall is caught at pairing.** The machine that printed the code calls the
 other one back straight away; if it can't get through, `ygg link` says so and
@@ -353,6 +353,7 @@ Agents see six MCP tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_reca
 | `ygg pin --id ID` · `ygg unpin --id ID` | Pin a memory so it reliably surfaces |
 | `ygg relate --from A --rel solves --to B` · `ygg relations --id ID` | Link memories (`solves`/`supersedes`/`contradicts`) · see why a memory exists / what replaced it |
 | `ygg supersede --id OLD --by NEW` | Archive an outdated memory — `--by` records what replaced it |
+| `ygg unarchive --id ID` | Bring an archived memory back (on linked machines too) |
 | `ygg materialize --id ID --project P` | Export one memory to an Obsidian note |
 | `ygg export-native --project P` | Write a curated digest into `AGENTS.md`/`MEMORY.md` — feed Claude Code & Codex's native memory |
 | `ygg import --from TOOL --path P` | Migrate another memory tool's store into Yggdrasil (`mcp-memory`, `basic-memory`; `--dry-run` first) |

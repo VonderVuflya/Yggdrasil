@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -282,6 +283,14 @@ def relations(args: argparse.Namespace) -> None:
             preview = (e["other_content"] or "").replace("\n", " ")[:90]
             print(f"  {arrow} {p.cyan(label):<24} {ygg_ui.short_id(e['other_id'])}{flag}")
             print(f"      {p.dim(preview)}")
+
+
+def unarchive(args: argparse.Namespace) -> None:
+    """Bring an archived memory back — undoes `ygg supersede`, a `ygg review`
+    consolidation or `ygg relate --rel supersedes`. Reaches linked machines
+    too: the restore is a newer decision than the archive."""
+    rec = backend().update_memory(args.id, metadata_patch={"superseded": False}, archived=False)
+    print(f"restored {args.id}" + ("" if rec else " (no such memory)"))
 
 
 def delete(args: argparse.Namespace) -> None:
@@ -705,6 +714,12 @@ def _review_issues(records: list[dict[str, Any]],
     return issues
 
 
+def _sim(value: Any) -> str:
+    """Three decimals, rounded DOWN: 0.9697 printed as 0.970 looked like a group
+    the >= 0.97 auto-archive rule had wrongly skipped."""
+    return f"{math.floor(float(value) * 1000) / 1000:.3f}"
+
+
 def _dup_keep_and_archive(issue: dict[str, Any]) -> tuple[str, list[str]]:
     """For a duplicate group (records sorted oldest-first): keep the oldest,
     return the ids of the rest to archive."""
@@ -730,11 +745,11 @@ def _print_issue(index: int, total: int, issue: dict[str, Any]) -> None:
     sim = issue.get("similarity")
     print(f"\n[{index}/{total}] {issue['kind']} ({issue['severity']})  "
           f"project={issue.get('project')} type={issue.get('type')}"
-          + (f"  similarity={float(sim):.3f}" if sim is not None else ""))
+          + (f"  similarity={_sim(sim)}" if sim is not None else ""))
     print(f"    → {issue.get('recommendation')}")
     for j, r in enumerate(issue.get("records") or []):
         tag = "keep " if (issue['kind'].endswith('duplicate') and j == 0) else "     "
-        rsim = f"[{float(r['similarity']):.3f}] " if (j and r.get("similarity") is not None) else ""
+        rsim = f"[{_sim(r['similarity'])}] " if (j and r.get("similarity") is not None) else ""
         rtype = f"({r.get('type')}) " if issue.get("types") else ""
         print(f"    {tag}{r.get('id')}  {rtype}{rsim}{r.get('preview')}")
 
@@ -1083,6 +1098,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("relations", parents=[common])
     p.add_argument("--id", required=True)
     p.set_defaults(func=relations)
+
+    p = sub.add_parser("unarchive", parents=[common])
+    p.add_argument("--id", required=True)
+    p.set_defaults(func=unarchive)
 
     p = sub.add_parser("delete", parents=[common])
     p.add_argument("--id", required=True)

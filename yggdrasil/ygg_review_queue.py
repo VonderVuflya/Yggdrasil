@@ -8,6 +8,7 @@ import collections
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -251,7 +252,7 @@ def markdown_queue(report: dict[str, Any]) -> str:
             ]
         )
         if issue.get("similarity") is not None:
-            lines.append(f"- similarity: {issue['similarity']:.3f} (weakest pair)")
+            lines.append(f"- similarity: {math.floor(issue['similarity'] * 1000) / 1000:.3f} (weakest pair)")
         if issue.get("mixed_types"):
             lines.append(f"- types: {', '.join(issue['types'])} (mixed — never auto-archived)")
         lines.append("")
@@ -263,7 +264,7 @@ def markdown_queue(report: dict[str, Any]) -> str:
                     f"- type: `{record.get('type')}`",
                     f"- source: `{record.get('source')}`",
                     f"- content_hash: `{record.get('content_hash')}`",
-                    *([f"- similarity to oldest: {record['similarity']:.3f}"] if record.get("similarity") is not None else []),
+                    *([f"- similarity to oldest: {math.floor(record['similarity'] * 1000) / 1000:.3f}"] if record.get("similarity") is not None else []),
                     f"- preview: {record.get('preview')}",
                     "",
                 ]

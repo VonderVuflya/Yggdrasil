@@ -12,7 +12,11 @@ It is pure — no I/O, no clock, no database — so the properties are cheap to
 test exhaustively (see tests/test_sync_merge.py).
 
 Field rules, in the spirit of archive-never-delete:
-  - archived            OR   — an archive decision made anywhere holds everywhere
+  - archived            the later archive DECISION wins, by its own stamp
+                        (metadata `archived_changed_at`), so restoring a
+                        memory sticks and an unrelated edit elsewhere never
+                        undoes an archive; on equal stamps (records from
+                        before the stamp: none at all) archiving wins
   - confidence/importance max  — trust the stronger signal
   - content             the more recently updated record wins; on an equal
                         stamp the longer text (corrections shrink text, so
@@ -40,6 +44,11 @@ TOMBSTONE_TTL = 90 * 24 * 3600.0
 # year fast would otherwise win every recency-resolved field forever, and its
 # tombstones would never expire. Generous enough for ordinary NTP drift.
 MAX_CLOCK_SKEW = 300.0
+
+# When the archived flag last changed. Kept apart from updated_at on purpose:
+# a content edit on a machine that never saw the archive is newer, but it is not
+# a decision to bring the memory back.
+ARCHIVE_STAMP = "archived_changed_at"
 
 # Fields with no semantic ordering of their own — resolved by recency.
 _BY_RECENCY = ("user_id", "namespace", "scope", "project", "type", "source")
@@ -93,8 +102,6 @@ def merge_memory(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any
     merged = dict(remote)
     merged.update({k: v for k, v in local.items() if k not in merged})
 
-    merged["archived"] = 1 if (local.get("archived") or remote.get("archived")) else 0
-
     for field in ("confidence", "importance"):
         vals = [v for v in (local.get(field), remote.get(field)) if v is not None]
         merged[field] = max(vals) if vals else None
@@ -124,9 +131,32 @@ def merge_memory(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any
         md[key] = _pick(lval, rmd[key], lts, rts) if key in rmd else lval
     if lmd.get("pinned") or rmd.get("pinned"):
         md["pinned"] = True
+
+    # (stamp, flag) as one key: the later decision wins, and an equal stamp —
+    # including two records that predate the stamp — archives, which is the
+    # old OR. Its status travels with it, or an "archived" status left behind
+    # would still hide a restored memory.
+    lkey = (_stamp(lmd), 1 if local.get("archived") else 0)
+    rkey = (_stamp(rmd), 1 if remote.get("archived") else 0)
+    merged["archived"] = max(lkey, rkey)[1]
+    if lkey != rkey:
+        side = lmd if lkey > rkey else rmd
+        if "status" in side:
+            md["status"] = side["status"]
+        else:
+            md.pop("status", None)
+    if max(lkey, rkey)[0]:
+        md[ARCHIVE_STAMP] = max(lkey, rkey)[0]
     merged["metadata_json"] = json.dumps(md, sort_keys=True)
 
     return merged
+
+
+def _stamp(md: dict[str, Any]) -> float:
+    try:
+        return float(md.get(ARCHIVE_STAMP) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def tombstone_wins(*, deleted_at: float, record: dict[str, Any], now: float) -> bool:

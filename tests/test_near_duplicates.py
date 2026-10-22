@@ -322,3 +322,27 @@ class ReviewSemanticTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DisplayAndRestoreTest(unittest.TestCase):
+    def test_similarity_is_never_rounded_up_past_the_auto_archive_line(self):
+        """Seen live: 0.9697 shown as 0.970 next to a rule that says >= 0.97."""
+        import ygg
+        self.assertEqual(ygg._sim(0.9697), "0.969")
+        self.assertEqual(ygg._sim(0.97), "0.970")
+
+    def test_unarchive_restores_through_the_backend(self):
+        import argparse
+        from unittest import mock
+        import ygg
+        calls = []
+
+        class Backend:
+            def update_memory(self, memory_id, **kw):
+                calls.append((memory_id, kw))
+                return {"id": memory_id}
+
+        with mock.patch.object(ygg, "backend", return_value=Backend()), \
+                mock.patch("builtins.print"):
+            ygg.unarchive(argparse.Namespace(id="ygg_x"))
+        self.assertEqual(calls, [("ygg_x", {"metadata_patch": {"superseded": False}, "archived": False})])

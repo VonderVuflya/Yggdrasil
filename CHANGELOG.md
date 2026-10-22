@@ -44,6 +44,14 @@ All notable changes to this project are documented here. Format loosely follows
   distill model, and the write-path secret guard uses the wider patterns.
 
 ### Fixed
+- Archiving was not reversible across machines: `archived` merged by OR, so a
+  restored memory was archived again by the next reconcile. The archive
+  decision now carries its own stamp — the later archive/restore wins, an
+  unrelated edit elsewhere never undoes an archive, and records from before
+  the stamp keep the old OR. New `ygg unarchive --id`. Restores need 0.16 on
+  both machines.
+- `ygg review` rounded similarity up (0.9697 showed as 0.970 beside the
+  >= 0.97 auto-archive rule); it now rounds down.
 - `ygg link` advertised a VM bridge or VPN address on machines running OrbStack,
   Docker or a VPN, so the other machine could never push back. The address now
   comes from the route to the peer; when printing a code, real Ethernet/Wi-Fi

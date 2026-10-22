@@ -303,6 +303,20 @@ def expand_identifiers(text: str) -> str:
     return text + (" " + " ".join(extra)) if extra else text
 
 
+def _clamp_archive_stamp(raw: Any, *, now: float) -> Any:
+    """The archive decision's stamp gets the same skew bound as updated_at —
+    otherwise a fast clock would win every archive/restore after it."""
+    try:
+        md = json.loads(raw) if raw else None
+        stamp = float(md[_merge.ARCHIVE_STAMP]) if isinstance(md, dict) and md.get(_merge.ARCHIVE_STAMP) else None
+    except (TypeError, ValueError):
+        return raw
+    if stamp is None or stamp <= now + _merge.MAX_CLOCK_SKEW:
+        return raw
+    md[_merge.ARCHIVE_STAMP] = _merge.clamp_stamp(stamp, now=now)
+    return json.dumps(md, sort_keys=True)
+
+
 class MemoryStore:
     """SQLite-backed memory store with FTS5 (or in-Python fallback) search."""
 
@@ -656,8 +670,13 @@ class MemoryStore:
             archived_flag = row["archived"]
             if archived is not None:
                 archived_flag = 1 if archived else 0
+                if archived_flag != row["archived"]:
+                    # The decision's own clock — see ygg_sync_merge.ARCHIVE_STAMP.
+                    metadata[_merge.ARCHIVE_STAMP] = time.time()
                 if archived:
                     metadata["status"] = "archived"
+                elif str(metadata.get("status") or "").lower() in ("archived", "superseded"):
+                    metadata["status"] = "active"  # or record_is_archived() still hides it
 
             with self._conn:  # row + FTS in one transaction (rollback on error)
                 self._conn.execute(
@@ -1237,6 +1256,7 @@ class MemoryStore:
             for stamp in ("created_at", "updated_at"):
                 if rec.get(stamp) is not None:
                     rec[stamp] = _merge.clamp_stamp(rec[stamp], now=now)
+            rec["metadata_json"] = _clamp_archive_stamp(rec.get("metadata_json"), now=now)
             candidates.append(rec)
         mine = {r["id"]: r for r in self.records_by_ids([r["id"] for r in candidates])}
         merged: list[dict[str, Any]] = []
