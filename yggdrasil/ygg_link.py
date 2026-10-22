@@ -84,6 +84,20 @@ def firewall_hint(port: int, peer_ip: str, *, firewall: str | None = "detect") -
             "(a firewall, router client isolation, a VPN)")
 
 
+def failure_cause(error: str) -> str | None:
+    """Best reading of a connection error: "firewall" (packets vanish — a
+    timeout), "down" (the machine answered that nothing listens — refused),
+    "network" (no route), or None when it is not a reachability problem."""
+    text = (error or "").lower()
+    if "timed out" in text or "timeout" in text:
+        return "firewall"
+    if "refused" in text:
+        return "down"
+    if "no route" in text or "unreachable" in text or "host is down" in text:
+        return "network"
+    return None
+
+
 def peer_state(health: dict[str, Any] | None) -> tuple[str, str]:
     """("ok" | "fail" | "idle", what to say). Only a confirmed delivery with
     nothing left waiting counts as ok — a quiet queue is not a healthy one."""
@@ -131,14 +145,19 @@ def _status(args: argparse.Namespace) -> int:
         model = peer.get("embed_model") or "no dense model"
         print(f"  {mark} {peer['name']:<16} {peer.get('url') or '?':<28} {text}")
         print(f"    {p.dim(model)}")
-        error = ((peer.get("health") or {}).get("error") or "").lower()
-        if kind == "fail" and any(w in error for w in ("timed out", "refused", "unreachable")):
+        cause = failure_cause((peer.get("health") or {}).get("error") or "") if kind == "fail" else None
+        name = peer["name"]
+        if cause == "firewall":
             # The blocked side cannot see this — nothing fails over there — so
             # say here what to run there, scoped to this machine's address.
             port = urlparse(peer.get("url") or "").port or 42070
             mine = urlparse(peer.get("local_url") or "").hostname or "<this machine's address>"
-            print(f"    {p.dim(peer['name'] + ' is not accepting connections from here. On ' + peer['name'] + ', for example:')}\n"
+            print(f"    {p.dim(name + ' does not answer — likely a firewall. On ' + name + ', for example:')}\n"
                   f"      {firewall_hint(port, mine, firewall='ufw')}")
+        elif cause == "down":
+            print(f"    {p.dim(name + ' is up but Yggdrasil is not listening there — run `ygg status` on it')}")
+        elif cause == "network":
+            print(f"    {p.dim(name + ' is not reachable from this network (asleep, or on another network)')}")
     return 1 if failing else 0
 
 

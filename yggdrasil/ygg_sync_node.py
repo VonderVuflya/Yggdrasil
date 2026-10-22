@@ -655,6 +655,10 @@ class SyncNode:
             if not errors:
                 self._last_reconcile = now
                 self.store.needs_reconcile = False
+            if len(errors) < len(targets) and self.store.outbox_count():
+                # Someone is reachable again: the queued pushes should not sit
+                # out the sender's backoff (up to five minutes) to find out.
+                self.store.outbox_signal.set()
             return {"ran": True, "peers": len(targets), "errors": errors, "detail": summary}
 
     def maybe_reconcile_async(self) -> bool:

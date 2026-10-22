@@ -211,6 +211,17 @@ class NetworkTest(Pair):
         self.assertTrue(health["error"])
         self.assertEqual(health["backlog"], 1)
 
+    def test_a_successful_reconcile_wakes_the_sender(self):
+        """Seen live: the record arrived through reconcile, yet the list said
+        "1 waiting" until the sender's backoff (up to five minutes) ran out."""
+        self.b.stop()
+        self.add(self.a_store, "queued while beta was off")
+        self.a.flush_outbox()
+        self.b.start()
+        self.a_store.outbox_signal.clear()
+        self.a.reconcile(force=True)
+        self.assertTrue(self.a_store.outbox_signal.is_set())
+
     def test_being_contacted_is_recorded(self):
         self.add(self.a_store, "hello b")
         self.a.flush_outbox()

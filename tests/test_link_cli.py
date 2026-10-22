@@ -34,6 +34,22 @@ class FirewallHintTest(unittest.TestCase):
         self.assertIn("10.0.0.2", hint)
 
 
+class FailureAdviceTest(unittest.TestCase):
+    def test_a_timeout_looks_like_a_firewall(self):
+        self.assertEqual(ygg_link.failure_cause("https://h:42070: timed out"), "firewall")
+
+    def test_refused_means_nothing_listens_there(self):
+        """Seen live: the daemon on the other box was stopped and the old hint
+        told the user to open a firewall that was not the problem."""
+        self.assertEqual(ygg_link.failure_cause("[Errno 61] Connection refused"), "down")
+
+    def test_no_route_is_the_network(self):
+        self.assertEqual(ygg_link.failure_cause("[Errno 65] No route to host"), "network")
+
+    def test_anything_else_gets_no_guess(self):
+        self.assertIsNone(ygg_link.failure_cause("/sync/push -> HTTP 401: unpaired"))
+
+
 class PeerStateTest(unittest.TestCase):
     def test_never_contacted(self):
         self.assertEqual(ygg_link.peer_state(None)[0], "idle")
