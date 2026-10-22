@@ -7,21 +7,55 @@ digesting, or ordering.
 
 import http.client
 import json
+import os
 import socket
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "yggdrasil"))
 import ygg_sync_peers as peers  # noqa: E402
-from ygg_memory_server import MemoryStore  # noqa: E402
+from ygg_memory_server import MemoryStore, _Uplink  # noqa: E402
 from ygg_sync_node import SyncNode  # noqa: E402
 
 
 def _export(store):
     return json.dumps(store.sync_export(), sort_keys=True, ensure_ascii=False)
+
+
+class UplinkRetryTest(unittest.TestCase):
+    def test_a_port_busy_at_boot_is_retried_until_it_frees(self):
+        """Seen live: the release gates held 42070 while launchd restarted the
+        daemon, and the machine stayed unreachable until the next restart."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name)
+        store = MemoryStore(str(home / "m.sqlite"))
+        self.addCleanup(store.close)
+        peers.save({"node_id": "me", "peers": {"x": {"name": "x", "url": "http://127.0.0.1:9"}}},
+                   home / "peers.json")
+        squatter = socket.socket()
+        squatter.bind(("127.0.0.1", 0))
+        squatter.listen()
+        port = squatter.getsockname()[1]
+        env = {"YGG_HOME": str(home), "YGG_SYNC_HOST": "127.0.0.1",
+               "YGG_SYNC_PORT": str(port), "YGG_SYNC_INSECURE": "1"}
+        with mock.patch.dict(os.environ, env):
+            uplink = _Uplink()
+            uplink.RETRY_SECONDS = 0.05
+            uplink.start_if_paired(store)
+            self.assertIsNone(uplink.node)
+            self.assertTrue(uplink.error)
+            squatter.close()
+            deadline = time.time() + 5
+            while uplink.node is None and time.time() < deadline:
+                time.sleep(0.05)
+        self.assertIsNotNone(uplink.node)
+        self.addCleanup(uplink.node.stop)
+        self.assertIsNone(uplink.error)
 
 
 class Pair(unittest.TestCase):

@@ -142,8 +142,27 @@ if [ -z "$NO_TESTS" ]; then
       && ok "syntax OK on python 3.10 (oldest supported)" \
       || die "does not compile on python 3.10 — fix before releasing"
   fi
-  run python3 -m unittest discover -s tests
-  [ -x scripts/run_gates.sh ] && run env YGG_MEMORY_PORT=42070 bash scripts/run_gates.sh || true
+  # live bar + the test running right now (a hang names itself); output captured
+  run python3 scripts/test_progress.py tests || die "tests failed — fix before releasing"
+  # gates on their own scratch port (default 42169). NEVER 42070: that is the
+  # sync listener, and run_gates.sh kill -9s whatever holds its port.
+  if [ -x scripts/run_gates.sh ]; then
+    if [ -n "$DRY" ]; then
+      run bash scripts/run_gates.sh
+    else
+      GATES_LOG="$(mktemp)"
+      GATES_RC=0; bash scripts/run_gates.sh >"$GATES_LOG" 2>&1 || GATES_RC=$?
+      awk -v g="$GRN" -v r="$RED" -v z="$R" '
+        /^==> ygg_.*\.py$/ { gate = $2; sub(/\.py$/, "", gate) }
+        /^    PASS$/       { printf "  %s✓%s gate %s\n", g, z, gate }
+        /^    FAIL$/       { printf "  %s✗ gate %s%s\n", r, gate, z }' "$GATES_LOG"
+      if [ "$GATES_RC" -ne 0 ]; then
+        sed 's/^/    /' "$GATES_LOG" | tail -30
+        die "gates failed — see above (full log: $GATES_LOG)"
+      fi
+      rm -f "$GATES_LOG"
+    fi
+  fi
 else
   info "skipped (--no-tests)"
 fi

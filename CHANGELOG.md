@@ -15,7 +15,8 @@ All notable changes to this project are documented here. Format loosely follows
   beyond loopback until you run it. `ygg link --list` · `ygg unlink <name>`.
 - `ygg link --list` and `ygg doctor` show whether writes actually arrive. A
   blocked port is caught at pairing, with the one command that opens it.
-  Machines on different networks can link with `ygg link --tailscale`.
+  Machines on different networks can link with `ygg link --tailscale`. A sync
+  port still busy at startup is retried, not left offline until a restart.
 - `ygg review` checks the whole store and finds reworded duplicates by meaning
   (`--threshold`); `--apply --yes` consolidates only the near-identical ones.
 - `ygg unarchive --id` brings an archived memory back, on linked machines too.

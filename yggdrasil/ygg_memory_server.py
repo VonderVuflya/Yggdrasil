@@ -1835,13 +1835,24 @@ class _Uplink:
     every subsequent boot only if peers.json already has someone in it.
     """
 
+    # A port still held at boot (the old daemon shutting down, another engine on
+    # 42070) used to leave the machine unreachable until the next restart.
+    RETRY_SECONDS = 15.0
+
     def __init__(self) -> None:
         self.node = None
         self.error: str | None = None
+        self._lock = threading.Lock()  # boot retry vs `ygg link` racing to bind
+        self._retrying = False
 
     def ensure(self, store, *, name: str | None = None):
+        with self._lock:
+            return self._ensure(store, name=name)
+
+    def _ensure(self, store, *, name: str | None):
         if self.node is not None:
             return self.node
+        node = None
         try:
             try:
                 from . import ygg_sync_node as _node
@@ -1859,8 +1870,13 @@ class _Uplink:
             node.start_sender()
         except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
             self.error = str(exc)
+            if node is not None:  # release whatever did bind, or the retry never can
+                try:
+                    node.stop()
+                except Exception:  # noqa: BLE001
+                    pass
             return None
-        self.node = node
+        self.node, self.error = node, None
         return node
 
     def start_if_paired(self, store) -> None:
@@ -1868,8 +1884,21 @@ class _Uplink:
             from . import ygg_sync_peers as _p
         except ImportError:  # flat layout
             import ygg_sync_peers as _p
-        if _p.load()["peers"]:
-            self.ensure(store)
+        if _p.load()["peers"] and self.ensure(store) is None:
+            self._retry_later(store)
+
+    def _retry_later(self, store) -> None:
+        if self._retrying:
+            return
+        self._retrying = True
+
+        def loop() -> None:
+            while self.node is None:
+                time.sleep(self.RETRY_SECONDS)
+                self.ensure(store)
+            self._retrying = False
+
+        threading.Thread(target=loop, name="ygg-sync-retry", daemon=True).start()
 
     def trigger(self) -> None:
         """Called from read routes. Never blocks and never raises: a peer that is
