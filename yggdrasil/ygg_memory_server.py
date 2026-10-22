@@ -32,8 +32,10 @@ import array
 import base64
 import hashlib
 import hmac
+import itertools
 import json
 import math
+import operator
 import os
 import re
 import socket
@@ -233,6 +235,58 @@ def _dot(a, b) -> float | None:
     if len(a) != len(b):
         return None
     return sum(x * y for x, y in zip(a, b))
+
+
+# Bulk dot product for the all-pairs duplicate scan. math.sumprod (3.12+) over
+# plain float lists is ~8x the generator above; map(mul) is the 3.10/3.11 fallback.
+# Measured on 1024 dims: ~3 us vs ~9 us vs ~25 us per pair.
+_sumprod = getattr(math, "sumprod", None) or (lambda a, b: sum(map(operator.mul, a, b)))
+
+
+def _pairs_at_least(vecs: list[list[float]], threshold: float) -> dict[tuple[int, int], float]:
+    """{(i, j): cosine} for every i < j whose unit vectors have cosine >= threshold.
+
+    Exact, but most pairs are rejected without a full dot. Rewrite each vector
+    around the set's mean m:  a.b = (a-m).(b-m) + m.a + m.b - m.m,  and split the
+    centred part into the k highest-variance dims plus a remainder bounded by
+    Cauchy-Schwarz (|ra|*|rb|). Embeddings from one project share a strong common
+    direction and concentrate their spread in few dims, so a k=d*3/16 prefix
+    rejects ~99.6% of pairs on the real store (whole-project buckets: 16 s -> ~5 s).
+    The bound can only over-estimate, so no qualifying pair is ever dropped."""
+    n = len(vecs)
+    out: dict[tuple[int, int], float] = {}
+    if n < 2:
+        return out
+    d = len(vecs[0])
+    k = d * 3 // 16
+    if n < 64 or k < 8:  # the setup below costs more than brute force saves
+        for i in range(n - 1):
+            rest = vecs[i + 1:]
+            for off, s in enumerate(map(_sumprod, itertools.repeat(vecs[i], len(rest)), rest)):
+                if s >= threshold:
+                    out[(i, i + 1 + off)] = s
+        return out
+    mu = [s / n for s in map(math.fsum, zip(*vecs))]
+    cen = [list(map(operator.sub, v, mu)) for v in vecs]
+    var = [_sumprod(col, col) for col in zip(*cen)]
+    pick = operator.itemgetter(*sorted(range(d), key=var.__getitem__, reverse=True)[:k])
+    head = [pick(c) for c in cen]
+    tail = [math.sqrt(max(0.0, _sumprod(c, c) - _sumprod(h, h))) for c, h in zip(cen, head)]
+    lift = [_sumprod(mu, v) for v in vecs]
+    m2 = _sumprod(mu, mu)
+    del cen
+    for i in range(n - 1):
+        # 1e-6 of slack absorbs float rounding in the bound; it only admits extra
+        # candidates, which the exact dot below then rejects.
+        need, ti = threshold - lift[i] + m2 - 1e-6, tail[i]
+        heads = head[i + 1:]
+        bounds = map(_sumprod, itertools.repeat(head[i], len(heads)), heads)
+        for j, b, tj, lj in zip(range(i + 1, n), bounds, tail[i + 1:], lift[i + 1:]):
+            if b + ti * tj + lj >= need:
+                s = _sumprod(vecs[i], vecs[j])
+                if s >= threshold:
+                    out[(i, j)] = s
+    return out
 
 
 def expand_identifiers(text: str) -> str:
@@ -728,6 +782,105 @@ class MemoryStore:
             "near_dup_threshold": near_dup_threshold,
         }
 
+    def near_duplicates(self, *, user_id: str, threshold: float = 0.95,
+                        project: str | None = None, namespace: str | None = None,
+                        across_types: bool = False) -> list[dict[str, Any]]:
+        """Groups of live memories that say the same thing: cosine >= threshold
+        within one (project, type, embed_model) — or (project, embed_model) with
+        across_types, since the same note is often filed as a fix by one session
+        and a lesson by another. Groups are connected components (A~B, B~C ->
+        {A,B,C}), records oldest-first, each carrying its cosine to the oldest;
+        `similarity` is the group's weakest pair, so a caller acting on it never
+        archives anything less alike than that; `types` lists the types mixed in.
+
+        Exact all-pairs per bucket (see _pairs_at_least): no approximate index,
+        so nothing at or above the threshold is missed. Sync never calls this:
+        consolidation goes through review, whose archive merges by OR."""
+        sql = ("SELECT seq, project, type, embed_model, embedding_blob, created_at "
+               "FROM memories WHERE user_id=? AND archived=0 AND embedding_blob IS NOT NULL")
+        params: list[Any] = [user_id]
+        if namespace:
+            sql += " AND namespace=?"
+            params.append(namespace)
+        if project:
+            sql += " AND project=?"
+            params.append(project)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+
+        # Vectors from different models (or dims) live in different spaces —
+        # comparing them would be noise, so they never share a bucket.
+        buckets: dict[tuple, list[tuple[float, int, "array.array"]]] = {}
+        for row in rows:
+            unit = self._row_unit(row)
+            if unit is None:
+                continue
+            key = (row["project"], None if across_types else row["type"], row["embed_model"], len(unit))
+            buckets.setdefault(key, []).append((row["created_at"] or 0.0, row["seq"], unit))
+        del rows
+
+        threshold = float(threshold)
+        found: list[tuple[tuple, list[int], dict[int, float], float, float]] = []
+        for key, members in buckets.items():
+            if len(members) < 2:
+                continue
+            members.sort(key=lambda m: (m[0], m[1]))
+            # Per-bucket float lists: _sumprod is ~2.5x faster on them than on
+            # float32 arrays, and only one bucket is materialized at a time.
+            vecs = [m[2].tolist() for m in members]
+            sims = _pairs_at_least(vecs, threshold)
+            if not sims:
+                continue
+            parent = list(range(len(vecs)))
+
+            def root(i: int) -> int:
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+
+            for i, j in sims:
+                ri, rj = root(i), root(j)
+                if ri != rj:
+                    parent[max(ri, rj)] = min(ri, rj)
+            comps: dict[int, list[int]] = {}
+            for i in {k for pair in sims for k in pair}:
+                comps.setdefault(root(i), []).append(i)
+            for idx in comps.values():
+                idx.sort()  # members are oldest-first, so idx[0] is the keeper
+                pair_sims = [sims.get((a, b)) or _sumprod(vecs[a], vecs[b])
+                             for a, b in itertools.combinations(idx, 2)]
+                to_keep = {i: (1.0 if i == idx[0] else
+                               sims.get((idx[0], i)) or _sumprod(vecs[idx[0]], vecs[i]))
+                           for i in idx}
+                found.append((key, [members[i][1] for i in idx],
+                              {members[i][1]: to_keep[i] for i in idx},
+                              min(pair_sims), max(pair_sims)))
+
+        if not found:
+            return []
+        seqs = [s for _, group, _, _, _ in found for s in group]
+        by_seq: dict[int, dict[str, Any]] = {}
+        with self._lock:
+            for start in range(0, len(seqs), 500):  # stay under SQLite's host-param cap
+                chunk = seqs[start:start + 500]
+                for row in self._conn.execute(
+                        f"SELECT * FROM memories WHERE seq IN ({','.join('?' * len(chunk))})", chunk):
+                    by_seq[row["seq"]] = self._row_to_record(row)
+        groups = []
+        for (proj, _type, model, _dim), group, to_keep, lo, hi in found:
+            records = [dict(by_seq[s], similarity=round(to_keep[s], 4))
+                       for s in group if s in by_seq]  # a row vanishes only if deleted mid-scan
+            if len(records) < 2:
+                continue
+            types = sorted({r["type"] or "" for r in records})
+            groups.append({"project": proj, "type": types[0] if len(types) == 1 else None,
+                           "types": types, "embed_model": model,
+                           "similarity": round(lo, 4), "max_similarity": round(hi, 4),
+                           "records": records})
+        groups.sort(key=lambda g: (-g["similarity"], g["project"] or "", g["types"]))
+        return groups
+
     def get_by_id(self, memory_id: str) -> dict[str, Any] | None:
         """Direct indexed lookup by memory id (any store size, archived included)."""
         with self._lock:
@@ -986,9 +1139,10 @@ class MemoryStore:
                 self._conn.execute(f"DELETE FROM outbox WHERE seq IN ({marks})", chunk)
         return len(seqs)
 
-    def outbox_count(self) -> int:
+    def outbox_count(self, *, after: int = 0) -> int:
         with self._lock:
-            return int(self._conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0])
+            return int(self._conn.execute(
+                "SELECT COUNT(*) FROM outbox WHERE seq > ?", (after,)).fetchone()[0])
 
     def records_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
         """Sync-shaped rows for the given ids, in the order SQLite finds them.
@@ -1579,6 +1733,8 @@ def _private_addresses() -> list[str]:
             return 1
         if addr.startswith("172.") and 16 <= int(addr.split(".")[1] or 0) <= 31:
             return 2
+        if _is_tailnet(addr):
+            return 3  # reachable from anywhere on the tailnet, but the LAN is shorter
         return 9
 
     def rank(addr: str) -> tuple[int, int, int]:
@@ -1588,6 +1744,33 @@ def _private_addresses() -> list[str]:
         return (odd, kind, block(addr))
 
     return sorted((a for a in found if block(a) < 9), key=rank)
+
+
+def _is_tailnet(addr: str) -> bool:
+    """100.64.0.0/10 — the shared address space Tailscale numbers its nodes from."""
+    parts = addr.split(".")
+    return len(parts) == 4 and parts[0] == "100" and parts[1].isdigit() and 64 <= int(parts[1]) <= 127
+
+
+def _tailscale_address() -> str | None:
+    """This machine's Tailscale IPv4, if it is on a tailnet."""
+    return next((addr for _, addr in _interface_addresses() if _is_tailnet(addr)), None)
+
+
+def _listen_addresses(peer_hosts: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """One address per distinct route to a linked machine, in peer order — a
+    LAN peer and a Tailscale peer each need the interface that reaches them.
+    Before any peer exists, the single best guess."""
+    try:
+        from . import ygg_sync_peers as _p
+    except ImportError:  # flat layout
+        import ygg_sync_peers as _p
+    out: list[str] = []
+    for host in peer_hosts:
+        source = _p.route_source(host)
+        if source and source not in out:
+            out.append(source)
+    return out or [_lan_address()]
 
 
 def _lan_address(peer_hosts: list[str] | tuple[str, ...] = ()) -> str:
@@ -1646,12 +1829,12 @@ class _Uplink:
                 import ygg_sync_node as _node
             home = Path(os.environ.get("YGG_HOME") or str(Path.home() / ".yggdrasil"))
             pinned = _cfg.resolve("sync_host", None)
-            host = pinned or _lan_address(_peer_hosts())
+            hosts = [pinned] if pinned else _listen_addresses(_peer_hosts())
             node = _node.SyncNode(
                 store, home=home, name=name or socket.gethostname().split(".")[0],
-                host=host, port=int(_cfg.resolve("sync_port", None) or 42070),
+                host=hosts[0], port=int(_cfg.resolve("sync_port", None) or 42070),
                 insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"),
-                host_pinned=bool(pinned))
+                host_pinned=bool(pinned), extra_hosts=hosts[1:])
             node.start()
             node.start_sender()
         except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
@@ -1808,11 +1991,16 @@ class Handler(BaseHTTPRequestHandler):
             except ImportError:
                 import ygg_sync_peers as _p
             state = node.peers_state if node is not None else _p.load()
+            health = node.peer_health() if node is not None else {}
             self._send(200, {"success": True, "data": {
                 "running": node is not None,
                 "url": node.url if node is not None else None,
+                "urls": [node.url_on(h) for h in node.hosts] if node is not None else [],
                 "error": UPLINK.error,
-                "peers": [_public_peer(x) for x in state.get("peers", {}).values()]}})
+                "peers": [{**_public_peer(x), "health": health.get(x.get("node_id")),
+                           "local_url": node._local_url_for(urlparse(x.get("url") or "").hostname or "")
+                           if node is not None else None}
+                          for x in state.get("peers", {}).values()]}})
             return
         if parsed.path == "/get_all":
             qs = parse_qs(parsed.query)
@@ -1955,14 +2143,48 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"success": True, "data": self.store.relations_for(str(memory_id))})
             return
+        if parsed.path == "/near_duplicates":
+            # Lexical-only engines have no vectors to compare: say so instead of
+            # erroring, and let `ygg review` fall back to its text-signature finder.
+            if self.store.embedder is None:
+                self._send(200, {"success": True, "data": {"dense": False, "groups": []}})
+                return
+            threshold = float(body.get("threshold") or 0.95)
+            started = time.monotonic()
+            groups = self.store.near_duplicates(
+                user_id=str(body.get("user_id") or "global_user"),
+                threshold=threshold,
+                project=body.get("project") or None,
+                namespace=body.get("namespace") or None,
+                across_types=bool(body.get("across_types")),
+            )
+            self._send(200, {"success": True, "data": {
+                "dense": True, "threshold": threshold, "groups": groups,
+                "elapsed_ms": int((time.monotonic() - started) * 1000)}})
+            return
         if parsed.path == "/sync/link/issue":
             node = UPLINK.ensure(self.store)
             if node is None:
                 self._send(500, {"success": False,
                                  "error": UPLINK.error or "could not start the sync listener"})
                 return
-            self._send(200, {"success": True,
-                             "data": {"code": node.issue_pairing_code(), "url": node.url}})
+            host = str(body.get("host") or "") or None
+            tailnet = _tailscale_address()
+            if body.get("via") == "tailscale":
+                if tailnet is None:
+                    self._send(400, {"success": False,
+                                     "error": "this machine has no Tailscale address (100.64.0.0/10)"})
+                    return
+                host = tailnet
+            try:
+                code = node.issue_pairing_code(host=host)
+            except (RuntimeError, ValueError) as exc:
+                self._send(400, {"success": False, "error": str(exc)})
+                return
+            self._send(200, {"success": True, "data": {
+                "code": code, "url": node.url_on(host or node.host),
+                # Offered as an alternative only when the code does not use it.
+                "tailscale": tailnet if tailnet and tailnet != (host or node.host) else None}})
             return
         if parsed.path == "/sync/link/redeem":
             node = UPLINK.ensure(self.store)
@@ -1975,7 +2197,10 @@ class Handler(BaseHTTPRequestHandler):
             except (RuntimeError, ValueError) as exc:
                 self._send(400, {"success": False, "error": str(exc)})
                 return
-            self._send(200, {"success": True, "data": _public_peer(peer)})
+            self._send(200, {"success": True, "data": {
+                **_public_peer(peer), "port": node.port,
+                "reachable_back": peer.get("reachable_back"),
+                "back_error": peer.get("back_error")}})
             return
         if parsed.path == "/sync/peers/remove":
             try:

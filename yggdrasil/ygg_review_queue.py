@@ -111,6 +111,94 @@ def find_near_duplicates(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return issues
 
 
+# Non-interactive consolidation (`ygg review --apply --yes`) archives a semantic
+# group only when its WEAKEST pair is at least this alike. 0.95 catches
+# rewordings that still differ in a detail worth keeping; those wait for a human.
+AUTO_ARCHIVE_SIMILARITY = 0.97
+
+
+def find_semantic_duplicates(backend: Any, *, user_id: str, namespace: str | None = None,
+                             project: str | None = None, threshold: float = 0.95,
+                             across_types: bool = True) -> list[dict[str, Any]] | None:
+    """Embedding-cosine duplicate groups from the engine (POST /near_duplicates).
+    Across types by default: on a real store most rewordings were the same note
+    filed as fix/lesson/decision by different sessions. None when the engine
+    can't answer — dense off, an older engine without the route, or an external
+    backend — so the caller keeps the text-signature finder."""
+    try:
+        data = backend.request_json(
+            "POST", "/near_duplicates",
+            body={"user_id": user_id, "namespace": namespace, "project": project,
+                  "threshold": threshold, "across_types": across_types},
+            timeout=300,  # whole-store scan: seconds on a laptop, never the 30 s default's business
+        ).get("data") or {}
+    except Exception:  # noqa: BLE001 — any failure means "no semantic signal", not a broken review
+        return None
+    if not data.get("dense"):
+        return None
+    issues = []
+    for group in data.get("groups") or []:
+        similarity = float(group.get("similarity") or 0.0)
+        refs = []
+        for record in group.get("records") or []:
+            ref = record_ref(record)
+            ref["similarity"] = record.get("similarity")
+            refs.append(ref)
+        if len(refs) < 2:
+            continue
+        types = sorted({ref["type"] for ref in refs})
+        mixed = len(types) > 1
+        issues.append(
+            {
+                "kind": "near_duplicate",
+                "match": "semantic",
+                "severity": "medium" if similarity >= AUTO_ARCHIVE_SIMILARITY and not mixed else "low",
+                "project": group.get("project") or "global",
+                "type": "+".join(types),
+                "types": types,
+                "mixed_types": mixed,
+                "similarity": similarity,
+                "max_similarity": group.get("max_similarity"),
+                "recommendation": (
+                    "Same meaning filed under different types; decide which type should hold it, then archive the rest."
+                    if mixed else
+                    "Same meaning by embedding cosine; keep the oldest and archive the rest unless one adds a detail worth keeping."),
+                "records": refs,
+            }
+        )
+    return issues
+
+
+def merge_duplicate_issues(exact: list[dict[str, Any]], semantic: list[dict[str, Any]],
+                           textual: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One listing per duplicate group. A semantic group wholly inside an exact
+    group adds nothing; a text-signature group inside either is the weaker
+    signal for the same records. Overlapping-but-larger groups are kept."""
+    def ids(issue: dict[str, Any]) -> frozenset:
+        return frozenset(r.get("id") for r in issue.get("records") or [])
+
+    exact_sets = [ids(i) for i in exact]
+    kept_semantic = [i for i in semantic if not any(ids(i) <= e for e in exact_sets)]
+    stronger = exact_sets + [ids(i) for i in semantic]
+    kept_textual = [i for i in textual if not any(ids(i) <= s for s in stronger)]
+    return exact + kept_semantic + kept_textual
+
+
+def fetch_all_records(backend: Any, *, user_id: str, namespace: str | None = None,
+                      limit: int | None = None) -> list[dict[str, Any]]:
+    """Every record for the user, or the first `limit` when one is given.
+    /get_all has no offset, so grow the window until a reply comes back short —
+    a full reply means there may be more, never that the store ends there."""
+    if limit:
+        return backend.get_all(user_id=user_id, limit=limit, namespace=namespace)
+    window = 10_000
+    while True:
+        records = backend.get_all(user_id=user_id, limit=window, namespace=namespace)
+        if len(records) < window:
+            return records
+        window *= 4
+
+
 def find_stale_or_conflict_markers(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     issues = []
     content_marker_re = re.compile(
@@ -160,16 +248,22 @@ def markdown_queue(report: dict[str, Any]) -> str:
                 f"- project: `{issue.get('project')}`",
                 f"- type: `{issue.get('type')}`",
                 f"- recommendation: {issue.get('recommendation')}",
-                "",
             ]
         )
+        if issue.get("similarity") is not None:
+            lines.append(f"- similarity: {issue['similarity']:.3f} (weakest pair)")
+        if issue.get("mixed_types"):
+            lines.append(f"- types: {', '.join(issue['types'])} (mixed — never auto-archived)")
+        lines.append("")
         for record in issue["records"]:
             lines.extend(
                 [
                     f"### {record.get('id')}",
                     "",
+                    f"- type: `{record.get('type')}`",
                     f"- source: `{record.get('source')}`",
                     f"- content_hash: `{record.get('content_hash')}`",
+                    *([f"- similarity to oldest: {record['similarity']:.3f}"] if record.get("similarity") is not None else []),
                     f"- preview: {record.get('preview')}",
                     "",
                 ]
@@ -180,17 +274,17 @@ def markdown_queue(report: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--user-id", default=_cfg.user_id())
-    parser.add_argument("--limit", type=int, default=1000)
+    parser.add_argument("--limit", type=int, default=None, help="cap on records examined (default: the whole store)")
+    parser.add_argument("--threshold", type=float, default=0.95, help="semantic near-duplicate cosine")
     parser.add_argument("--output-dir", default="vault/99-review")
     parser.add_argument("--json-only", action="store_true")
     args = parser.parse_args()
 
     backend = RestMemoryBackend()
-    all_records = backend.get_all(user_id=args.user_id, limit=args.limit)
+    all_records = fetch_all_records(backend, user_id=args.user_id, limit=args.limit)
     data = [record for record in all_records if not record_is_archived(record)]
-    issues = []
-    issues.extend(find_exact_duplicates(data))
-    issues.extend(find_near_duplicates(data))
+    semantic = find_semantic_duplicates(backend, user_id=args.user_id, threshold=args.threshold) or []
+    issues = merge_duplicate_issues(find_exact_duplicates(data), semantic, find_near_duplicates(data))
     issues.extend(find_stale_or_conflict_markers(data))
     severity_order = {"high": 0, "medium": 1, "low": 2}
     issues.sort(key=lambda issue: (severity_order.get(issue["severity"], 9), issue["kind"], issue.get("project") or ""))

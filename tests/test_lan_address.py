@@ -76,7 +76,42 @@ class RankTest(unittest.TestCase):
         self.assertEqual(self._candidates([], probed=["10.0.0.5"]), ["10.0.0.5"])
 
 
+class TailscaleTest(unittest.TestCase):
+    PAIRS = [("en0", "192.168.3.151"), ("utun4", "100.101.7.12"), ("bridge100", "192.168.139.3")]
+
+    def test_a_tailnet_address_is_a_candidate_but_the_lan_comes_first(self):
+        with mock.patch.object(engine, "_interface_addresses", return_value=self.PAIRS), \
+                mock.patch.object(engine, "_probed_addresses", return_value=[]):
+            got = engine._private_addresses()
+        self.assertEqual(got[0], "192.168.3.151")
+        self.assertIn("100.101.7.12", got)
+
+    def test_the_tailnet_address_is_found(self):
+        with mock.patch.object(engine, "_interface_addresses", return_value=self.PAIRS):
+            self.assertEqual(engine._tailscale_address(), "100.101.7.12")
+
+    def test_no_tailnet_no_address(self):
+        with mock.patch.object(engine, "_interface_addresses", return_value=self.PAIRS[:1]):
+            self.assertIsNone(engine._tailscale_address())
+
+    def test_shared_address_space_outside_the_tailnet_block_is_not_tailscale(self):
+        with mock.patch.object(engine, "_interface_addresses",
+                               return_value=[("eth0", "100.128.0.1")]):
+            self.assertIsNone(engine._tailscale_address())
+
+
 class PeerRouteTest(unittest.TestCase):
+    def test_every_route_to_a_peer_gets_a_listener(self):
+        routes = {"192.168.3.150": "192.168.3.151", "100.90.1.2": "100.101.7.12",
+                  "192.168.3.160": "192.168.3.151"}
+        with mock.patch.object(peers, "route_source", side_effect=routes.get):
+            self.assertEqual(engine._listen_addresses(list(routes)),
+                             ["192.168.3.151", "100.101.7.12"])
+
+    def test_no_peers_means_one_guessed_address(self):
+        with mock.patch.object(engine, "_private_addresses", return_value=["192.168.3.151"]):
+            self.assertEqual(engine._listen_addresses([]), ["192.168.3.151"])
+
     def test_a_known_peer_decides_the_address(self):
         # Guessing is for when there is nobody to ask. Once a peer exists, the
         # routing table already knows which interface reaches it.

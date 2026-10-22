@@ -261,7 +261,7 @@ the network answering in its place gets refused before the code's secret is sent
 `ygg link` — install Yggdrasil and it stays on loopback, exactly as before.
 
 ```text
-ygg link --list          # what's linked, and where
+ygg link --list          # what's linked, and whether writes are actually arriving
 ygg link --sync          # reconcile now, don't wait for a read
 ygg unlink <name>        # revoke that machine's key here
 ```
@@ -284,10 +284,19 @@ at the same time, the deletion wins and the edit is lost. That's deliberate:
 mean *changed my mind*, archive it instead — archives merge without losing
 anything.
 
+**A firewall is caught at pairing.** The machine that printed the code calls the
+other one back straight away; if it can't get through, `ygg link` says so and
+prints the one command that opens the port to that machine only (ufw, firewalld,
+Windows). `ygg link --list` and `ygg doctor` keep checking afterwards: a peer
+shows ✓ only once writes are confirmed delivered, otherwise the error and how
+many changes are waiting. A machine that gets a new address from DHCP is found
+again the next time it makes contact.
+
 **`ygg sync` (git) is still there** and does a different job: machines that can't
 see each other, a work laptop behind a different network, a bare repo on a USB
 stick you carry. Use `ygg link` for machines on one network, `ygg sync` for
-everything else. Both share the same merge rules, so you can run both.
+everything else. Both share the same merge rules, so you can run both. If both
+machines are on a Tailscale tailnet, `ygg link --tailscale` works across networks too.
 
 **If the pairing code shows the wrong address** (it prefers real Ethernet and
 Wi-Fi over VM bridges and VPNs, but can still guess wrong), pin it:

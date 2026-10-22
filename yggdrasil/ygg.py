@@ -683,14 +683,22 @@ def export_native(args: argparse.Namespace) -> None:
 # non-destructively (archive, never hard-delete), the "curated, not captured"
 # promise made tangible.
 
-def _review_issues(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _rq():
     try:
         from . import ygg_review_queue as rq
     except ImportError:  # flat layout
         import ygg_review_queue as rq
+    return rq
+
+
+def _review_issues(records: list[dict[str, Any]],
+                   semantic: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """`semantic` are the engine's embedding groups; without them (dense off,
+    older engine) the text-signature finder is the only near-dup signal."""
+    rq = _rq()
     live = [r for r in records if not record_is_archived(r)]
-    issues = (rq.find_exact_duplicates(live)
-              + rq.find_near_duplicates(live)
+    issues = (rq.merge_duplicate_issues(rq.find_exact_duplicates(live), semantic or [],
+                                        rq.find_near_duplicates(live))
               + rq.find_stale_or_conflict_markers(live))
     order = {"high": 0, "medium": 1, "low": 2}
     issues.sort(key=lambda i: (order.get(i.get("severity"), 9), i.get("kind"), i.get("project") or ""))
@@ -705,20 +713,44 @@ def _dup_keep_and_archive(issue: dict[str, Any]) -> tuple[str, list[str]]:
     return keep, [r["id"] for r in recs[1:]]
 
 
+def _auto_consolidate(issue: dict[str, Any]) -> bool:
+    """What `--apply --yes` may archive unattended: byte-identical content, or a
+    single-type semantic group whose weakest pair clears AUTO_ARCHIVE_SIMILARITY.
+    Opening-words matches, looser groups, and groups mixing types (which type
+    survives is a choice, not a fact) are left to a human."""
+    if issue["kind"] == "exact_duplicate":
+        return True
+    sim = issue.get("similarity")
+    return (issue["kind"] == "near_duplicate" and sim is not None
+            and len(issue.get("types") or ()) == 1
+            and float(sim) >= _rq().AUTO_ARCHIVE_SIMILARITY)
+
+
 def _print_issue(index: int, total: int, issue: dict[str, Any]) -> None:
+    sim = issue.get("similarity")
     print(f"\n[{index}/{total}] {issue['kind']} ({issue['severity']})  "
-          f"project={issue.get('project')} type={issue.get('type')}")
+          f"project={issue.get('project')} type={issue.get('type')}"
+          + (f"  similarity={float(sim):.3f}" if sim is not None else ""))
     print(f"    → {issue.get('recommendation')}")
     for j, r in enumerate(issue.get("records") or []):
         tag = "keep " if (issue['kind'].endswith('duplicate') and j == 0) else "     "
-        print(f"    {tag}{r.get('id')}  {r.get('preview')}")
+        rsim = f"[{float(r['similarity']):.3f}] " if (j and r.get("similarity") is not None) else ""
+        rtype = f"({r.get('type')}) " if issue.get("types") else ""
+        print(f"    {tag}{r.get('id')}  {rtype}{rsim}{r.get('preview')}")
 
 
 def review(args: argparse.Namespace) -> None:
-    records = backend().get_all(user_id=args.user_id, limit=args.limit, namespace=args.namespace)
+    rq = _rq()
+    limit = getattr(args, "limit", None)
+    records = rq.fetch_all_records(backend(), user_id=args.user_id, namespace=args.namespace, limit=limit)
+    if limit and len(records) >= limit:
+        print(f"note: examined only the first {limit} memories (--limit); omit it to review the whole store.")
     if args.project:
         records = [r for r in records if metadata_of(r).get("project") == args.project]
-    issues = _review_issues(records)
+    semantic = rq.find_semantic_duplicates(
+        backend(), user_id=args.user_id, namespace=args.namespace, project=args.project,
+        threshold=getattr(args, "threshold", 0.95))
+    issues = _review_issues(records, semantic)
     if not issues:
         print("✓ no review issues — memory is clean"
               + (f" (project {args.project})" if args.project else ""))
@@ -729,20 +761,35 @@ def review(args: argparse.Namespace) -> None:
         for i, issue in enumerate(issues, 1):
             _print_issue(i, len(issues), issue)
         print(f"\n{len(issues)} issue(s). Act on them: `ygg review --apply` (interactive) "
-              "or `ygg review --apply --yes` (auto-consolidate duplicates, flag the rest).")
+              "or `ygg review --apply --yes` (auto-consolidate exact and single-type >= "
+              f"{rq.AUTO_ARCHIVE_SIMILARITY:.2f}-similar duplicates, flag the rest).")
         return
 
     archived = skipped = flagged = 0
+    gone: set[str] = set()  # archived earlier in this run (groups can overlap)
     for i, issue in enumerate(issues, 1):
         _print_issue(i, len(issues), issue)
         kind = issue["kind"]
         if kind in ("exact_duplicate", "near_duplicate"):
             keep, dups = _dup_keep_and_archive(issue)
-            if not dups:
+            dups = [mid for mid in dups if mid not in gone]
+            if not dups or keep in gone:
                 continue
-            ans = "k" if not interactive else input(
-                f"    [k]eep oldest & archive {len(dups)} dup(s) / [s]kip? ").strip().lower()
-            if ans in ("", "k", "y", "keep"):
+            confident = _auto_consolidate(issue)
+            if not interactive:
+                if not confident:
+                    flagged += 1
+                    print("    flagged for manual review ("
+                          + ("mixed types — pick which one keeps it" if issue.get("mixed_types")
+                             else "not similar enough to consolidate unattended") + ")")
+                    continue
+                ans = "k"
+            else:  # below the unattended bar the safe default is to leave both
+                ans = input(f"    [k]eep oldest & archive {len(dups)} dup(s) / [s]kip"
+                            f"{'' if confident else ' (default)'}? ").strip().lower()
+                if not ans:
+                    ans = "k" if confident else "s"
+            if ans in ("k", "y", "keep"):
                 for mid in dups:
                     backend().archive_memory(mid, {"review": "duplicate", "status": "archived"})
                     try:  # record WHY it left the active set (older engines: archive still stands)
@@ -752,6 +799,7 @@ def review(args: argparse.Namespace) -> None:
                     except Exception:
                         pass
                     archived += 1
+                    gone.add(mid)
                 print(f"    archived {len(dups)}, kept {keep} (SUPERSEDES edges recorded)")
             else:
                 skipped += 1
@@ -1051,8 +1099,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("review", parents=[common])
     p.add_argument("--project", help="only review this project's memories")
     p.add_argument("--apply", action="store_true", help="act on the queue (interactive on a TTY)")
-    p.add_argument("--yes", action="store_true", help="non-interactive: auto-consolidate duplicates, flag the rest")
-    p.add_argument("--limit", type=int, default=1000)
+    p.add_argument("--yes", action="store_true",
+                   help="non-interactive: auto-consolidate exact and single-type >= 0.97-similar duplicates, flag the rest")
+    p.add_argument("--threshold", type=float, default=0.95,
+                   help="embedding cosine at which memories count as near-duplicates (default 0.95)")
+    p.add_argument("--limit", type=int, default=None, help="cap on memories examined (default: the whole store)")
     p.set_defaults(func=review)
 
     p = sub.add_parser("import", parents=[common])

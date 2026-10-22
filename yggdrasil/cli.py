@@ -289,6 +289,22 @@ def _doctor() -> int:
     check(tok.exists(), "token", str(tok) if tok.exists() else "not generated",
           "" if tok.exists() else "ygg install")
 
+    # Linked machines: a peer that stopped accepting writes looks exactly like
+    # one with nothing to say, unless something asks.
+    if h:
+        try:
+            from .ygg import request_json
+            from . import ygg_link
+            links = request_json("GET", "/sync/peers")["data"]
+        except Exception:  # noqa: BLE001 — an older engine without the uplink
+            links = {"peers": []}
+        for peer in links.get("peers") or []:
+            kind, text = ygg_link.peer_state(peer.get("health"))
+            if kind == "fail":
+                ok = False
+            check({"ok": True, "fail": False}.get(kind), f"link {peer.get('name')}", text,
+                  "ygg link --list" if kind == "fail" else "")
+
     cfg = _config()
     embed, bg = cfg.get("embed_model") or "", cfg.get("bg_model") or ""
     check(bool(embed), "embedding model", embed or "none (lexical-only)",

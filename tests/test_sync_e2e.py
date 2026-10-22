@@ -144,6 +144,153 @@ class AddressTest(Pair):
         self.assertEqual(stored["url"], self.a.url)
 
 
+def _lan_address_or_none():
+    """A non-loopback address this machine can bind, for tests that need two
+    distinct interfaces. None on a box with only loopback (CI containers)."""
+    import ygg_memory_server as engine
+    for addr in engine._private_addresses():
+        try:
+            with socket.socket() as probe:
+                probe.bind((addr, 0))
+        except OSError:
+            continue
+        return addr
+    return None
+
+
+class NetworkTest(Pair):
+    def _conn(self, node):
+        if self.insecure:
+            return http.client.HTTPConnection(node.host, node.port, timeout=5)
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        return http.client.HTTPSConnection(node.host, node.port, timeout=5, context=ctx)
+
+    def _node(self, name, **kw):
+        root = Path(self._tmp.name)
+        store = MemoryStore(str(root / name / "m.sqlite"))
+        self.addCleanup(store.close)
+        node = SyncNode(store, home=root / name, name=name, insecure=self.insecure, **kw)
+        node.start()
+        self.addCleanup(node.stop)
+        return node, store
+
+    # -- the issuer calls back --------------------------------------------
+
+    def test_pairing_reports_that_the_issuer_can_reach_us(self):
+        c, _ = self._node("gamma")
+        peer = c.pair_with(self.a.issue_pairing_code(), name="alpha")
+        self.assertTrue(peer["reachable_back"])
+
+    def test_pairing_reports_a_redeemer_the_issuer_cannot_reach(self):
+        """The ufw case: the link was made, but writes from the issuer would
+        never arrive. Said at pairing time, not discovered weeks later."""
+        c, _ = self._node("gamma")
+        c._close_listener()  # as good as a firewall dropping the port
+        peer = c.pair_with(self.a.issue_pairing_code(), name="alpha")
+        self.assertFalse(peer["reachable_back"])
+        self.assertTrue(peer["back_error"])
+        self.assertNotIn("reachable_back", list(peers.load(c.peers_path)["peers"].values())[0])
+
+    # -- health -----------------------------------------------------------
+
+    def test_a_delivered_push_is_recorded_as_healthy(self):
+        self.add(self.a_store, "fine")
+        self.a.flush_outbox()
+        health = self.a.peer_health()[self.b.node_id]
+        self.assertIsNotNone(health["ok_at"])
+        self.assertIsNone(health["error"])
+        self.assertEqual(health["backlog"], 0)
+
+    def test_a_failing_peer_shows_its_error_and_backlog(self):
+        self.b.stop()
+        self.add(self.a_store, "stuck")
+        self.a.flush_outbox()
+        health = self.a.peer_health()[self.b.node_id]
+        self.assertTrue(health["error"])
+        self.assertEqual(health["backlog"], 1)
+
+    def test_being_contacted_is_recorded(self):
+        self.add(self.a_store, "hello b")
+        self.a.flush_outbox()
+        self.assertIsNotNone(self.b.peer_health()[self.a.node_id]["heard_at"])
+
+    # -- addresses move ---------------------------------------------------
+
+    def test_a_peer_that_moved_is_found_at_its_new_address(self):
+        """DHCP hands out a new address; the peer says so on its next request."""
+        a_peer_in_b = lambda: self.b.peers_state["peers"][self.a.node_id]["url"]  # noqa: E731
+        self.a._rebind("localhost")
+        self.assertNotEqual(a_peer_in_b(), self.a.url)
+        self.add(self.a_store, "from the new address")
+        self.a.flush_outbox()
+        self.assertEqual(a_peer_in_b(), self.a.url)
+        self.assertEqual(peers.load(self.b.peers_path)["peers"][self.a.node_id]["url"], self.a.url)
+
+    def test_a_malformed_advertised_address_is_ignored(self):
+        key = self.a.peers_state["peers"][self.b.node_id]["key_out"]
+        before = self.b.peers_state["peers"][self.a.node_id]["url"]
+        for bogus in ("ftp://x:1", "http://:1", "http://h:notaport", "garbage"):
+            conn = self._conn(self.b)
+            conn.request("GET", "/sync/hello", headers={
+                "Authorization": f"Bearer {key}", "X-Ygg-Url": bogus})
+            self.assertEqual(conn.getresponse().status, 200)
+            conn.close()
+        self.assertEqual(self.b.peers_state["peers"][self.a.node_id]["url"], before)
+
+    def test_an_unauthenticated_caller_cannot_move_a_peer(self):
+        before = self.b.peers_state["peers"][self.a.node_id]["url"]
+        conn = self._conn(self.b)
+        conn.request("GET", "/sync/hello", headers={
+            "Authorization": "Bearer nope", "X-Ygg-Url": "http://10.9.9.9:1"})
+        self.assertEqual(conn.getresponse().status, 401)
+        conn.close()
+        self.assertEqual(self.b.peers_state["peers"][self.a.node_id]["url"], before)
+
+    # -- more than one interface -------------------------------------------
+
+    def test_a_second_peer_on_another_interface_adds_a_listener(self):
+        """Moving the one listener to reach a new peer used to cut off the
+        peers already reached through the old interface."""
+        lan = _lan_address_or_none()
+        if lan is None:
+            self.skipTest("needs a non-loopback interface")
+        c, c_store = self._node("gamma", host_pinned=False)
+        c.pair_with(self.a.issue_pairing_code(), name="alpha")  # over loopback
+        d, d_store = self._node("delta", host=lan)
+        c.pair_with(d.issue_pairing_code(), name="delta")       # over the LAN
+        self.assertEqual(c.host, "127.0.0.1")
+        self.assertIn(lan, c.hosts)
+        rec = self.add(c_store, "reaches both")
+        c.flush_outbox()
+        self.assertEqual(len(self.a_store.records_by_ids([rec["id"]])), 1)
+        self.assertEqual(len(d_store.records_by_ids([rec["id"]])), 1)
+        rec2 = self.add(d_store, "and back over the LAN")
+        d.flush_outbox()
+        self.assertEqual(len(c_store.records_by_ids([rec2["id"]])), 1)
+
+    def test_a_code_can_name_a_chosen_address(self):
+        """`ygg link --tailscale`: the code carries that interface, and the
+        node listens there too."""
+        lan = _lan_address_or_none()
+        if lan is None:
+            self.skipTest("needs a non-loopback interface")
+        code = self.a.issue_pairing_code(host=lan)
+        self.assertEqual(peers.parse_code(code)["host"], lan)
+        self.assertIn(lan, self.a.hosts)
+        c, _ = self._node("gamma")
+        self.assertTrue(c.pair_with(code, name="alpha")["reachable_back"])
+
+    def test_a_code_for_an_address_we_do_not_have_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.a.issue_pairing_code(host="203.0.113.7")
+
+
+class TlsNetworkTest(NetworkTest):
+    insecure = False
+
+
 class PushTest(Pair):
     def test_a_write_reaches_the_peer(self):
         rec = self.add(self.a_store, "the deploy needs the migration first")

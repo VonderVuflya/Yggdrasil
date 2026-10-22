@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- `ygg link` checks both directions at pairing: the issuing machine calls the
+  new peer back, and a blocked port is reported immediately with the one
+  command that opens it to that peer (ufw, firewalld, Windows, macOS).
+- `ygg link --list` and `ygg doctor` show per-peer health — last confirmed
+  delivery, the error since, and how many changes are waiting. ✓ only once
+  delivery is confirmed.
+- Peers follow each other to new addresses: every authenticated request says
+  where its sender listens, so a DHCP change heals on the next contact.
+- One listener per interface a peer is reached on (LAN and Tailscale at once);
+  `ygg link --tailscale` / `--host` put a chosen address in the code.
 ### Security
 - **Pairing codes now name the issuing machine's certificate.** The first
   connection of `ygg link` used to trust whatever certificate answered, so a
@@ -55,6 +66,13 @@ All notable changes to this project are documented here. Format loosely follows
   deleted memories are removed from the repo and are not re-imported.
 - MCP tools called without a required argument now say which one
   (`missing required argument: project`) instead of returning `'project'`.
+- `ygg review` called a store "clean" while it held reworded duplicates: it read
+  only the first 1000 memories and matched on opening words. It now reviews the
+  whole store and groups memories by embedding similarity within a project,
+  across types (new engine route `POST /near_duplicates`, `--threshold`,
+  default 0.95), showing the score and each record's type. `--apply --yes`
+  archives unattended only exact duplicates and single-type groups at ≥ 0.97;
+  groups mixing types always wait for a human.
 
 ## [0.16.0] — 2026-08-20 — one memory across your machines
 

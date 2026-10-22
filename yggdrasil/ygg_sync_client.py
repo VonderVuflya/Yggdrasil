@@ -45,8 +45,12 @@ def _unverified_context() -> ssl.SSLContext:
 
 class PeerClient:
     def __init__(self, url: str, *, key: str = "", fingerprint: str | None = None,
-                 pin_prefix: str | None = None, timeout: float = 10.0) -> None:
+                 pin_prefix: str | None = None, timeout: float = 10.0,
+                 advertise: str | None = None) -> None:
         self.url = url.rstrip("/")
+        # Where we listen as seen from this peer; sent with every request so
+        # it can follow us to a new address.
+        self.advertise = advertise
         self.key = key
         self.fingerprint = fingerprint
         # The leading part of the fingerprint carried in a pairing code — what
@@ -91,6 +95,8 @@ class PeerClient:
         token = self.key if key is None else key
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if self.advertise:
+            headers["X-Ygg-Url"] = self.advertise
         # The connect belongs inside the try: over TLS it runs eagerly in
         # _connect, and a refused or timed-out handshake escaping as a raw
         # OSError used to kill the background sender thread.
