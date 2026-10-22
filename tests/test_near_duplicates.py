@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "yggdrasil"))
 import ygg  # noqa: E402
@@ -249,7 +250,9 @@ class ReviewSemanticTest(unittest.TestCase):
         for k, v in kw.items():
             setattr(args, k, v)
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        # review turns interactive on a TTY; run from a terminal it would block
+        # on input() behind the captured stdout. Pin the unattended path.
+        with contextlib.redirect_stdout(out), mock.patch.object(sys, "stdin", io.StringIO()):
             ygg.review(args)
         return out.getvalue()
 
