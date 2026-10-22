@@ -224,6 +224,10 @@ class TestStaleUnitDetection(unittest.TestCase):
         self.home = tempfile.mkdtemp()
         self._orig_home = os.environ.get("HOME")
         os.environ["HOME"] = self.home
+        # Path.home() reads USERPROFILE on Windows, so HOME alone left these tests
+        # looking at the runner's real profile.
+        self._orig_profile = os.environ.get("USERPROFILE")
+        os.environ["USERPROFILE"] = self.home
         self.unit_dir = pathlib.Path(self.home) / ".config" / "systemd" / "user"
         self.unit_dir.mkdir(parents=True)
         self._orig_manager = service._manager
@@ -233,6 +237,10 @@ class TestStaleUnitDetection(unittest.TestCase):
         service._manager = self._orig_manager
         if self._orig_home is not None:
             os.environ["HOME"] = self._orig_home
+        if self._orig_profile is None:
+            os.environ.pop("USERPROFILE", None)
+        else:
+            os.environ["USERPROFILE"] = self._orig_profile
         shutil.rmtree(self.home, ignore_errors=True)
 
     def _write_unit(self, argv):

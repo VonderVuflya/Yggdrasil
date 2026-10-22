@@ -27,7 +27,10 @@ def _run(hits, prompt="how do I configure the embedding backend for openrouter?"
     resp.__enter__.return_value = io.BytesIO(payload)
     resp.__exit__.return_value = False
     buf = io.StringIO()
-    with mock.patch.object(h.urllib.request, "urlopen", lambda *a, **k: resp), \
+    # A token is stubbed too: without one the hook skips on purpose, and a dev
+    # box with ~/.yggdrasil/token used to hide that CI has none.
+    with mock.patch.object(h, "token", lambda: "test-token"), \
+         mock.patch.object(h.urllib.request, "urlopen", lambda *a, **k: resp), \
          mock.patch.object(h.sys, "stdin", io.StringIO(json.dumps({"prompt": prompt, "cwd": cwd}))), \
          redirect_stdout(buf):
         h.main()

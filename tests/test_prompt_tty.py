@@ -12,11 +12,15 @@ which is empty. Only reading the fd directly keeps them where select can see it.
 """
 
 import os
-import pty
 import select
 import sys
 import time
 import unittest
+
+try:
+    import pty  # POSIX only: needs termios, which Windows does not have
+except ImportError:  # pragma: no cover — Windows
+    raise unittest.SkipTest("no pty on this platform")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

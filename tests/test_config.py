@@ -79,6 +79,7 @@ class SecretSettingTest(unittest.TestCase):
         if self.C.CONFIG.exists():
             self.assertNotIn("SECRETVALUE", self.C.CONFIG.read_text())
 
+    @unittest.skipIf(os.name == "nt", "POSIX file modes; Windows ACLs are not mode bits")
     def test_keyfile_is_0600(self):
         self.C.set_value("embed_api_key", self.KEY)
         mode = stat.S_IMODE(os.stat(self.C.EMBED_KEY_FILE).st_mode)

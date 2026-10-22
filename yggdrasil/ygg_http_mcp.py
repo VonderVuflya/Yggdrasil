@@ -65,6 +65,10 @@ def _allowed_hosts() -> tuple[str, ...]:
     return _LOOPBACK + tuple(h.strip().lower() for h in extra.split(",") if h.strip())
 
 
+# Largest body read just to reject it cleanly (see Handler._drain).
+_DRAIN_CAP = 4 * 1024 * 1024
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "yggdrasil-http-mcp/0.1"
 
@@ -92,7 +96,21 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(origin)
         return parsed.scheme in ("http", "https") and (parsed.hostname or "") in _allowed_hosts()
 
+    def _drain(self) -> None:
+        """Read and drop the request body before answering a rejection. Closing
+        with bytes still unread makes the kernel send a reset, and the client
+        then loses the 401/403/415 to ConnectionResetError. Bounded: a body past
+        the cap is not worth reading just to say no."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if 0 < length <= _DRAIN_CAP:
+            self.rfile.read(length)
+        self.close_connection = True
+
     def _reject(self, code: int, message: str) -> None:
+        self._drain()
         self._json(code, {"jsonrpc": "2.0", "id": None,
                           "error": {"code": -32600, "message": message}})
 
@@ -126,8 +144,10 @@ class Handler(BaseHTTPRequestHandler):
             self._reject(403, "forbidden: cross-origin request")
             return
         if not self._auth_ok():
+            self._drain()
             self.send_response(401)
             self.send_header("WWW-Authenticate", "Bearer")
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         ctype = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()

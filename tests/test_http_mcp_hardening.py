@@ -54,6 +54,18 @@ class HttpFacadeHardeningTests(unittest.TestCase):
     def test_bad_token_rejected(self):
         self.assertEqual(self.post({"Authorization": "Bearer nope"})[0], 401)
 
+    def test_a_rejection_is_readable_even_with_a_large_body(self):
+        """Rejecting before reading the body closed the socket with data still
+        unread, so the kernel answered with a reset and the client saw
+        ConnectionResetError instead of the 401 (seen on CI, macOS)."""
+        big = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping",
+                          "params": {"pad": "x" * 512_000}})
+        for headers, code in (({"Authorization": "Bearer nope"}, 401),
+                              ({"Origin": "https://evil.example"}, 403),
+                              ({"Content-Type": "text/plain"}, 415)):
+            with self.subTest(code=code):
+                self.assertEqual(self.post(headers, body=big)[0], code)
+
     def test_text_plain_rejected_415(self):
         status, data = self.post({"Content-Type": "text/plain"})
         self.assertEqual(status, 415)
