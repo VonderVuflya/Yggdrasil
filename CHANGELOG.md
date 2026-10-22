@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
-## [0.16.0] — one memory across your machines
+## [0.16.0] — 2026-10-22 — one memory across your machines
 
 ### Added
 - **`ygg link` — two of your machines, one memory.** Pair once with a one-time

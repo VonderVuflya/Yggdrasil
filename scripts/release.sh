@@ -159,7 +159,8 @@ run bash -c 'cd skills && rm -f yggdrasil-memory.zip && zip -q -r -X yggdrasil-m
 # 5. git commit + tag + push.
 step "git commit + tag + push"
 if [ -z "$SKIP_GIT" ]; then
-  rm -f .git/index.lock
+  # a worktree's .git is a FILE pointing at the real git dir — ask git where it is
+  rm -f "$(git rev-parse --git-dir)/index.lock"
   run git add -A
   run git commit -m "Release $VERSION" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>" || info "(nothing to commit)"
   run git tag -f "v$VERSION"
