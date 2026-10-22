@@ -243,7 +243,7 @@ $ ygg link ygg://192.168.3.152:42070/a4e0df489737#FOucjgJ1FrUB…
 **它不是什么：** 不是云。没有中继、没有账号，链路上也没有我们的任何服务器。机器之间直接通过你自己的网络通信，使用彼此固定（pinned）证书的 TLS，并使用只存在于这两台机器上的密钥对。配对码本身就包含签发机器的证书，所以即使是第一次连接也会被验证——如果网络上有别的东西冒充应答，会在配对密钥发送之前被拒绝。在你运行 `ygg link` 之前，不会绑定任何网络端口——安装 Yggdrasil 后它仍像以前一样只监听回环地址。
 
 ```text
-ygg link --list          # what's linked, and where
+ygg link --list          # what's linked, and whether writes are actually arriving
 ygg link --sync          # reconcile now, don't wait for a read
 ygg unlink <name>        # revoke that machine's key here
 ```
@@ -255,11 +255,13 @@ ygg unlink <name>        # revoke that machine's key here
 
 **较新的编辑胜出。** 如果在两台机器通信之前，你在两台机器上都编辑了同一条记忆，那么较新的编辑会在两台机器上都保留下来（即使它更短，比如一次更正）。
 
-**删除优先。** 如果你在一台机器上删除了某条记忆，同时在另一台机器上编辑了它，删除会胜出，编辑会丢失。这是有意为之的：“我删掉了泄露的 token”必须成立，即使两台机器的时钟不一致。如果你的意思是“我改主意了”，请改为归档——归档合并时不会丢失任何东西。
+**删除优先。** 如果你在一台机器上删除了某条记忆，同时在另一台机器上编辑了它，删除会胜出，编辑会丢失。这是有意为之的：“我删掉了泄露的 token”必须成立，即使两台机器的时钟不一致。如果你的意思是“我改主意了”，请改为归档——不会丢失任何东西，`ygg unarchive` 可以在两台机器上把它恢复（以较晚的决定为准）。
 
-**`ygg sync`（git）依然存在**，它做的是另一件事：彼此看不见的机器、位于不同网络里的工作笔记本、你随身携带的 U 盘上的裸仓库。同一网络内的机器用 `ygg link`，其他情况用 `ygg sync`。两者共享相同的合并规则，因此可以同时使用。
+**防火墙会在配对时被发现。** 打印配对码的机器会立即回拨另一台；如果连不通，`ygg link` 会直接告诉你，并输出唯一一条只为该机器开放端口的命令（ufw、firewalld、Windows）。之后 `ygg link --list` 和 `ygg doctor` 会继续检查：只有确认写入已送达，对端才会显示 ✓；否则显示错误以及正在等待的更改数量。通过 DHCP 获得新地址的机器，会在下一次联系时被重新找到。
 
-**如果配对码显示的地址不对**（VPN 或雷电桥接可能会压过你真正的局域网），请固定它：`ygg config set sync_host 192.168.3.152`。
+**`ygg sync`（git）依然存在**，它做的是另一件事：彼此看不见的机器、位于不同网络里的工作笔记本、你随身携带的 U 盘上的裸仓库。同一网络内的机器用 `ygg link`，其他情况用 `ygg sync`。两者共享相同的合并规则，因此可以同时使用。如果两台机器都在同一个 Tailscale tailnet 中，`ygg link --tailscale` 也能跨网络工作。
+
+**如果配对码显示的地址不对**（它会优先选择真实的以太网和 Wi-Fi，而不是虚拟机网桥和 VPN，但仍可能猜错），请固定它：`ygg config set sync_host 192.168.3.152`——或者在另一台机器上打印配对码：输入配对码的一方总会使用实际路由所经过的地址。
 
 </details>
 
@@ -310,6 +312,7 @@ ygg unlink <name>        # revoke that machine's key here
 | `ygg bootstrap --project P` | 开始工作前拉取某个项目的记忆 |
 | `ygg pin --id ID` · `ygg unpin --id ID` | 置顶一条记忆，让它可靠地浮现 |
 | `ygg supersede --id ID` | 归档一条已被新记忆替代的过期记忆 |
+| `ygg unarchive --id ID` | 恢复一条已归档的记忆（在已链接的机器上同样生效） |
 | `ygg materialize --id ID --project P` | 把一条记忆导出为 Obsidian 笔记 |
 | `ygg export-native --project P` | 把精选摘要写入 `AGENTS.md`/`MEMORY.md`——供 Claude Code 与 Codex 的原生记忆使用 |
 | `ygg import --from TOOL --path P` | 把另一个记忆工具的存储迁移到 Yggdrasil（`mcp-memory`、`basic-memory`；先用 `--dry-run`） |

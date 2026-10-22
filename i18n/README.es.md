@@ -242,7 +242,7 @@ No hay **ningún polling**. Yggdrasil se invoca unas pocas veces al día, así q
 **Lo que no es:** una nube. No hay relay, ni cuenta, ni servidor nuestro en el camino. Las máquinas se hablan directamente por tu propia red, por TLS con el certificado de cada una fijado (pinned), usando un par de claves que existe solo en esas dos máquinas. El propio código de emparejamiento nombra el certificado de la máquina emisora, así que incluso la primera conexión queda verificada — si algo más en la red responde en su lugar, se rechaza antes de que se envíe el secreto del código. Nada abre un puerto de red hasta que ejecutas `ygg link` — instalar Yggdrasil lo deja en loopback, como antes.
 
 ```text
-ygg link --list          # what's linked, and where
+ygg link --list          # what's linked, and whether writes are actually arriving
 ygg link --sync          # reconcile now, don't wait for a read
 ygg unlink <name>        # revoke that machine's key here
 ```
@@ -254,11 +254,13 @@ ygg unlink <name>        # revoke that machine's key here
 
 **Gana la edición más reciente.** Edita una memoria en ambas máquinas antes de que se comuniquen y se conserva en ambas la edición más reciente (incluida una corrección más corta).
 
-**Ganan las eliminaciones.** Si eliminas una memoria en una máquina y la editas en la otra al mismo tiempo, gana la eliminación y se pierde la edición. Es deliberado: "borré el token filtrado" tiene que cumplirse incluso cuando dos relojes no coinciden. Cuando quieras decir *cambié de opinión*, archívala: los archivos se fusionan sin perder nada.
+**Ganan las eliminaciones.** Si eliminas una memoria en una máquina y la editas en la otra al mismo tiempo, gana la eliminación y se pierde la edición. Es deliberado: "borré el token filtrado" tiene que cumplirse incluso cuando dos relojes no coinciden. Cuando quieras decir *cambié de opinión*, archívala: no se pierde nada, y `ygg unarchive` la devuelve en ambas máquinas (gana la decisión más reciente).
 
-**`ygg sync` (git) sigue ahí** y hace otro trabajo: máquinas que no se ven entre sí, un portátil de trabajo tras otra red, un repo desnudo en un USB que llevas encima. Usa `ygg link` para máquinas en una misma red, `ygg sync` para todo lo demás. Ambos comparten las mismas reglas de fusión, así que puedes usar los dos.
+**Un firewall se detecta al emparejar.** La máquina que mostró el código devuelve la llamada a la otra de inmediato; si no consigue llegar, `ygg link` lo indica y muestra el único comando que abre el puerto solo para esa máquina (ufw, firewalld, Windows). `ygg link --list` y `ygg doctor` siguen comprobando después: un par solo aparece con ✓ cuando las escrituras se confirman entregadas; si no, muestra el error y cuántos cambios están esperando. Una máquina que recibe una dirección nueva por DHCP se vuelve a encontrar en cuanto vuelve a contactar.
 
-**Si el código de emparejamiento muestra la dirección equivocada** (una VPN o un puente Thunderbolt pueden tener más prioridad que tu LAN real), fíjala: `ygg config set sync_host 192.168.3.152`.
+**`ygg sync` (git) sigue ahí** y hace otro trabajo: máquinas que no se ven entre sí, un portátil de trabajo tras otra red, un repo desnudo en un USB que llevas encima. Usa `ygg link` para máquinas en una misma red, `ygg sync` para todo lo demás. Ambos comparten las mismas reglas de fusión, así que puedes usar los dos. Si ambas máquinas están en una red Tailscale, `ygg link --tailscale` también funciona entre redes.
+
+**Si el código de emparejamiento muestra la dirección equivocada** (prefiere el Ethernet y el Wi-Fi reales frente a los puentes de VM y las VPN, pero aún puede equivocarse), fíjala: `ygg config set sync_host 192.168.3.152` — o muestra el código en la otra máquina: el lado que lo pega siempre usa la dirección por la que pasa realmente la ruta.
 
 </details>
 
@@ -309,6 +311,7 @@ Los agentes ven seis herramientas MCP: `ygg_health`, `ygg_bootstrap`, `ygg_searc
 | `ygg bootstrap --project P` | Carga la memoria de un proyecto antes de empezar a trabajar |
 | `ygg pin --id ID` · `ygg unpin --id ID` | Fija una memoria para que aflore de forma fiable |
 | `ygg supersede --id ID` | Archiva una memoria obsoleta que una más nueva reemplaza |
+| `ygg unarchive --id ID` | Devuelve una memoria archivada (también en las máquinas vinculadas) |
 | `ygg materialize --id ID --project P` | Exporta una memoria a una nota de Obsidian |
 | `ygg export-native --project P` | Escribe un resumen curado en `AGENTS.md`/`MEMORY.md` — alimenta la memoria nativa de Claude Code y Codex |
 | `ygg import --from TOOL --path P` | Migra el almacén de otra herramienta de memoria a Yggdrasil (`mcp-memory`, `basic-memory`; primero `--dry-run`) |

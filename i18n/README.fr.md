@@ -242,7 +242,7 @@ Il n'y a **aucun polling**. Yggdrasil est sollicité quelques fois par jour : le
 **Ce que ce n'est pas :** un cloud. Il n'y a ni relais, ni compte, ni serveur à nous sur le chemin. Les machines se parlent directement via votre propre réseau, en TLS avec le certificat de chacune épinglé, à l'aide d'une paire de clés qui n'existe que sur ces deux machines. Le code d'appairage lui-même nomme le certificat de la machine émettrice, donc même la toute première connexion est vérifiée — si quelqu'un d'autre sur le réseau répond à sa place, il est refusé avant que le secret du code ne soit envoyé. Rien n'ouvre de port réseau tant que vous n'avez pas lancé `ygg link` — installer Yggdrasil le laisse sur loopback, comme avant.
 
 ```text
-ygg link --list          # what's linked, and where
+ygg link --list          # what's linked, and whether writes are actually arriving
 ygg link --sync          # reconcile now, don't wait for a read
 ygg unlink <name>        # revoke that machine's key here
 ```
@@ -254,11 +254,13 @@ ygg unlink <name>        # revoke that machine's key here
 
 **La modification la plus récente gagne.** Modifiez une mémoire sur les deux machines avant qu'elles ne se parlent, et la modification la plus récente est conservée sur les deux (une correction plus courte incluse).
 
-**Les suppressions gagnent.** Si vous supprimez une mémoire sur une machine et la modifiez sur l'autre au même moment, la suppression l'emporte et la modification est perdue. C'est délibéré : « j'ai supprimé le jeton divulgué » doit rester vrai même lorsque deux horloges divergent. Quand vous voulez dire *j'ai changé d'avis*, archivez plutôt : les archives fusionnent sans rien perdre.
+**Les suppressions gagnent.** Si vous supprimez une mémoire sur une machine et la modifiez sur l'autre au même moment, la suppression l'emporte et la modification est perdue. C'est délibéré : « j'ai supprimé le jeton divulgué » doit rester vrai même lorsque deux horloges divergent. Quand vous voulez dire *j'ai changé d'avis*, archivez plutôt : rien n'est perdu, et `ygg unarchive` la restaure sur les deux machines (la décision la plus récente l'emporte).
 
-**`ygg sync` (git) est toujours là** et fait un autre travail : des machines qui ne se voient pas, un portable professionnel derrière un autre réseau, un dépôt nu sur une clé USB que vous transportez. Utilisez `ygg link` pour des machines sur un même réseau, `ygg sync` pour tout le reste. Les deux partagent les mêmes règles de fusion, vous pouvez donc utiliser les deux.
+**Un pare-feu est détecté à l'appairage.** La machine qui a affiché le code rappelle immédiatement l'autre ; si elle n'y arrive pas, `ygg link` le signale et affiche l'unique commande qui ouvre le port pour cette seule machine (ufw, firewalld, Windows). `ygg link --list` et `ygg doctor` continuent de vérifier ensuite : un pair n'affiche ✓ que lorsque les écritures sont confirmées livrées, sinon l'erreur et le nombre de modifications en attente. Une machine qui reçoit une nouvelle adresse par DHCP est retrouvée au prochain contact.
 
-**Si le code d'appairage affiche la mauvaise adresse** (un VPN ou un pont Thunderbolt peut passer devant votre vrai LAN), épinglez-la : `ygg config set sync_host 192.168.3.152`.
+**`ygg sync` (git) est toujours là** et fait un autre travail : des machines qui ne se voient pas, un portable professionnel derrière un autre réseau, un dépôt nu sur une clé USB que vous transportez. Utilisez `ygg link` pour des machines sur un même réseau, `ygg sync` pour tout le reste. Les deux partagent les mêmes règles de fusion, vous pouvez donc utiliser les deux. Si les deux machines sont sur un tailnet Tailscale, `ygg link --tailscale` fonctionne aussi d'un réseau à l'autre.
+
+**Si le code d'appairage affiche la mauvaise adresse** (il préfère l'Ethernet et le Wi-Fi réels aux ponts de VM et aux VPN, mais peut encore se tromper), épinglez-la : `ygg config set sync_host 192.168.3.152` — ou affichez le code sur l'autre machine : le côté qui le saisit utilise toujours l'adresse que suit réellement la route.
 
 </details>
 
@@ -309,6 +311,7 @@ Les agents voient six outils MCP : `ygg_health`, `ygg_bootstrap`, `ygg_search`, 
 | `ygg bootstrap --project P` | Charger la mémoire d'un projet avant de commencer le travail |
 | `ygg pin --id ID` · `ygg unpin --id ID` | Épingler une mémoire pour qu'elle remonte de façon fiable |
 | `ygg supersede --id ID` | Archiver une mémoire obsolète qu'une plus récente remplace |
+| `ygg unarchive --id ID` | Restaurer une mémoire archivée (y compris sur les machines liées) |
 | `ygg materialize --id ID --project P` | Exporter une mémoire vers une note Obsidian |
 | `ygg export-native --project P` | Écrire une synthèse triée dans `AGENTS.md`/`MEMORY.md` — alimenter la mémoire native de Claude Code et Codex |
 | `ygg import --from TOOL --path P` | Migrer le stock d'un autre outil de mémoire vers Yggdrasil (`mcp-memory`, `basic-memory` ; `--dry-run` d'abord) |

@@ -5,110 +5,38 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
-### Added
-- `ygg link` checks both directions at pairing: the issuing machine calls the
-  new peer back, and a blocked port is reported immediately with the one
-  command that opens it to that peer (ufw, firewalld, Windows, macOS).
-- `ygg link --list` and `ygg doctor` show per-peer health — last confirmed
-  delivery, the error since, and how many changes are waiting. ✓ only once
-  delivery is confirmed.
-- Peers follow each other to new addresses: every authenticated request says
-  where its sender listens, so a DHCP change heals on the next contact.
-- One listener per interface a peer is reached on (LAN and Tailscale at once);
-  `ygg link --tailscale` / `--host` put a chosen address in the code.
-### Security
-- **Pairing codes now name the issuing machine's certificate.** The first
-  connection of `ygg link` used to trust whatever certificate answered, so a
-  machine on the network path could intercept pairing and join both sides as a
-  peer. The code now ends in `.<fingerprint>`, and the secret is sent only once
-  the certificate matches. Codes from a build without it are refused over TLS.
-- A peer stored without a pinned certificate is refused instead of trusted.
-- The sync listener does the TLS handshake per connection with a timeout; one
-  idle TCP connection used to freeze it for every peer.
-- Request bodies on the sync listener are capped (64 KB on the unauthenticated
-  `/sync/pair`); responses from peers are capped too.
-- Peer timestamps from the future are clamped to five minutes ahead of the
-  local clock, so a skewed box can no longer win every field forever or leave
-  tombstones that never expire.
-- `peers.json` is created `0600` instead of chmodded after writing; the sync
-  key is minted under a `077` umask; concurrent redeems of one code can no
-  longer both succeed; a pairing with an empty or borrowed node id is refused.
-- HTTP MCP facade: constant-time token check, and `Host`/`Origin` are now
-  validated in every mode with `Content-Type: application/json` required —
-  a web page could previously POST to it in open mode. Behind a tunnel, set
-  `YGG_MCP_ALLOWED_HOSTS` to the public hostname (see docs/cross-surface.md).
-- Recalled memory is injected as framed reference notes — not instructions —
-  with its source and an explicit marker for other projects.
-- Transcripts are redacted (Stripe, npm, Hugging Face, Bearer, `.env`-style
-  keys, private key blocks, long hex/base64 blobs) before they reach the
-  distill model, and the write-path secret guard uses the wider patterns.
-
-### Fixed
-- Archiving was not reversible across machines: `archived` merged by OR, so a
-  restored memory was archived again by the next reconcile. The archive
-  decision now carries its own stamp — the later archive/restore wins, an
-  unrelated edit elsewhere never undoes an archive, and records from before
-  the stamp keep the old OR. New `ygg unarchive --id`. Restores need 0.16 on
-  both machines.
-- `ygg review` rounded similarity up (0.9697 showed as 0.970 beside the
-  >= 0.97 auto-archive rule); it now rounds down.
-- `ygg link` advertised a VM bridge or VPN address on machines running OrbStack,
-  Docker or a VPN, so the other machine could never push back. The address now
-  comes from the route to the peer; when printing a code, real Ethernet/Wi-Fi
-  interfaces outrank bridges and tunnels.
-- A peer that was offline over TLS killed the background sender; live push
-  stayed dead until the daemon restarted.
-- An edit made while the previous version of the same memory was in flight
-  was dropped by that flight's ack.
-- Delivery is tracked per peer: one sleeping machine no longer stalls the
-  queue for the others, and a backlog past one batch now drains.
-- A newer edit wins a merge even when it is shorter — corrections used to be
-  reverted by every peer still holding the wordier copy. Equal stamps still
-  prefer the longer text.
-- Merge tie-breaks no longer depend on argument order for values of different
-  types (`1` vs `"1"`).
-- A namespace or user change from a peer is written instead of being reported
-  as different on every reconcile.
-- A local delete landing during an incoming merge is no longer undone.
-- `ygg sync` (git) honours deletes: tombstones travel in `tombstones.json`,
-  deleted memories are removed from the repo and are not re-imported.
-- MCP tools called without a required argument now say which one
-  (`missing required argument: project`) instead of returning `'project'`.
-- `ygg review` called a store "clean" while it held reworded duplicates: it read
-  only the first 1000 memories and matched on opening words. It now reviews the
-  whole store and groups memories by embedding similarity within a project,
-  across types (new engine route `POST /near_duplicates`, `--threshold`,
-  default 0.95), showing the score and each record's type. `--apply --yes`
-  archives unattended only exact duplicates and single-type groups at ≥ 0.97;
-  groups mixing types always wait for a human.
-
-## [0.16.0] — 2026-08-20 — one memory across your machines
+## [0.16.0] — one memory across your machines
 
 ### Added
-- **`ygg link` — two of your machines, one memory.** Pair them once with a
-  one-time code; after that a memory written on one is on the other in about a
-  second, and `ygg delete` removes it from both. Direct machine-to-machine over
-  your own network — TLS with the certificate pinned at pairing, a key pair that
-  exists only on those two machines, no relay and no account. Nothing listens
-  beyond loopback until you run it. Also `ygg link --list` and `ygg unlink <name>`.
-- A machine that was off catches up by itself when it comes back; reads never
-  wait for the network, and idle machines send nothing.
-- When both machines run the same embedding model the vector travels with the
-  memory, so a compute box can do the embedding for a laptop.
+- **`ygg link` — two of your machines, one memory.** Pair once with a one-time
+  code; a memory written on one is on the other in about a second, and deletes
+  and archives follow. Direct over your own network: TLS with the certificate
+  named in the code itself, per-pair keys, no relay, no account. Nothing listens
+  beyond loopback until you run it. `ygg link --list` · `ygg unlink <name>`.
+- `ygg link --list` and `ygg doctor` show whether writes actually arrive. A
+  blocked port is caught at pairing, with the one command that opens it.
+  Machines on different networks can link with `ygg link --tailscale`.
+- `ygg review` checks the whole store and finds reworded duplicates by meaning
+  (`--threshold`); `--apply --yes` consolidates only the near-identical ones.
+- `ygg unarchive --id` brings an archived memory back, on linked machines too.
 
 ### Changed
-- **Hard deletes now propagate.** Previously `ygg delete` on one machine was
-  quietly undone by the next sync from a machine that still had the record.
-- `ygg sync` and `ygg link` now share one merge policy, and it no longer depends
-  on which machine is running it — two machines merging the same edit from
-  opposite directions reach the same result. Equal-length edits used to resolve
-  to whichever copy was local, so the two never converged.
+- Deletes propagate through `ygg sync` (git) too; before, the next sync from a
+  machine that still had the record brought it back.
+- `ygg sync` and `ygg link` share one merge policy: the newer edit wins, and
+  two machines always converge.
+- Recalled memory reaches the agent as reference notes with their source, never
+  as instructions.
+- Transcripts are scrubbed of more secret formats (Stripe, npm, Hugging Face,
+  Bearer, `.env` keys, private keys) before distillation.
+- **HTTP MCP behind a tunnel:** set `YGG_MCP_ALLOWED_HOSTS` to the public
+  hostname or requests get 403 ([docs/cross-surface.md](docs/cross-surface.md)).
+- MCP tools called without a required argument name the missing one.
 - The database migrates itself on first start. Nothing to run.
 
 ### Note
-- A delete racing an edit on the other machine resolves to the delete, even if
-  the edit looks newer — clock drift must not resurrect something you deleted.
-  When you mean "changed my mind", archive instead: archives merge losslessly.
+- Both machines need 0.16 to link. A delete racing an edit on the other machine
+  resolves to the delete; when you mean "changed my mind", archive instead.
 
 ## [0.15.0] — 2026-08-06 — distillation that stays on task
 

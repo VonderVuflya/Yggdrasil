@@ -233,7 +233,7 @@ Es gibt **kein Polling**. Yggdrasil wird ein paar Mal am Tag aufgerufen, also we
 **Was das nicht ist:** eine Cloud. Es gibt kein Relay, kein Konto, keinen Server von uns im Pfad. Die Maschinen sprechen direkt über dein eigenes Netzwerk miteinander, per TLS mit dem gepinnten Zertifikat der jeweils anderen, mit einem Schlüsselpaar, das nur auf diesen beiden Maschinen existiert. Der Pairing-Code selbst nennt das Zertifikat der ausstellenden Maschine, sodass sogar die allererste Verbindung verifiziert wird — antwortet etwas anderes im Netzwerk an ihrer Stelle, wird es abgewiesen, bevor das Geheimnis des Codes gesendet wird. Ein Netzwerkport wird erst gebunden, wenn du `ygg link` ausführst — Yggdrasil zu installieren heißt, dass es wie bisher auf Loopback bleibt.
 
 ```text
-ygg link --list          # what's linked, and where
+ygg link --list          # what's linked, and whether writes are actually arriving
 ygg link --sync          # reconcile now, don't wait for a read
 ygg unlink <name>        # revoke that machine's key here
 ```
@@ -245,11 +245,13 @@ ygg unlink <name>        # revoke that machine's key here
 
 **Die neuere Bearbeitung gewinnt.** Bearbeitest du eine Erinnerung auf beiden Maschinen, bevor sie miteinander sprechen, wird die jüngere Bearbeitung auf beiden behalten (auch eine kürzere Korrektur).
 
-**Löschungen gewinnen.** Löschst du eine Erinnerung auf einer Maschine und bearbeitest sie gleichzeitig auf der anderen, gewinnt die Löschung und die Bearbeitung geht verloren. Das ist bewusst: „Ich habe das geleakte Token gelöscht“ muss auch dann gelten, wenn zwei Uhren nicht übereinstimmen. Wenn du *meine Meinung hat sich geändert* meinst, archiviere stattdessen — Archive lassen sich zusammenführen, ohne dass etwas verloren geht.
+**Löschungen gewinnen.** Löschst du eine Erinnerung auf einer Maschine und bearbeitest sie gleichzeitig auf der anderen, gewinnt die Löschung und die Bearbeitung geht verloren. Das ist bewusst: „Ich habe das geleakte Token gelöscht“ muss auch dann gelten, wenn zwei Uhren nicht übereinstimmen. Wenn du *meine Meinung hat sich geändert* meinst, archiviere stattdessen — nichts geht verloren, und `ygg unarchive` holt sie auf beiden Maschinen zurück (die spätere Entscheidung gewinnt).
 
-**`ygg sync` (Git) gibt es weiterhin** und erledigt eine andere Aufgabe: Maschinen, die einander nicht sehen, ein Arbeitslaptop hinter einem anderen Netzwerk, ein Bare-Repo auf einem USB-Stick, den du mit dir trägst. Nutze `ygg link` für Maschinen im selben Netzwerk, `ygg sync` für alles andere. Beide nutzen dieselben Merge-Regeln, du kannst also beide einsetzen.
+**Eine Firewall wird beim Pairing erkannt.** Die Maschine, die den Code ausgibt, ruft die andere sofort zurück; kommt sie nicht durch, meldet `ygg link` das und gibt den einen Befehl aus, der den Port nur für diese Maschine öffnet (ufw, firewalld, Windows). `ygg link --list` und `ygg doctor` prüfen danach weiter: Ein Peer zeigt ✓ erst, wenn Schreibvorgänge bestätigt zugestellt sind, andernfalls den Fehler und wie viele Änderungen warten. Eine Maschine, die per DHCP eine neue Adresse bekommt, wird beim nächsten Kontakt wiedergefunden.
 
-**Wenn der Pairing-Code die falsche Adresse zeigt** (ein VPN oder eine Thunderbolt-Bridge kann dein echtes LAN überstimmen), fixiere sie: `ygg config set sync_host 192.168.3.152`.
+**`ygg sync` (Git) gibt es weiterhin** und erledigt eine andere Aufgabe: Maschinen, die einander nicht sehen, ein Arbeitslaptop hinter einem anderen Netzwerk, ein Bare-Repo auf einem USB-Stick, den du mit dir trägst. Nutze `ygg link` für Maschinen im selben Netzwerk, `ygg sync` für alles andere. Beide nutzen dieselben Merge-Regeln, du kannst also beide einsetzen. Wenn beide Maschinen in einem Tailscale-Tailnet sind, funktioniert `ygg link --tailscale` auch netzübergreifend.
+
+**Wenn der Pairing-Code die falsche Adresse zeigt** (er bevorzugt echtes Ethernet und WLAN gegenüber VM-Bridges und VPNs, kann aber trotzdem danebenliegen), fixiere sie: `ygg config set sync_host 192.168.3.152` — oder lass den Code auf der anderen Maschine anzeigen: Die Seite, die ihn eingibt, nutzt immer die Adresse, über die die Route tatsächlich läuft.
 
 </details>
 
@@ -300,6 +302,7 @@ Agents sehen sechs MCP-Tools: `ygg_health`, `ygg_bootstrap`, `ygg_search`, `ygg_
 | `ygg bootstrap --project P` | Das Gedächtnis eines Projekts laden, bevor die Arbeit beginnt |
 | `ygg pin --id ID` · `ygg unpin --id ID` | Eine Erinnerung anpinnen, damit sie zuverlässig erscheint |
 | `ygg supersede --id ID` | Eine veraltete Erinnerung archivieren, die von einer neueren ersetzt wird |
+| `ygg unarchive --id ID` | Eine archivierte Erinnerung zurückholen (auch auf verbundenen Maschinen) |
 | `ygg materialize --id ID --project P` | Eine Erinnerung als Obsidian-Notiz exportieren |
 | `ygg export-native --project P` | Einen kuratierten Digest nach `AGENTS.md`/`MEMORY.md` schreiben — natives Gedächtnis von Claude Code und Codex damit versorgen |
 | `ygg import --from TOOL --path P` | Den Speicher eines anderen Memory-Tools nach Yggdrasil migrieren (`mcp-memory`, `basic-memory`; zuerst `--dry-run`) |
