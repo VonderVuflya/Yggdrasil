@@ -48,7 +48,8 @@ class UplinkRetryTest(unittest.TestCase):
             uplink.RETRY_SECONDS = 0.05
             uplink.start_if_paired(store)
             self.assertIsNone(uplink.node)
-            self.assertTrue(uplink.error)
+            self.assertIn(f"port {port} is already in use", uplink.error)
+            self.assertIn("retrying", uplink.error)
             squatter.close()
             deadline = time.time() + 5
             while uplink.node is None and time.time() < deadline:

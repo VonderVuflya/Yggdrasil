@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import array
 import base64
+import errno
 import hashlib
 import hmac
 import itertools
@@ -1826,6 +1827,34 @@ def _peer_hosts() -> list[str]:
     return [h for h in (urlparse(p.get("url") or "").hostname for p in peers) if h]
 
 
+_ADDR_IN_USE = {errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", errno.EADDRINUSE)}
+
+
+def _port_holder(port: int) -> str | None:
+    """`name (pid N)` of whoever listens on `port`, when lsof can tell; else None."""
+    try:
+        out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pid = name = None
+    for line in out.splitlines():
+        if line[:1] == "p" and pid is None:
+            pid = line[1:]
+        elif line[:1] == "c" and name is None:
+            name = line[1:]
+    return f"{name or 'a process'} (pid {pid})" if pid else None
+
+
+def _port_busy(port: int, *, retrying: bool) -> str:
+    """`Address already in use` says nothing about who, or what happens next."""
+    holder = _port_holder(port)
+    msg = f"port {port} is already in use" + (f" by {holder}" if holder else "")
+    if retrying:
+        msg += f" — retrying every {_Uplink.RETRY_SECONDS:.0f}s"
+    return msg + f"; free it, or move sync: ygg config set sync_port <port>"
+
+
 class _Uplink:
     """Lazily-started holder for the peer-sync node.
 
@@ -1853,6 +1882,7 @@ class _Uplink:
         if self.node is not None:
             return self.node
         node = None
+        port = int(_cfg.resolve("sync_port", None) or 42070)
         try:
             try:
                 from . import ygg_sync_node as _node
@@ -1863,13 +1893,15 @@ class _Uplink:
             hosts = [pinned] if pinned else _listen_addresses(_peer_hosts())
             node = _node.SyncNode(
                 store, home=home, name=name or socket.gethostname().split(".")[0],
-                host=hosts[0], port=int(_cfg.resolve("sync_port", None) or 42070),
+                host=hosts[0], port=port,
                 insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"),
                 host_pinned=bool(pinned), extra_hosts=hosts[1:])
             node.start()
             node.start_sender()
         except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
             self.error = str(exc)
+            if isinstance(exc, OSError) and exc.errno in _ADDR_IN_USE:
+                self.error = _port_busy(port, retrying=self._retrying)
             if node is not None:  # release whatever did bind, or the retry never can
                 try:
                     node.stop()
@@ -1886,6 +1918,9 @@ class _Uplink:
             import ygg_sync_peers as _p
         if _p.load()["peers"] and self.ensure(store) is None:
             self._retry_later(store)
+            if self.error and self.error.startswith("port "):
+                self.error = _port_busy(int(_cfg.resolve("sync_port", None) or 42070),
+                                        retrying=True)
 
     def _retry_later(self, store) -> None:
         if self._retrying:
