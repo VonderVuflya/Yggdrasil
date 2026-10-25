@@ -273,6 +273,21 @@ class ReviewSemanticTest(unittest.TestCase):
         self.assertIn("0.99", out)                 # similarity is shown
         self.assertNotIn("memory is clean", out)
 
+    def test_plain_review_on_a_terminal_only_reports(self):
+        a, b = _pair(0.99)
+        _insert(self.srv.store, a, project="t", created=1.0, content="tty one")
+        dup = _insert(self.srv.store, b, project="t", created=2.0, content="tty two")
+        tty = io.StringIO()
+        tty.isatty = lambda: True
+        args = argparse.Namespace(user_id="u", namespace="n", project=None, apply=False,
+                                  yes=False, limit=None, threshold=0.95)
+        with contextlib.redirect_stdout(io.StringIO()) as out, \
+                mock.patch.object(sys, "stdin", tty), \
+                mock.patch("builtins.input", side_effect=AssertionError("prompted")):
+            ygg.review(args)
+        self.assertIn("ygg review --apply", out.getvalue())
+        self.assertFalse(self._archived(dup))
+
     def test_apply_yes_archives_only_high_similarity_groups(self):
         lo_a, lo_b = _pair(0.955)
         hi_a, hi_b = _pair(0.98)

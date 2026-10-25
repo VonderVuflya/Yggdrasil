@@ -771,8 +771,10 @@ def review(args: argparse.Namespace) -> None:
               + (f" (project {args.project})" if args.project else ""))
         return
 
-    interactive = sys.stdin.isatty() and not args.yes
-    if not args.apply and not interactive:
+    # Only --apply acts; without it review is a report even on a terminal (it used
+    # to start asking [k]eep/[s]kip, which the help never promised).
+    interactive = args.apply and sys.stdin.isatty() and not args.yes
+    if not args.apply:
         for i, issue in enumerate(issues, 1):
             _print_issue(i, len(issues), issue)
         print(f"\n{len(issues)} issue(s). Act on them: `ygg review --apply` (interactive) "
