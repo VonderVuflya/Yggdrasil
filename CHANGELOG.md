@@ -5,9 +5,22 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-10-25
+
 ### Fixed
+- `ygg unrelate` now reaches your other machines; before, the next sync put the
+  link back. New links travel right away too, not with the next memory change.
 - A sync port still busy when the daemon starts is retried every 15s; before,
-  the machine stayed unreachable for its peers until the next restart.
+  the machine stayed unreachable until a restart. `ygg link --list` names the
+  process holding the port.
+- `ygg review` without `--apply` only lists issues, even in a terminal; it used
+  to start asking keep/skip.
+- A distill model that is not loaded or not supported now says so, instead of
+  "model returned malformed JSON".
+
+### Note
+- Upgrade both machines: a 0.16.0 machine keeps links you removed elsewhere
+  until it is on 0.16.1.
 
 ## [0.16.0] — 2026-10-22 — one memory across your machines
 
