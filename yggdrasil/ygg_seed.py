@@ -517,7 +517,22 @@ _TRUNCATED_MSG = ("model output truncated (ran out of output tokens) — nothing
 
 # base URL -> API dialect that worked ("generate" | "chat" | "openai"), so the
 # fallback probing is paid once per endpoint, not once per file.
-_ENDPOINT_CACHE: dict[str, str] = {}
+_ENDPOINT_CACHE: dict[str, tuple[str, bool]] = {}
+
+
+class _UnsupportedEndpoint(ValueError):
+    """Some OpenAI-compatible servers report unsupported routes with HTTP 200."""
+
+
+def _check_api_error(data: dict) -> None:
+    error = data.get("error")
+    if not error:
+        return
+    message = error.get("message") if isinstance(error, dict) else str(error)
+    message = str(message or "unknown API error")
+    if "unexpected endpoint or method" in message.lower():
+        raise _UnsupportedEndpoint(message)
+    raise ValueError(f"distill endpoint: {message}")
 
 
 # How long a STREAMING generation may go silent (no token) before we treat the
@@ -549,6 +564,13 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
                 continue
             if mode == "openai":
                 if not line.startswith(b"data:"):
+                    # LM Studio can return a JSON error body even with HTTP 200
+                    # and stream=True. It is an API failure, not empty output.
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    _check_api_error(obj)
                     continue
                 payload = line[5:].strip()
                 if payload == b"[DONE]":
@@ -557,6 +579,7 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
                     obj = json.loads(payload)
                 except ValueError:
                     continue
+                _check_api_error(obj)
                 ch = (obj.get("choices") or [{}])[0]
                 parts.append((ch.get("delta") or {}).get("content") or "")
                 if ch.get("finish_reason"):
@@ -566,6 +589,7 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
                     obj = json.loads(line)
                 except ValueError:
                     continue
+                _check_api_error(obj)
                 if mode == "ollama_generate":
                     parts.append(obj.get("response") or "")
                 else:
@@ -621,6 +645,7 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
         return (f"{root}/v1/chat/completions", "openai", body)
 
     def extract(mode: str, data: dict) -> tuple[str, str | None]:
+        _check_api_error(data)
         if mode == "ollama_generate":
             return data.get("response", ""), data.get("done_reason")
         if mode == "ollama_chat":
@@ -655,6 +680,8 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
             if _strip_fences(out):  # only cache a combo that actually produced text
                 _ENDPOINT_CACHE[OLLAMA_URL] = (kind, stream)
                 return _strip_fences(out)
+        except _UnsupportedEndpoint:
+            continue
         except urllib.error.HTTPError as exc:
             if exc.code == 404:  # dialect not implemented here — try the next
                 last_404 = exc
@@ -676,9 +703,12 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
                     if _strip_fences(out):
                         _ENDPOINT_CACHE[OLLAMA_URL] = (kind, stream)
                         return _strip_fences(out)
-                except urllib.error.HTTPError:
-                    pass  # not the reasoning field's fault — fall through below
-                continue
+                except _UnsupportedEndpoint:
+                    continue
+                except urllib.error.HTTPError as retry_exc:
+                    exc = retry_exc
+                else:
+                    continue
             if exc.code in (401, 403):
                 # Name the cause. A hosted endpoint answers the probe with a bare
                 # 401, which says nothing about the missing key — and the two
@@ -690,7 +720,17 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
                     f"  ygg config set distill_api_key <key>   (or export YGG_DISTILL_API_KEY)\n"
                     f"Local Ollama / llama.cpp need no key — check `ygg config get distill_url`."
                 ) from exc
-            raise
+            # Preserve the actual cause (missing/unloaded model, context too
+            # small, etc.) instead of retrying every dialect and reporting bad JSON.
+            try:
+                data = json.loads(exc.read(65536))
+            except (ValueError, OSError):
+                raise exc
+            try:
+                _check_api_error(data)
+            except _UnsupportedEndpoint:
+                continue
+            raise exc
     if last_404:
         raise last_404
     return ""  # every attempt returned empty -> caller retries, then errors
