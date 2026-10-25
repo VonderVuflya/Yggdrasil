@@ -192,3 +192,20 @@ class TombstoneTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EdgeRuleTest(unittest.TestCase):
+    def test_an_unlink_beats_the_link_it_saw(self):
+        self.assertFalse(merge.edge_survives(100.0, 150.0))
+
+    def test_a_link_made_after_the_unlink_wins(self):
+        self.assertTrue(merge.edge_survives(200.0, 150.0))
+
+    def test_a_tie_goes_to_the_unlink(self):
+        self.assertFalse(merge.edge_survives(150.0, 150.0))
+
+    def test_an_unstamped_link_never_beats_an_unlink(self):
+        self.assertFalse(merge.edge_survives(None, 1.0))
+
+    def test_no_unlink_means_the_edge_stands(self):
+        self.assertTrue(merge.edge_survives(None, None))

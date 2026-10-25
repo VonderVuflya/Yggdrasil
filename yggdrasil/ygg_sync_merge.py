@@ -26,6 +26,10 @@ Field rules, in the spirit of archive-never-delete:
   - metadata_json       union of keys; `pinned` is OR'd
   - everything else     the value from the more recently updated record
 
+Relation edges: an edge lives while its newest link is later than its newest
+unlink (see edge_survives); both stamps only ever grow, so arrival order never
+matters.
+
 Ties are broken by value, not by side: picking "local" on a tie is exactly the
 asymmetry that keeps two machines apart.
 """
@@ -178,3 +182,19 @@ def expired_tombstones(tombstones: dict[str, float], *, now: float) -> list[str]
     tests) get a stable order."""
     return sorted(mid for mid, deleted_at in tombstones.items()
                   if (now - float(deleted_at)) >= TOMBSTONE_TTL)
+
+
+def edge_key(from_id: str, to_id: str, rel_type: str) -> str:
+    """One string per edge, for the outbox and for test assertions."""
+    return f"{from_id}|{to_id}|{(rel_type or '').upper()}"
+
+
+def edge_survives(created_at: float | None, deleted_at: float | None) -> bool:
+    """Whether an edge stands against an unlink of it.
+
+    An unlink beats every link it could have seen; a link made after it wins.
+    Equal stamps go to the unlink, as a delete racing an edit does. A link with
+    no stamp (a 0.16.0 peer sends none) never beats an unlink.
+    """
+    return deleted_at is None or float(created_at or 0.0) > float(deleted_at)
+

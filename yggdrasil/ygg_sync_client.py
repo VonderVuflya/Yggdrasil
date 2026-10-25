@@ -140,10 +140,13 @@ class PeerClient:
 
     def push(self, *, memories: list[dict[str, Any]] | None = None,
              tombstones: dict[str, float] | None = None,
-             relations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        return self._ok("POST", "/sync/push", {"memories": memories or [],
-                                               "tombstones": tombstones or {},
-                                               "relations": relations or []})
+             relations: list[dict[str, Any]] | None = None,
+             relation_tombstones: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        body: dict[str, Any] = {"memories": memories or [], "tombstones": tombstones or {},
+                                "relations": relations or []}
+        if relation_tombstones:  # 0.16.0 peers ignore it; omitted when empty all the same
+            body["relation_tombstones"] = relation_tombstones
+        return self._ok("POST", "/sync/push", body)
 
     def pair(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Redeem a pairing code. The pin is not known yet — the one-time secret

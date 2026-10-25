@@ -352,6 +352,69 @@ class ArchiveTest(Pair):
             self.assertEqual(json.loads(row["metadata_json"])["status"], "active")
 
 
+class RelationTest(Pair):
+    """Edges used to sync as a plain union: an unlink stayed on the machine that
+    made it, and the next reconcile from the peer put the edge back."""
+
+    def _edges(self, store):
+        return {(e["from_id"], e["to_id"], e["rel_type"]) for e in store.sync_edges()["relations"]}
+
+    def _linked_pair(self):
+        x = self.add(self.a_store, "the fix")["id"]
+        y = self.add(self.a_store, "the problem")["id"]
+        self.a.flush_outbox()
+        self.a_store.relate(from_id=x, to_id=y, rel_type="SOLVES", user_id="local")
+        self.a.flush_outbox()
+        return x, y
+
+    def test_a_new_edge_travels_with_the_outbox(self):
+        x, y = self._linked_pair()
+        self.assertIn((x, y, "SOLVES"), self._edges(self.b_store))
+
+    def test_an_unlink_reaches_the_peer_and_survives_reconcile(self):
+        x, y = self._linked_pair()
+        self.assertTrue(self.a_store.unrelate(from_id=x, to_id=y, rel_type="SOLVES"))
+        self.a.flush_outbox()
+        self.assertNotIn((x, y, "SOLVES"), self._edges(self.b_store))
+        self.add(self.b_store, "anything, so the reconcile has something to push")
+        self.assertConverged()
+        for store in (self.a_store, self.b_store):
+            self.assertNotIn((x, y, "SOLVES"), self._edges(store))
+
+    def test_linking_again_after_an_unlink_wins(self):
+        x, y = self._linked_pair()
+        self.a_store.unrelate(from_id=x, to_id=y, rel_type="SOLVES")
+        self.a.flush_outbox()
+        time.sleep(0.01)
+        self.b_store.relate(from_id=x, to_id=y, rel_type="SOLVES", user_id="local")
+        self.b.flush_outbox()
+        for store in (self.a_store, self.b_store):
+            self.assertIn((x, y, "SOLVES"), self._edges(store))
+
+    def test_an_unstamped_edge_from_an_old_peer_does_not_come_back(self):
+        x, y = self._linked_pair()
+        self.a_store.unrelate(from_id=x, to_id=y, rel_type="SOLVES")
+        # what a 0.16.0 peer that never heard of the unlink sends
+        self.a_store.apply_remote(relations=[{"from_id": x, "to_id": y, "rel_type": "SOLVES",
+                                              "user_id": "local", "source": "sync"}])
+        self.assertNotIn((x, y, "SOLVES"), self._edges(self.a_store))
+
+    def test_order_of_arrival_does_not_matter(self):
+        x, y = self._linked_pair()
+        edge = dict(next(iter(self.a_store.sync_edges()["relations"])))
+        unlink = {"from_id": x, "to_id": y, "rel_type": "SOLVES",
+                  "deleted_at": edge["created_at"] + 1}
+        relink = dict(edge, created_at=edge["created_at"] + 2)
+        for store, order in ((self.a_store, ("u", "r")), (self.b_store, ("r", "u"))):
+            for step in order:
+                if step == "u":
+                    store.apply_remote(relation_tombstones=[unlink])
+                else:
+                    store.apply_remote(relations=[relink])
+        self.assertEqual(self.a_store.sync_edges(), self.b_store.sync_edges())
+        self.assertIn((x, y, "SOLVES"), self._edges(self.a_store))
+
+
 class PushTest(Pair):
     def test_a_write_reaches_the_peer(self):
         rec = self.add(self.a_store, "the deploy needs the migration first")
