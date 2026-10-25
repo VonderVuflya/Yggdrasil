@@ -1909,7 +1909,15 @@ def _peer_hosts() -> list[str]:
     return [h for h in (urlparse(p.get("url") or "").hostname for p in peers) if h]
 
 
-_ADDR_IN_USE = {errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", errno.EADDRINUSE)}
+# Windows reports a port another socket holds as WSAEADDRINUSE (10048) or, when
+# that socket is exclusive, WSAEACCES (10013). Elsewhere EACCES means a
+# privileged port, not a busy one, so it stays out.
+_ADDR_IN_USE = {errno.EADDRINUSE} | ({10048, 10013} if os.name == "nt" else set())
+
+
+def _addr_in_use(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and (
+        exc.errno in _ADDR_IN_USE or getattr(exc, "winerror", None) in _ADDR_IN_USE)
 
 
 def _port_holder(port: int) -> str | None:
@@ -1982,7 +1990,7 @@ class _Uplink:
             node.start_sender()
         except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
             self.error = str(exc)
-            if isinstance(exc, OSError) and exc.errno in _ADDR_IN_USE:
+            if _addr_in_use(exc):
                 self.error = _port_busy(port, retrying=self._retrying)
             if node is not None:  # release whatever did bind, or the retry never can
                 try:
