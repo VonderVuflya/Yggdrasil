@@ -31,6 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -517,7 +518,22 @@ _TRUNCATED_MSG = ("model output truncated (ran out of output tokens) — nothing
 
 # base URL -> API dialect that worked ("generate" | "chat" | "openai"), so the
 # fallback probing is paid once per endpoint, not once per file.
-_ENDPOINT_CACHE: dict[str, str] = {}
+_ENDPOINT_CACHE: dict[str, tuple[str, bool]] = {}
+
+
+class _UnsupportedEndpoint(ValueError):
+    """Some OpenAI-compatible servers report unsupported routes with HTTP 200."""
+
+
+def _check_api_error(data: dict) -> None:
+    error = data.get("error")
+    if not error:
+        return
+    message = error.get("message") if isinstance(error, dict) else str(error)
+    message = str(message or "unknown API error")
+    if "unexpected endpoint or method" in message.lower():
+        raise _UnsupportedEndpoint(message)
+    raise ValueError(f"distill endpoint: {message}")
 
 
 # How long a STREAMING generation may go silent (no token) before we treat the
@@ -549,6 +565,13 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
                 continue
             if mode == "openai":
                 if not line.startswith(b"data:"):
+                    # LM Studio can return a JSON error body even with HTTP 200
+                    # and stream=True. It is an API failure, not empty output.
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    _check_api_error(obj)
                     continue
                 payload = line[5:].strip()
                 if payload == b"[DONE]":
@@ -557,6 +580,7 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
                     obj = json.loads(payload)
                 except ValueError:
                     continue
+                _check_api_error(obj)
                 ch = (obj.get("choices") or [{}])[0]
                 parts.append((ch.get("delta") or {}).get("content") or "")
                 if ch.get("finish_reason"):
@@ -566,6 +590,7 @@ def _stream_collect(url: str, body: dict, mode: str, idle: int, total: int) -> t
                     obj = json.loads(line)
                 except ValueError:
                     continue
+                _check_api_error(obj)
                 if mode == "ollama_generate":
                     parts.append(obj.get("response") or "")
                 else:
@@ -621,6 +646,7 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
         return (f"{root}/v1/chat/completions", "openai", body)
 
     def extract(mode: str, data: dict) -> tuple[str, str | None]:
+        _check_api_error(data)
         if mode == "ollama_generate":
             return data.get("response", ""), data.get("done_reason")
         if mode == "ollama_chat":
@@ -655,6 +681,8 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
             if _strip_fences(out):  # only cache a combo that actually produced text
                 _ENDPOINT_CACHE[OLLAMA_URL] = (kind, stream)
                 return _strip_fences(out)
+        except _UnsupportedEndpoint:
+            continue
         except urllib.error.HTTPError as exc:
             if exc.code == 404:  # dialect not implemented here — try the next
                 last_404 = exc
@@ -676,9 +704,12 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
                     if _strip_fences(out):
                         _ENDPOINT_CACHE[OLLAMA_URL] = (kind, stream)
                         return _strip_fences(out)
-                except urllib.error.HTTPError:
-                    pass  # not the reasoning field's fault — fall through below
-                continue
+                except _UnsupportedEndpoint:
+                    continue
+                except urllib.error.HTTPError as retry_exc:
+                    exc = retry_exc
+                else:
+                    continue
             if exc.code in (401, 403):
                 # Name the cause. A hosted endpoint answers the probe with a bare
                 # 401, which says nothing about the missing key — and the two
@@ -690,7 +721,17 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
                     f"  ygg config set distill_api_key <key>   (or export YGG_DISTILL_API_KEY)\n"
                     f"Local Ollama / llama.cpp need no key — check `ygg config get distill_url`."
                 ) from exc
-            raise
+            # Preserve the actual cause (missing/unloaded model, context too
+            # small, etc.) instead of retrying every dialect and reporting bad JSON.
+            try:
+                data = json.loads(exc.read(65536))
+            except (ValueError, OSError):
+                raise exc
+            try:
+                _check_api_error(data)
+            except _UnsupportedEndpoint:
+                continue
+            raise exc
     if last_404:
         raise last_404
     return ""  # every attempt returned empty -> caller retries, then errors
@@ -781,6 +822,137 @@ def _extract_text(path: Path) -> str:
     return "\n".join(out)
 
 
+class _EndpointUnavailable(RuntimeError):
+    """A transport failure affects the entire batch, not an individual file."""
+
+
+
+def _ping_endpoint() -> None:
+    """Probe the model API without loading a model or generating tokens."""
+    root = OLLAMA_URL.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    for route in ("/v1/models", "/api/tags"):
+        try:
+            with urllib.request.urlopen(root + route, timeout=3) as response:
+                payload = json.load(response)
+            if isinstance(payload, dict) and ("data" in payload or "models" in payload):
+                return
+            raise ValueError("Unexpected model API response")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+    raise ValueError("No supported model API found")
+
+
+def _endpoint_is_local() -> bool:
+    host = urllib.parse.urlsplit(OLLAMA_URL).hostname
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        # Binding succeeds only for an address owned by this machine, including
+        # its LAN IP (not just addresses returned for the hostname).
+        for family, kind, proto, _, address in socket.getaddrinfo(host, 0, type=socket.SOCK_STREAM):
+            try:
+                with socket.socket(family, kind, proto) as probe:
+                    probe.bind(address)
+                return True
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return False
+
+
+def _installed_model_servers() -> list[tuple[str, list[str]]]:
+    servers = []
+    lms = shutil.which("lms")
+    if not lms:
+        candidate = HOME / ".lmstudio" / "bin" / ("lms.exe" if os.name == "nt" else "lms")
+        if candidate.is_file():
+            lms = str(candidate)
+    if lms:
+        port = urllib.parse.urlsplit(OLLAMA_URL).port or 1234
+        servers.append(("LM Studio", [lms, "server", "start", "--port", str(port)]))
+    ollama = shutil.which("ollama")
+    if ollama:
+        servers.append(("Ollama", [ollama, "serve"]))
+    return servers
+
+
+def _ensure_endpoint() -> None:
+    try:
+        _ping_endpoint()
+        return
+    except (OSError, ValueError) as exc:
+        failure = exc
+    if not sys.stdin.isatty() or not _endpoint_is_local():
+        raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
+    servers = _installed_model_servers()
+    if not servers:
+        print("Model server is unavailable. LM Studio / Ollama CLI was not found.", file=sys.stderr)
+        raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
+    port = urllib.parse.urlsplit(OLLAMA_URL).port
+    preferred = "Ollama" if port == 11434 else "LM Studio" if port == 1234 else None
+    matches = [server for server in servers if server[0] == preferred]
+    if matches:
+        name, command = matches[0]
+    elif len(servers) == 1:
+        name, command = servers[0]
+    else:
+        try:
+            choice = input("Server unavailable. Start 1) LM Studio or 2) Ollama? [1/2, Enter to cancel]: ").strip()
+        except EOFError:
+            choice = ""
+        if choice not in ("1", "2"):
+            raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
+        name, command = servers[int(choice) - 1]
+    try:
+        answer = input(f"{name} is installed but its API at {OLLAMA_URL} is unavailable. Start it? [y/N]: ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
+    env = os.environ.copy()
+    if name == "Ollama":
+        address = urllib.parse.urlsplit(OLLAMA_URL)
+        env["OLLAMA_HOST"] = address.netloc
+    try:
+        subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError as exc:
+        raise _EndpointUnavailable(_endpoint_failure(exc)) from exc
+    print(f"Waiting for {name} API (up to 30 seconds)…", flush=True)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            _ping_endpoint()
+            print(f"{name} is responding. Starting distillation.")
+            return
+        except (OSError, ValueError) as exc:
+            failure = exc
+        time.sleep(1)
+    raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
+
+
+def _endpoint_failure(exc: BaseException) -> str:
+    return (
+        f"Cannot connect to the distill server at {OLLAMA_URL}: {exc}\n"
+        "Seed stopped; completed work is saved and unfinished files remain pending.\n"
+        "How to fix:\n"
+        "  1. Start the model server on that machine: enable the server in LM Studio,\n"
+        "     or run `ollama serve` for Ollama. Load the configured background model.\n"
+        "  2. For a LAN server, enable listening on the LAN interface and check the\n"
+        "     host, port and firewall. A localhost-only listener cannot accept LAN requests.\n"
+        "  3. Check the configured address:  ygg config get distill_url\n"
+        "     Correct it if needed:  ygg config set distill_url http://HOST:PORT\n"
+        "     Also check --ollama-url and YGG_DISTILL_URL / YGG_EMBED_URL overrides.\n"
+        "  4. Diagnose:  ygg doctor\n"
+        "     Then retry:  ygg seed --yes"
+    )
+
+
 def distill_text(text: str, *, project: str, source: str, model: str,
                  user_id: str, namespace: str) -> dict[str, int]:
     text = text.strip()
@@ -800,6 +972,10 @@ def distill_text(text: str, *, project: str, source: str, model: str,
             return {"added": 0, "dup": 0, "errors": 1, "timed_out": False}
     except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
         timed_out = _is_timeout(exc)
+        if not timed_out and (isinstance(exc, ConnectionError) or
+                              isinstance(exc, urllib.error.URLError) and
+                              not isinstance(exc, urllib.error.HTTPError)):
+            raise _EndpointUnavailable(_endpoint_failure(exc)) from exc
         why = ("timed out (file too big / model slow — raise --timeout)" if timed_out
                else f"model call failed ({exc}); will retry on the next `ygg seed`")
         print(f"    distill skipped {project}: {why}", file=sys.stderr)
@@ -1009,11 +1185,13 @@ class _Progress:
             sys.stdout.write("\r\033[K")
             sys.stdout.flush()
 
-    def summary(self, *, interrupted: bool = False, up_to_date: tuple[int, int] = (0, 0)) -> None:
+    def summary(self, *, interrupted: bool = False, failed: bool = False,
+                up_to_date: tuple[int, int] = (0, 0)) -> None:
         self.close()
         el = time.time() - self.start
         rate = self.done / (el / 60) if el > 0 else 0.0
-        head = self.c.yellow("⚠ interrupted") if interrupted else self.c.green("✓ done")
+        head = (self.c.yellow("⚠ stopped: model server unavailable") if failed else
+                self.c.yellow("⚠ interrupted") if interrupted else self.c.green("✓ done"))
         print(f"\n🌳 {self.c.bold('Yggdrasil seed')} — {head}")
         print(f"   distilled : {self.c.bold(str(self.done))}/{self.total} files "
               f"{self.c.dim(f'({rate:.1f}/min)')}")
@@ -1059,6 +1237,8 @@ def distill_source(src: dict[str, Any], *, model: str, user_id: str, namespace: 
         try:
             res = distill_text(_extract_text(f), project=project, source=f"seed:{src['kind']}",
                                model=model, user_id=user_id, namespace=namespace)
+        except _EndpointUnavailable:
+            raise
         except Exception as exc:  # noqa: BLE001 — one bad file must never abort the source
             (progress.log if progress else lambda m: print(m, file=sys.stderr))(f"    skipped {f.name}: {exc}")
             res = {"added": 0, "dup": 0, "errors": 1, "timed_out": _is_timeout(exc)}
@@ -1332,8 +1512,16 @@ def seed(args: argparse.Namespace) -> int:
         except EOFError:
             return 0
 
+    try:
+        _ensure_endpoint()
+    except _EndpointUnavailable as exc:
+        _save_seed_state(state)
+        print(str(exc), file=sys.stderr)
+        return 1
+
     progress = _Progress(len(new_files), db_path=str(YGG_HOME / "data" / "memory.sqlite"))
     interrupted = False
+    endpoint_error = None
     up_to_date_projects = up_to_date_files = 0  # projects that had nothing new to do
     try:
         for s in sources:
@@ -1343,14 +1531,22 @@ def seed(args: argparse.Namespace) -> int:
                 if not (agg["added"] or agg["errors"] or agg["timed_out"]) and agg["skipped"]:
                     up_to_date_projects += 1
                     up_to_date_files += agg["skipped"]
+            except _EndpointUnavailable:
+                raise
             except Exception as exc:  # noqa: BLE001 — one bad source must never abort the seed
                 progress.log(f"  skipped {s.get('project')}: {exc}")
             _save_seed_state(state)  # persist progress after each source (crash-safe)
+    except _EndpointUnavailable as exc:
+        endpoint_error = exc
+        _save_seed_state(state)
     except KeyboardInterrupt:  # Ctrl-C: stop cleanly and still show the summary
         interrupted = True
         _save_seed_state(state)
-    progress.summary(interrupted=interrupted,
+    progress.summary(interrupted=interrupted, failed=endpoint_error is not None,
                      up_to_date=(up_to_date_projects, up_to_date_files))
+    if endpoint_error is not None:
+        print(f"\n{endpoint_error}", file=sys.stderr)
+        return 1
     _release_model(model)
     if progress.timed_out:
         n = progress.timed_out
@@ -1381,20 +1577,27 @@ def distill_cmd(args: argparse.Namespace) -> int:
     model = args.model or _bg_model()
     project = args.project or path.name
     state = _load_seed_state()  # explicit distill still records state, so `seed` skips it later
-    if path.is_file():
-        res = distill_text(_extract_text(path), project=project, source="distill",
-                           model=model, user_id=args.user_id, namespace=args.namespace)
-        try:
-            st = path.stat()
-            state[str(path)] = {"mtime": st.st_mtime, "size": st.st_size, "distilled_at": time.time()}
-        except OSError:
-            pass
-    else:
-        kind = "claude" if (path / "memory").is_dir() or list(path.glob("*.jsonl")) else "obsidian"
-        res = distill_source({"kind": kind, "path": str(path), "project": project,
-                              "bytes": 0, "files": 0}, model=model,
-                             user_id=args.user_id, namespace=args.namespace,
-                             project_override=project, state=state, force=True)
+    try:
+        _ensure_endpoint()
+        if path.is_file():
+            res = distill_text(_extract_text(path), project=project, source="distill",
+                               model=model, user_id=args.user_id, namespace=args.namespace)
+            if not res.get("errors"):
+                try:
+                    st = path.stat()
+                    state[str(path)] = {"mtime": st.st_mtime, "size": st.st_size, "distilled_at": time.time()}
+                except OSError:
+                    pass
+        else:
+            kind = "claude" if (path / "memory").is_dir() or list(path.glob("*.jsonl")) else "obsidian"
+            res = distill_source({"kind": kind, "path": str(path), "project": project,
+                                  "bytes": 0, "files": 0}, model=model,
+                                 user_id=args.user_id, namespace=args.namespace,
+                                 project_override=project, state=state, force=True)
+    except _EndpointUnavailable as exc:
+        _save_seed_state(state)
+        print(str(exc), file=sys.stderr)
+        return 1
     _save_seed_state(state)
     print(f"distilled: +{res['added']} new, {res['dup']} dup, {res['errors']} error(s)")
     return 0
