@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import array
 import base64
+import errno
 import hashlib
 import hmac
 import itertools
@@ -458,6 +459,19 @@ class MemoryStore:
                 id         TEXT PRIMARY KEY,
                 deleted_at REAL NOT NULL,
                 origin     TEXT
+            )
+            """
+        )
+        # An unlinked edge has to travel too, or the peer that still has it puts
+        # it back on the next reconcile. Keyed by the edge; the stamp only grows.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relation_tombstones (
+                from_id    TEXT NOT NULL,
+                to_id      TEXT NOT NULL,
+                rel_type   TEXT NOT NULL,
+                deleted_at REAL NOT NULL,
+                PRIMARY KEY (from_id, to_id, rel_type)
             )
             """
         )
@@ -1016,9 +1030,15 @@ class MemoryStore:
     REL_TYPES = ("SOLVES", "SUPERSEDES", "CONTRADICTS")
 
     def relate(self, *, from_id: str, to_id: str, rel_type: str,
-               user_id: str, source: str | None = None) -> dict[str, Any]:
+               user_id: str, source: str | None = None,
+               stamp: float | None = None, remote: bool = False) -> dict[str, Any]:
         """Create one edge. Idempotent (UNIQUE); SUPERSEDES archives the target —
-        the edge records WHY it left the active set. Raises ValueError on bad input."""
+        the edge records WHY it left the active set. Raises ValueError on bad input.
+
+        `remote` marks an edge arriving from a peer (or a git import): `stamp` is
+        its creation time there (None from a 0.16.0 peer), it must beat any
+        unlink of the edge to land (ygg_sync_merge.edge_survives), and it is not
+        queued back towards the peers."""
         rel = (rel_type or "").upper()
         if rel not in self.REL_TYPES:
             raise ValueError(f"unknown rel_type {rel_type!r}: use one of {', '.join(self.REL_TYPES)}")
@@ -1030,23 +1050,69 @@ class MemoryStore:
             missing = {from_id, to_id} - found
             if missing:
                 raise ValueError(f"memory not found: {', '.join(sorted(missing))}")
+            when = float(stamp or 0.0) if remote else time.time()
+            buried = self._conn.execute(
+                "SELECT deleted_at FROM relation_tombstones WHERE from_id=? AND to_id=? AND rel_type=?",
+                (from_id, to_id, rel)).fetchone()
+            if buried is not None and not _merge.edge_survives(when, buried["deleted_at"]):
+                return {"from_id": from_id, "to_id": to_id, "rel_type": rel, "created": False}
             with self._conn:
                 cur = self._conn.execute(
                     "INSERT OR IGNORE INTO relations (from_id, to_id, rel_type, user_id, source, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (from_id, to_id, rel, user_id, source, time.time()))
+                    (from_id, to_id, rel, user_id, source, when or time.time()))
                 created = cur.rowcount > 0
+                if not created and remote and when:  # the newest link is what an unlink must beat
+                    self._conn.execute(
+                        "UPDATE relations SET created_at=MAX(created_at, ?) "
+                        "WHERE from_id=? AND to_id=? AND rel_type=?", (when, from_id, to_id, rel))
+                if created and not remote:
+                    self._enqueue_locked("relation", _merge.edge_key(from_id, to_id, rel))
                 if rel == "SUPERSEDES":
                     self._conn.execute(
                         "UPDATE memories SET archived=1 WHERE id=? AND archived=0", (to_id,))
         return {"from_id": from_id, "to_id": to_id, "rel_type": rel, "created": created}
 
     def unrelate(self, *, from_id: str, to_id: str, rel_type: str) -> bool:
+        rel = (rel_type or "").upper()
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "DELETE FROM relations WHERE from_id=? AND to_id=? AND rel_type=?",
-                (from_id, to_id, (rel_type or "").upper()))
+                (from_id, to_id, rel))
+            if cur.rowcount > 0:
+                self._bury_edge_locked(from_id, to_id, rel, time.time())
+                self._enqueue_locked("relation", _merge.edge_key(from_id, to_id, rel))
         return cur.rowcount > 0
+
+    def _bury_edge_locked(self, from_id: str, to_id: str, rel: str, deleted_at: float) -> None:
+        """Record an unlink and drop any copy of the edge it beats. The stamp only
+        grows: the newest unlink is the one a later link has to outrun."""
+        self._conn.execute(
+            "INSERT INTO relation_tombstones (from_id, to_id, rel_type, deleted_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(from_id, to_id, rel_type) DO UPDATE "
+            "SET deleted_at=MAX(relation_tombstones.deleted_at, excluded.deleted_at)",
+            (from_id, to_id, rel, float(deleted_at)))
+        self._conn.execute(
+            "DELETE FROM relations WHERE from_id=? AND to_id=? AND rel_type=? AND created_at<=?",
+            (from_id, to_id, rel, float(deleted_at)))
+
+    def sync_edges(self, keys: list[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Edges WITH their stamps, plus unlinks — what the live uplink ships.
+        `keys` (ygg_sync_merge.edge_key) narrows it to what the outbox names.
+        Kept apart from sync_export so the git format does not change."""
+        want = set(keys) if keys is not None else None
+        with self._lock:
+            edges = [dict(r) for r in self._conn.execute(
+                "SELECT from_id, to_id, rel_type, user_id, source, created_at FROM relations "
+                "ORDER BY from_id, to_id, rel_type")]
+            buried = [dict(r) for r in self._conn.execute(
+                "SELECT from_id, to_id, rel_type, deleted_at FROM relation_tombstones "
+                "ORDER BY from_id, to_id, rel_type")]
+        if want is not None:
+            key = lambda e: _merge.edge_key(e["from_id"], e["to_id"], e["rel_type"])  # noqa: E731
+            edges = [e for e in edges if key(e) in want]
+            buried = [b for b in buried if key(b) in want]
+        return {"relations": edges, "relation_tombstones": buried}
 
     def relations_for(self, memory_id: str) -> dict[str, list[dict[str, Any]]]:
         """Both directions, each edge carrying the other end's content preview —
@@ -1123,6 +1189,9 @@ class MemoryStore:
         record. Returns how many were collected."""
         now = time.time() if now is None else now
         dead = _merge.expired_tombstones(self.tombstones(), now=now)
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM relation_tombstones WHERE deleted_at <= ?",
+                               (now - _merge.TOMBSTONE_TTL,))
         if not dead:
             return 0
         with self._lock, self._conn:
@@ -1219,6 +1288,7 @@ class MemoryStore:
     def apply_remote(self, *, memories: list[dict[str, Any]] | None = None,
                      tombstones: dict[str, float] | None = None,
                      relations: list[dict[str, Any]] | None = None,
+                     relation_tombstones: list[dict[str, Any]] | None = None,
                      now: float | None = None) -> dict[str, int]:
         """Import what a peer sent us: delete what they deleted, merge the rest.
 
@@ -1231,6 +1301,15 @@ class MemoryStore:
         # recency-resolved field forever, and a tombstone from the future would
         # never expire. Bound both by what our own clock finds plausible.
         incoming = {str(k): _merge.clamp_stamp(v, now=now) for k, v in (tombstones or {}).items()}
+        unlinks = [u for u in (relation_tombstones or []) if isinstance(u, dict)
+                   and u.get("from_id") and u.get("to_id") and u.get("rel_type")
+                   and isinstance(u.get("deleted_at"), (int, float))]
+        if unlinks:
+            with self._lock, self._conn:
+                for u in unlinks:
+                    self._bury_edge_locked(str(u["from_id"]), str(u["to_id"]),
+                                           str(u["rel_type"]).upper(),
+                                           _merge.clamp_stamp(u["deleted_at"], now=now))
         deleted = 0
         if incoming:
             with self._lock, self._conn:
@@ -1281,7 +1360,8 @@ class MemoryStore:
         if vectors:
             with self._lock, self._conn:
                 stored = self._accept_vectors_locked(vectors)
-        counts.update({"deleted": deleted, "blocked": blocked, "vectors": stored})
+        counts.update({"deleted": deleted, "blocked": blocked, "vectors": stored,
+                       "unlinked": len(unlinks)})
         return counts
 
     # ------------------------------------------------------------------ #
@@ -1386,11 +1466,14 @@ class MemoryStore:
         for rel in relations or []:
             try:
                 rel_uid, _ = rebrand_legacy_identity(rel.get("user_id"), _cfg.DEMO_NAMESPACE)
+                stamp = rel.get("created_at")
                 r = self.relate(from_id=str(rel.get("from_id") or ""),
                                 to_id=str(rel.get("to_id") or ""),
                                 rel_type=str(rel.get("rel_type") or ""),
                                 user_id=str(rel_uid or "global_user"),
-                                source=rel.get("source") or "sync")
+                                source=rel.get("source") or "sync", remote=True,
+                                stamp=_merge.clamp_stamp(stamp, now=time.time())
+                                if isinstance(stamp, (int, float)) else None)
                 rel_added += 1 if r["created"] else 0
             except ValueError:
                 rel_skipped += 1
@@ -1826,6 +1909,42 @@ def _peer_hosts() -> list[str]:
     return [h for h in (urlparse(p.get("url") or "").hostname for p in peers) if h]
 
 
+# Windows reports a port another socket holds as WSAEADDRINUSE (10048) or, when
+# that socket is exclusive, WSAEACCES (10013). Elsewhere EACCES means a
+# privileged port, not a busy one, so it stays out.
+_ADDR_IN_USE = {errno.EADDRINUSE} | ({10048, 10013} if os.name == "nt" else set())
+
+
+def _addr_in_use(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and (
+        exc.errno in _ADDR_IN_USE or getattr(exc, "winerror", None) in _ADDR_IN_USE)
+
+
+def _port_holder(port: int) -> str | None:
+    """`name (pid N)` of whoever listens on `port`, when lsof can tell; else None."""
+    try:
+        out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pid = name = None
+    for line in out.splitlines():
+        if line[:1] == "p" and pid is None:
+            pid = line[1:]
+        elif line[:1] == "c" and name is None:
+            name = line[1:]
+    return f"{name or 'a process'} (pid {pid})" if pid else None
+
+
+def _port_busy(port: int, *, retrying: bool) -> str:
+    """`Address already in use` says nothing about who, or what happens next."""
+    holder = _port_holder(port)
+    msg = f"port {port} is already in use" + (f" by {holder}" if holder else "")
+    if retrying:
+        msg += f" — retrying every {_Uplink.RETRY_SECONDS:.0f}s"
+    return msg + f"; free it, or move sync: ygg config set sync_port <port>"
+
+
 class _Uplink:
     """Lazily-started holder for the peer-sync node.
 
@@ -1835,13 +1954,25 @@ class _Uplink:
     every subsequent boot only if peers.json already has someone in it.
     """
 
+    # A port still held at boot (the old daemon shutting down, another engine on
+    # 42070) used to leave the machine unreachable until the next restart.
+    RETRY_SECONDS = 15.0
+
     def __init__(self) -> None:
         self.node = None
         self.error: str | None = None
+        self._lock = threading.Lock()  # boot retry vs `ygg link` racing to bind
+        self._retrying = False
 
     def ensure(self, store, *, name: str | None = None):
+        with self._lock:
+            return self._ensure(store, name=name)
+
+    def _ensure(self, store, *, name: str | None):
         if self.node is not None:
             return self.node
+        node = None
+        port = int(_cfg.resolve("sync_port", None) or 42070)
         try:
             try:
                 from . import ygg_sync_node as _node
@@ -1852,15 +1983,22 @@ class _Uplink:
             hosts = [pinned] if pinned else _listen_addresses(_peer_hosts())
             node = _node.SyncNode(
                 store, home=home, name=name or socket.gethostname().split(".")[0],
-                host=hosts[0], port=int(_cfg.resolve("sync_port", None) or 42070),
+                host=hosts[0], port=port,
                 insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"),
                 host_pinned=bool(pinned), extra_hosts=hosts[1:])
             node.start()
             node.start_sender()
         except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
             self.error = str(exc)
+            if _addr_in_use(exc):
+                self.error = _port_busy(port, retrying=self._retrying)
+            if node is not None:  # release whatever did bind, or the retry never can
+                try:
+                    node.stop()
+                except Exception:  # noqa: BLE001
+                    pass
             return None
-        self.node = node
+        self.node, self.error = node, None
         return node
 
     def start_if_paired(self, store) -> None:
@@ -1868,8 +2006,24 @@ class _Uplink:
             from . import ygg_sync_peers as _p
         except ImportError:  # flat layout
             import ygg_sync_peers as _p
-        if _p.load()["peers"]:
-            self.ensure(store)
+        if _p.load()["peers"] and self.ensure(store) is None:
+            self._retry_later(store)
+            if self.error and self.error.startswith("port "):
+                self.error = _port_busy(int(_cfg.resolve("sync_port", None) or 42070),
+                                        retrying=True)
+
+    def _retry_later(self, store) -> None:
+        if self._retrying:
+            return
+        self._retrying = True
+
+        def loop() -> None:
+            while self.node is None:
+                time.sleep(self.RETRY_SECONDS)
+                self.ensure(store)
+            self._retrying = False
+
+        threading.Thread(target=loop, name="ygg-sync-retry", daemon=True).start()
 
     def trigger(self) -> None:
         """Called from read routes. Never blocks and never raises: a peer that is

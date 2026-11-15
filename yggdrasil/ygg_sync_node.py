@@ -430,7 +430,8 @@ class SyncNode:
         return self.store.apply_remote(
             memories=body.get("memories") or [],
             tombstones=body.get("tombstones") or {},
-            relations=body.get("relations") or [])
+            relations=body.get("relations") or [],
+            relation_tombstones=body.get("relation_tombstones") or [])
 
     def accept_pairing(self, body: dict[str, Any]) -> dict[str, Any]:
         """Redeem a code and record the caller as a peer.
@@ -624,14 +625,18 @@ class SyncNode:
                 return sent
             memory_ids = [r["ref_id"] for r in rows if r["kind"] == "memory"]
             tombstone_ids = {r["ref_id"] for r in rows if r["kind"] == "tombstone"}
+            edge_keys = [r["ref_id"] for r in rows if r["kind"] == "relation"]
             graveyard = self.store.tombstones() if tombstone_ids else {}
             memories = self._with_vectors(self.store.records_by_ids(memory_ids))
             tombs = {mid: graveyard[mid] for mid in tombstone_ids if mid in graveyard}
-            if memories or tombs:
-                client.push(memories=memories, tombstones=tombs)
+            edges = self.store.sync_edges(edge_keys) if edge_keys else {}
+            links, unlinks = edges.get("relations") or [], edges.get("relation_tombstones") or []
+            if memories or tombs or links or unlinks:
+                client.push(memories=memories, tombstones=tombs,
+                            relations=links, relation_tombstones=unlinks)
                 self._mark_ok(peer)
             peer["outbox_hwm"] = rows[-1]["seq"]
-            sent += len(memories) + len(tombs)
+            sent += len(memories) + len(tombs) + len(links) + len(unlinks)
 
     def reconcile(self, *, force: bool = False) -> dict[str, Any]:
         """Digest exchange and repair. Skipped while a recent one still holds,
@@ -718,12 +723,13 @@ class SyncNode:
             # Relations ride along whole: there are few of them in a personal
             # store, the upsert is idempotent, and giving edges their own digest
             # would double the protocol for no measured gain.
-            edges = self.store.sync_export()["relations"] if outgoing else []
+            edges = self.store.sync_edges() if outgoing else {}
             payload = self._with_vectors(outgoing)
             for i in range(0, max(len(payload), 1), PUSH_BATCH):
                 client.push(memories=payload[i:i + PUSH_BATCH],
                             tombstones=tombs if i == 0 else {},
-                            relations=edges if i == 0 else [])
+                            relations=edges.get("relations", []) if i == 0 else [],
+                            relation_tombstones=edges.get("relation_tombstones", []) if i == 0 else [])
         return f"{peer.get('name')}: {plan.summary()}"
 
 
