@@ -14,28 +14,17 @@ anything.
 
 ## Writing the release notes
 
-A CHANGELOG reader is deciding one thing: **do I upgrade, and does anything
-change for me?** They are not reviewing the fix. The mechanism belongs in the
-commit — git is right there for anyone who wants it, and duplicating it here is
-what turned single releases into 60-line essays nobody reads.
+Use the short, user-facing format from [T3 Code releases](https://github.com/pingdotgg/t3code/releases):
 
-- **One line per change.** Two only if there's a real caveat.
-- **Say what the user sees**, not how it works. "Arrow keys no longer quit the
-  wizard", not "sys.stdin is a TextIOWrapper, so read(1) buffers…".
-- **Say what to do**, when there's something to do — reinstall, re-run `ygg
-  redeploy`, rotate a key. This is the part long notes forget: it's possible to
-  explain a bug in seven lines and never tell anyone how to get the fix.
-- **Name the blast radius** for anything breaking, and nothing else.
-- **A themed title** (`## [0.12.0] — date — bring your own engine`) is for
-  releases with a story. Patches just get the version and date.
+- Lead each bullet with a short **bold label**, then one plain sentence saying what changed for the user.
+- Put the most useful features first, followed by fixes. Keep a minor release under 15 lines; a patch usually needs 2–5 bullets.
+- Explain actions users need to take, such as upgrading both linked machines or running `ygg redeploy`.
+- Leave implementation details, test logs and the debugging story in commits and local reports.
+- Link a full changelog when useful; do not repeat the commit list or invent a count of additional fixes.
+- Describe only changes present since the last published release. A dated draft section is not proof that a version shipped.
 
-Rule of thumb: a patch is 2–5 lines, a minor is under 15. If it's longer, it's
-a commit message that wandered into the wrong file.
-
-Write new sections under `## [Unreleased]` and let `release.sh` date them —
-**dating a section is not the same as shipping it**. Twice now, notes were
-written into a version's section before that version went out, so the published
-release claimed changes it didn't contain.
+Write upcoming changes under `## [Unreleased]`. When cutting a release, move them to
+`## [X.Y.Z] — YYYY-MM-DD`; the date is the publication date.
 
 The version lives in **ten** files, not the three this page used to list:
 

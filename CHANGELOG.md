@@ -5,22 +5,17 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
-## [0.16.1] — 2026-10-25
+## [0.17.0] — 2026-11-16
 
-### Fixed
-- `ygg unrelate` now reaches your other machines; before, the next sync put the
-  link back. New links travel right away too, not with the next memory change.
-- A sync port still busy when the daemon starts is retried every 15s; before,
-  the machine stayed unreachable until a restart. `ygg link --list` names the
-  process holding the port.
-- `ygg review` without `--apply` only lists issues, even in a terminal; it used
-  to start asking keep/skip.
-- A distill model that is not loaded or not supported now says so, instead of
-  "model returned malformed JSON".
+- **Checks before distillation.** `ygg seed` and `ygg distill` check the connection, model server and configured models before processing files.
+- **Missing-model wizard.** Choose an available model with the arrow keys and press Enter to save it. Distillation continues with the selected generation model.
+- **Local server startup.** Seed offers to start LM Studio or Ollama when the local server is stopped.
+- **Clearer model errors.** Connection failures, missing models and API errors show their actual cause instead of blaming slow generation or malformed JSON.
+- **Read-only review.** `ygg review` lists findings; changes require `--apply`.
+- **Reliable relation sync.** Added and removed memory relations reach linked machines and stay in sync.
+- **Busy-port recovery.** Sync retries a busy port automatically and shows which process is using it, including on Windows.
 
-### Note
-- Upgrade both machines: a 0.16.0 machine keeps links you removed elsewhere
-  until it is on 0.16.1.
+Update with `ygg update` on both linked machines. After changing an embedding model, run `ygg redeploy` before retrying seed.
 
 ## [0.16.0] — 2026-10-22 — one memory across your machines
 
