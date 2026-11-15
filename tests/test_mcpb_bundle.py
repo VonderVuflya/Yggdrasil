@@ -32,7 +32,7 @@ import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'server'))
 import ygg_mcp_server as mcp
-assert 'usage:' in mcp.run_ygg(['stats', '--help'])
+assert 'usage:' in mcp.run_ygg(['health', '--help'])
 assert mcp._server_version() == json.loads((root / 'manifest.json').read_text())['version']
 '''
             env = dict(os.environ, YGG_HOME=str(root / 'isolated-home'))
