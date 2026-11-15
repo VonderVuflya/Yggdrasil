@@ -171,6 +171,7 @@ fi
 step "Build (sdist/wheel + .mcpb + skill zip)"
 run rm -rf dist
 run uv build
+run cp LICENSE clients/npm/LICENSE
 run bash packaging/mcpb/build.sh
 # build the uploadable skill zip (gitignored — built fresh each release)
 run bash -c 'cd skills && rm -f yggdrasil-memory.zip && zip -q -r -X yggdrasil-memory.zip yggdrasil-memory'
