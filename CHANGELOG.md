@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Format loosely follows
 - **Missing-model wizard.** Choose an available model with the arrow keys and press Enter to save it. Distillation continues with the selected generation model.
 - **Local server startup.** Seed offers to start LM Studio or Ollama when the local server is stopped.
 - **Clearer model errors.** Connection failures, missing models and API errors show their actual cause instead of blaming slow generation or malformed JSON.
+- **Claude Desktop bundle.** Fixed missing-module errors when using the downloaded extension.
 - **Read-only review.** `ygg review` lists findings; changes require `--apply`.
 - **Reliable relation sync.** Added and removed memory relations reach linked machines and stay in sync.
 - **Busy-port recovery.** Sync retries a busy port automatically and shows which process is using it, including on Windows.
