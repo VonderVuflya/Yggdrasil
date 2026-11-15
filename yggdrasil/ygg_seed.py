@@ -697,8 +697,10 @@ def _ollama_generate(model: str, prompt: str, timeout: int | None = None) -> str
 
 
 def _is_timeout(exc: BaseException) -> bool:
-    """True if this distill failure was a timeout (file too big for the limit),
-    not a hang — so we can advise raising YGG_DISTILL_TIMEOUT and retry the file."""
+    """Detect timeouts without inferring their cause or which limit expired.
+
+    Connection, response-idle and total-deadline failures can all arrive here.
+    """
     if isinstance(exc, (socket.timeout, TimeoutError)):
         return True
     if isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError)):
@@ -790,6 +792,7 @@ def distill_text(text: str, *, project: str, source: str, model: str,
         return {"added": 0, "dup": 0, "errors": 0, "timed_out": False}
     text = text[-MAX_CHARS_PER_FILE:]  # keep the most recent window
     prompt = DISTILL_PROMPT.replace("{LANG}", _lang_directive(text)).replace("{TEXT}", text)
+    started = time.monotonic()
     try:
         lessons = _lessons_from_raw(_ollama_generate(model, prompt))
         # Unparseable output → retry ONCE (these models are non-deterministic;
@@ -802,7 +805,10 @@ def distill_text(text: str, *, project: str, source: str, model: str,
             return {"added": 0, "dup": 0, "errors": 1, "timed_out": False}
     except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
         timed_out = _is_timeout(exc)
-        why = ("timed out (file too big / model slow — raise --timeout)" if timed_out
+        elapsed = time.monotonic() - started
+        why = (f"model request timed out after {elapsed:.1f}s ({str(exc) or 'timeout'}); "
+               "check server availability and connectivity — a connection or response-idle "
+               "timeout can occur before the generation limit" if timed_out
                else f"model call failed ({exc}); will retry on the next `ygg seed`")
         print(f"    distill skipped {project}: {why}", file=sys.stderr)
         return {"added": 0, "dup": 0, "errors": 1, "timed_out": timed_out}
@@ -1363,9 +1369,12 @@ def seed(args: argparse.Namespace) -> int:
             flags.append(f"--ollama-url {OLLAMA_URL}")
         if getattr(args, "model", None):
             flags.append(f"--model {args.model}")
-        print(f"\n⏱ {n} file(s) timed out at {DISTILL_TIMEOUT}s — they're large, not stuck "
-              "(the local model just needs longer on big sessions).")
-        print("  They were NOT marked done, so a re-run retries only them. Raise the limit:")
+        print(f"\n⏱ {n} file(s) had model request timeouts.")
+        print("  They were NOT marked done and remain pending for the next run.")
+        print(f"  Check server availability and connectivity to {OLLAMA_URL} first.")
+        print(f"  The configured generation limit is {DISTILL_TIMEOUT}s; connection or "
+              "response-idle timeouts can occur sooner.")
+        print("  If the server is reachable and generation needs longer, raise the limit:")
         print(f"    ygg seed {' '.join(flags)}")
         print(f"  Or make it permanent:  ygg config set distill_timeout {higher}")
     print("Check it:  ygg stats   ·   retrieve:  ygg recall --query \"…\"")
