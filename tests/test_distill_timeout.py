@@ -99,6 +99,7 @@ class DistillTimeoutContractTest(unittest.TestCase):
                     patch.object(s, "_load_seed_state", return_value=state), \
                     patch.object(s, "_save_seed_state"), \
                     patch.object(s, "_release_model"), \
+                    patch.object(s, "_ensure_endpoint"), \
                     patch.object(s, "_scale_hint", return_value=None), \
                     patch.object(s, "_ollama_generate", side_effect=TimeoutError("timed out")), \
                     patch.object(s, "DISTILL_TIMEOUT", 300), \
