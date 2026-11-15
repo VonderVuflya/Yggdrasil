@@ -38,9 +38,15 @@ from typing import Any
 try:  # package + flat-layout (deployed scripts dir) imports
     from . import ygg as _ygg
     from . import ygg_config as _cfg
+    from . import ygg_preflight as _preflight
+    from . import ygg_prompt as _prompt
+    from . import ygg_providers as _providers
 except ImportError:  # pragma: no cover
     import ygg as _ygg
     import ygg_config as _cfg
+    import ygg_preflight as _preflight
+    import ygg_prompt as _prompt
+    import ygg_providers as _providers
 
 HOME = Path.home()
 YGG_HOME = Path(os.environ.get("YGG_HOME", str(HOME / ".yggdrasil")))
@@ -829,22 +835,9 @@ class _EndpointUnavailable(RuntimeError):
 
 
 
-def _ping_endpoint() -> None:
-    """Probe the model API without loading a model or generating tokens."""
-    root = OLLAMA_URL.rstrip("/")
-    if root.endswith("/v1"):
-        root = root[:-3]
-    for route in ("/v1/models", "/api/tags"):
-        try:
-            with urllib.request.urlopen(root + route, timeout=3) as response:
-                payload = json.load(response)
-            if isinstance(payload, dict) and ("data" in payload or "models" in payload):
-                return
-            raise ValueError("Unexpected model API response")
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
-                raise
-    raise ValueError("No supported model API found")
+def _ping_endpoint() -> _preflight.ModelInventory:
+    """Check transport and list models without generating tokens."""
+    return _preflight.probe_endpoint(OLLAMA_URL, api_key=_cfg.resolve("distill_api_key"))
 
 
 def _endpoint_is_local() -> bool:
@@ -882,12 +875,13 @@ def _installed_model_servers() -> list[tuple[str, list[str]]]:
     return servers
 
 
-def _ensure_endpoint() -> None:
+def _ensure_distill_server() -> _preflight.ModelInventory:
     try:
-        _ping_endpoint()
-        return
+        return _ping_endpoint()
     except (OSError, ValueError) as exc:
         failure = exc
+    if isinstance(failure, _preflight.PreflightError) and failure.stage != "connection":
+        raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
     if not sys.stdin.isatty() or not _endpoint_is_local():
         raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
     servers = _installed_model_servers()
@@ -929,13 +923,88 @@ def _ensure_endpoint() -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
-            _ping_endpoint()
-            print(f"{name} is responding. Starting distillation.")
-            return
+            inventory = _ping_endpoint()
+            print(f"{name} API is responding.")
+            return inventory
         except (OSError, ValueError) as exc:
             failure = exc
         time.sleep(1)
     raise _EndpointUnavailable(_endpoint_failure(failure)) from failure
+
+
+def _choose_available_model(inventory: _preflight.ModelInventory, model: str,
+                            setting: str) -> str:
+    try:
+        _preflight.require_model(inventory, model, setting)
+        return model
+    except _preflight.PreflightError as exc:
+        if not _prompt.interactive():
+            raise
+        missing = exc
+    role = "embed" if setting == "embed_model" else "llm"
+    kinds = inventory.kinds or tuple(_providers.classify(mid) for mid in inventory.models)
+    choices = [mid for mid, kind in zip(inventory.models, kinds) if kind == role]
+    if not choices:
+        raise _preflight.PreflightError(
+            "model", inventory.url,
+            f"{missing} No suitable {'embedding' if role == 'embed' else 'generation'} "
+            "models are available to select; load a suitable model on this server.")
+    print(str(missing), file=sys.stderr)
+    options = [_prompt.Option(_prompt.BACK, "Cancel — keep this setting")]
+    options += [_prompt.Option(mid, mid, badge="available", badge_color="green") for mid in choices]
+    try:
+        selected = _prompt.select(
+            f"Choose a replacement for {setting} (Enter saves it)", options, default=_prompt.BACK)
+    except (KeyboardInterrupt, EOFError) as exc:
+        raise _EndpointUnavailable(f"Model selection cancelled; {setting} was not changed.") from exc
+    if selected not in choices:
+        raise _EndpointUnavailable(f"Model selection cancelled; {setting} was not changed.")
+    _preflight.require_model(inventory, selected, setting)
+    source = _cfg.source(setting)
+    try:
+        _cfg.set_value(setting, selected)
+    except (OSError, ValueError) as exc:
+        raise _EndpointUnavailable(f"Cannot save {setting}; check configuration file permissions.") from exc
+    print(f"  ✓ Saved {setting} = {selected}")
+    if source.startswith("env:"):
+        print(f"  {source[4:]} overrides the saved setting. Update or unset it before the next run.")
+    return selected
+
+
+def _ensure_endpoint(model: str | None = None) -> str | None:
+    print("Checking distillation server…")
+    inventory = _ensure_distill_server()
+    if model is None:
+        return
+    try:
+        model = _choose_available_model(inventory, model, "bg_model")
+        embed_model = _cfg.resolve("embed_model")
+        if embed_model:
+            print("Checking embedding server (configured settings)…")
+            embed_url = _cfg.resolve("embed_url")
+            embed_key = _cfg.resolve("embed_api_key")
+            backend = _cfg.resolve("embed_backend")
+            if (_preflight.endpoint_root(embed_url) == _preflight.endpoint_root(OLLAMA_URL)
+                    and embed_key == _cfg.resolve("distill_api_key")
+                    and _preflight.normalise_backend(backend) == inventory.backend
+                    and inventory.purpose in ("all", "embedding")):
+                embed_inventory = inventory
+            else:
+                embed_inventory = _preflight.probe_endpoint(
+                    embed_url, api_key=embed_key, backend=backend, purpose="embedding")
+            chosen_embed = _choose_available_model(embed_inventory, embed_model, "embed_model")
+            if chosen_embed != embed_model:
+                raise _EndpointUnavailable(
+                    f"Saved embed_model = {chosen_embed}. Run `ygg redeploy` to apply it to the "
+                    "memory daemon, then retry this command. Distillation has not started.")
+            print("  Embedding settings belong to daemon startup; redeploy after changing them.")
+        else:
+            print("  – Embedding model check skipped (embed_model is not configured).")
+    except _preflight.PreflightError as exc:
+        raise _EndpointUnavailable(
+            f"{exc}\nSeed stopped before distillation; unfinished files remain pending.") from exc
+    print("Preflight passed. Starting distillation.")
+    return model
 
 
 def _endpoint_failure(exc: BaseException) -> str:
@@ -1521,9 +1590,10 @@ def seed(args: argparse.Namespace) -> int:
             return 0
 
     try:
-        _ensure_endpoint()
+        model = _ensure_endpoint(model) or model
     except _EndpointUnavailable as exc:
-        _save_seed_state(state)
+        if not force:  # --force starts with an empty state; preflight must not erase old progress.
+            _save_seed_state(state)
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -1589,7 +1659,7 @@ def distill_cmd(args: argparse.Namespace) -> int:
     project = args.project or path.name
     state = _load_seed_state()  # explicit distill still records state, so `seed` skips it later
     try:
-        _ensure_endpoint()
+        model = _ensure_endpoint(model) or model
         if path.is_file():
             res = distill_text(_extract_text(path), project=project, source="distill",
                                model=model, user_id=args.user_id, namespace=args.namespace)
