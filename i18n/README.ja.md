@@ -53,7 +53,11 @@ Yggdrasil 0.18.0 では、独立したバージョンを持つローカル UI **
 
 7 言語（既定は英語）、5 種類の配色、ライト／ダークモードに対応しています。**Graph と Chat は一時的に非表示ですが、保存済みの会話やデータは削除されません。** 全設定は Settings、更新はバージョン表示から開きます。[ガイド](../docs/workspace.md)。
 
-架空のデータを使った画面：[プロジェクト一覧](../docs/screenshots/workspace-projects.png) · [プロジェクト概要](../docs/screenshots/workspace-project.png) · [操作](../docs/screenshots/workspace-operations.png)。
+<p align="center">
+  <img src="../docs/screenshots/workspace-projects.png" alt="Workspace — UI 0.1 Experimental" width="880">
+</p>
+
+[**Workspace の概要：機能と3枚のスクリーンショット →**](../docs/workspace-overview.md)
 
 ## 🚀 インストール
 

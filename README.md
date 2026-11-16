@@ -50,24 +50,13 @@ No "let me remind you what we did yesterday." It's just there.
 
 ## Local Workspace — UI 0.1 Experimental
 
-**Yggdrasil 0.18.0 introduces a local browser interface with its own UI version: 0.1 Experimental.** Run `ygg` to open it. Browse projects, their overview, knowledge and sources; run everyday operations; and manage the full configuration in Settings. All existing CLI commands remain available, including `ygg --help`, `ygg -help` and `ygg help`.
-
-Operations starts with **Import knowledge**, **Check system health** and **Sync memory**, then groups 14 everyday commands with descriptions. Advanced commands are opt-in. Seed starts with `--dry-run` so you can preview an import. Command progress, logs, interactive input, stop controls and confirmations stay in the same flow. Configuration lives in Settings; updates open from the version badge.
-
-The interface supports English (default), Russian, German, Spanish, French, Japanese and Chinese, with five palettes in light and dark modes. **Graph and Chat are temporarily hidden in this experimental UI; existing stored chats and backend data are preserved.** See the [Workspace guide](docs/workspace.md) and [0.18.0 release notes](docs/releases/0.18.0.md).
+**Run `ygg` to open your local knowledge workspace.** Yggdrasil 0.18.0 introduces project browsing, Operations and Settings, with seven languages and five light/dark palettes. The interface has its own experimental version, **UI 0.1**; all CLI commands remain available.
 
 <p align="center">
-  <img src="docs/screenshots/workspace-projects.png" alt="Workspace projects overview with fictional projects" width="880"><br/>
-  <em>Projects at a glance, with memory counts and recent activity.</em>
+  <img src="docs/screenshots/workspace-projects.png" alt="Workspace home with fictional English projects" width="880">
 </p>
-<p align="center">
-  <img src="docs/screenshots/workspace-project.png" alt="Workspace project overview with fictional knowledge and sources" width="880"><br/>
-  <em>Explore a project's overview, knowledge and source material.</em>
-</p>
-<p align="center">
-  <img src="docs/screenshots/workspace-operations.png" alt="Workspace operations with task cards and grouped commands" width="880"><br/>
-  <em>Run common tasks with visible progress and logs. Screenshots use isolated, fictional English data.</em>
-</p>
+
+**[Explore the Workspace →](docs/workspace-overview.md)** — features, project pages and Operations, with three screenshots.
 
 ## 🚀 Install
 

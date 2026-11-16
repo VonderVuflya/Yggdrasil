@@ -53,7 +53,11 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 Доступны семь языков (по умолчанию английский), пять палитр и светлый/тёмный режим. **Graph и Chat временно скрыты; сохранённые диалоги и данные не удаляются.** Полная конфигурация доступна в Settings, обновление — через значок версии. [Руководство](../docs/workspace.md).
 
-Скриншоты с вымышленными данными: [проекты](../docs/screenshots/workspace-projects.png) · [обзор проекта](../docs/screenshots/workspace-project.png) · [операции](../docs/screenshots/workspace-operations.png).
+<p align="center">
+  <img src="../docs/screenshots/workspace-projects.png" alt="Workspace — UI 0.1 Experimental" width="880">
+</p>
+
+[**Обзор Workspace: возможности и три скриншота →**](../docs/workspace-overview.md)
 
 ## 🚀 Установка
 

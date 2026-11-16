@@ -53,7 +53,11 @@ Yggdrasil 0.18.0 带来了独立版本的本地界面：**UI 0.1 Experimental（
 
 界面支持七种语言（默认英语）、五种配色及明暗模式。**Graph 和 Chat 暂时隐藏；已保存的对话和数据不会被删除。** 完整配置位于 Settings，点击版本标识可进入更新流程。[使用指南](../docs/workspace.md)。
 
-使用虚构数据的截图：[项目列表](../docs/screenshots/workspace-projects.png) · [项目概览](../docs/screenshots/workspace-project.png) · [操作](../docs/screenshots/workspace-operations.png)。
+<p align="center">
+  <img src="../docs/screenshots/workspace-projects.png" alt="Workspace — UI 0.1 Experimental" width="880">
+</p>
+
+[**Workspace 概览：功能与三张截图 →**](../docs/workspace-overview.md)
 
 ## 🚀 安装
 

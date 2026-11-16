@@ -53,7 +53,11 @@ Yggdrasil 0.18.0 bringt eine lokale Oberfläche mit eigener Version: **UI 0.1 Ex
 
 Sieben Sprachen (standardmäßig Englisch), fünf Farbpaletten und ein heller sowie dunkler Modus stehen bereit. **Graph und Chat sind vorübergehend ausgeblendet; gespeicherte Gespräche und Daten bleiben erhalten.** Die vollständige Konfiguration liegt in Settings, Updates sind über die Versionsanzeige erreichbar. [Anleitung](../docs/workspace.md).
 
-Screenshots mit fiktiven Daten: [Projekte](../docs/screenshots/workspace-projects.png) · [Projektübersicht](../docs/screenshots/workspace-project.png) · [Operationen](../docs/screenshots/workspace-operations.png).
+<p align="center">
+  <img src="../docs/screenshots/workspace-projects.png" alt="Workspace — UI 0.1 Experimental" width="880">
+</p>
+
+[**Workspace-Überblick: Funktionen und drei Screenshots →**](../docs/workspace-overview.md)
 
 ## 🚀 Installation
 
