@@ -1532,6 +1532,8 @@ class MemoryStore:
         if filters.get("project"):
             where.append("m.project=?")
             params.append(filters["project"])
+        if filters.get("workspace_unassigned"):
+            where.append("COALESCE(m.project,'')=''")
         if filters.get("scope"):
             where.append("m.scope=?")
             params.append(filters["scope"])
@@ -2226,6 +2228,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         body = self._read_json()
+        if parsed.path == "/workspace/query":
+            try:
+                try:
+                    from .ygg_workspace_data import workspace_query
+                except ImportError:
+                    from ygg_workspace_data import workspace_query
+                data = workspace_query(self.store, body)
+            except ValueError as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            except KeyError:
+                self._send(404, {"error": "Запись не найдена"})
+                return
+            self._send(200, {"success": True, "data": data})
+            return
         if parsed.path == "/reindex":
             healed = self.store.reindex_embeddings()
             if healed < 0:  # another pass (usually the startup backfill) owns it

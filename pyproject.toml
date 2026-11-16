@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yggdrasil-memory"
-version = "0.17.0"
+version = "0.18.0"
 description = "One shared, durable memory for all your AI coding agents — MCP, local-first, zero-dependency."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,4 +32,9 @@ ygg = "yggdrasil.cli:main"
 packages = ["yggdrasil"]
 
 [tool.hatch.build.targets.sdist]
-include = ["yggdrasil", "scripts", "tests", "eval", "docs", "README.md", "LICENSE", "CHANGELOG.md"]
+include = [
+  "/yggdrasil", "/web", "/scripts", "/tests", "/eval", "/docs", "/i18n",
+  "/clients/npm", "/packaging/mcpb", "/server.json",
+  "/.claude-plugin", "/.codex-plugin", "/.cursor-plugin",
+  "/README.md", "/LICENSE", "/CHANGELOG.md",
+]

@@ -48,6 +48,16 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 No "let me remind you what we did yesterday." It's just there.
 
+## Local Workspace — UI 0.1 Experimental
+
+**Run `ygg` to open your local knowledge workspace.** Yggdrasil 0.18.0 introduces project browsing, Operations and Settings, with seven languages and five light/dark palettes. The interface has its own experimental version, **UI 0.1**; all CLI commands remain available.
+
+<p align="center">
+  <img src="docs/screenshots/workspace-projects.png" alt="Workspace home with fictional English projects" width="880">
+</p>
+
+**[Explore the Workspace →](docs/workspace-overview.md)** — features, project pages and Operations, with three screenshots.
+
 ## 🚀 Install
 
 Two commands, inside **Claude Code** (the plugin launches via [`uv`](https://docs.astral.sh/uv/)):

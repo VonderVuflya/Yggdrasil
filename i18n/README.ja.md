@@ -47,6 +47,18 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 「昨日やったことを思い出させてください」は不要です。最初からそこにあります。
 
+## ローカル Workspace — UI 0.1 Experimental
+
+Yggdrasil 0.18.0 では、独立したバージョンを持つローカル UI **0.1 Experimental（実験版）** を導入しました。`ygg` でプロジェクトの概要・知識・ソース、Operations、Settings を開けます。`ygg -help` を含む既存の CLI コマンドはすべて引き続き利用できます。Operations にはよく使うタスクと説明付きのコマンドグループがあり、詳細コマンドは必要に応じて表示できます。Seed はインポート内容を確認できる `--dry-run` から始まります。
+
+7 言語（既定は英語）、5 種類の配色、ライト／ダークモードに対応しています。**Graph と Chat は一時的に非表示ですが、保存済みの会話やデータは削除されません。** 全設定は Settings、更新はバージョン表示から開きます。[ガイド](../docs/workspace.md)。
+
+<p align="center">
+  <img src="../docs/screenshots/workspace-projects.png" alt="Workspace — UI 0.1 Experimental" width="880">
+</p>
+
+[**Workspace の概要：機能と3枚のスクリーンショット →**](../docs/workspace-overview.md)
+
 ## 🚀 インストール
 
 **Claude Code** の中で、コマンドは 2 つだけ（プラグインは [`uv`](https://docs.astral.sh/uv/) 経由で起動します):

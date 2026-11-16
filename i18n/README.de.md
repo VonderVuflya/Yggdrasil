@@ -47,6 +47,18 @@ $ cd ~/projects/checkout-api && claude        # a brand-new session
 
 Kein „lass mich dir kurz in Erinnerung rufen, was wir gestern gemacht haben“ mehr. Es ist einfach da.
 
+## Lokaler Workspace — UI 0.1 Experimental
+
+Yggdrasil 0.18.0 bringt eine lokale Oberfläche mit eigener Version: **UI 0.1 Experimental**. `ygg` öffnet Projekte mit Übersicht, Wissen und Quellen sowie Operations und Settings. Alle CLI-Befehle bleiben verfügbar, einschließlich `ygg -help`. Operations bietet häufige Aufgaben und gruppierte Befehle mit Beschreibungen; erweiterte Befehle lassen sich zusätzlich einblenden. Seed startet mit `--dry-run` zur Vorschau.
+
+Sieben Sprachen (standardmäßig Englisch), fünf Farbpaletten und ein heller sowie dunkler Modus stehen bereit. **Graph und Chat sind vorübergehend ausgeblendet; gespeicherte Gespräche und Daten bleiben erhalten.** Die vollständige Konfiguration liegt in Settings, Updates sind über die Versionsanzeige erreichbar. [Anleitung](../docs/workspace.md).
+
+<p align="center">
+  <img src="../docs/screenshots/workspace-projects.png" alt="Workspace — UI 0.1 Experimental" width="880">
+</p>
+
+[**Workspace-Überblick: Funktionen und drei Screenshots →**](../docs/workspace-overview.md)
+
 ## 🚀 Installation
 
 Zwei Befehle, direkt in **Claude Code** (das Plugin startet über [`uv`](https://docs.astral.sh/uv/)):

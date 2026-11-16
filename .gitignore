@@ -40,6 +40,7 @@ node_modules/
 venv/
 node_modules/
 .DS_Store
+*.tsbuildinfo
 .pytest_cache/
 skills/*.zip
 .gstack/

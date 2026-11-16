@@ -3,7 +3,18 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.18.0] — 2026-11-16 — local Workspace
+
+- **Local Workspace.** Run `ygg` to open the new local interface, marked **UI 0.1 Experimental**.
+- **Project browser.** Explore project overviews, searchable knowledge and original sources.
+- **Operations.** Run common tasks with grouped commands, descriptions, progress and logs; advanced actions are optional and seed starts with `--dry-run`.
+- **Full configuration.** Edit CLI settings and choose installed models from the browser.
+- **Appearance and languages.** Seven languages, English by default, and five palettes with light and dark modes.
+- **Updates in the browser.** See your version and GitHub stars, update with progress, and receive a completion notification after restart.
+- **Experimental scope.** Graph and Chat are temporarily hidden; existing data and CLI commands remain available.
+- **Documentation.** Updated guides and README screenshots use fictional English projects.
+
+Update with `ygg update`, then run `ygg`. Node.js is not required. See the [Workspace guide](docs/workspace.md).
 
 ## [0.17.0] — 2026-11-16
 
