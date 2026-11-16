@@ -33,6 +33,8 @@ USAGE = """\
 ygg — one shared, durable memory for your AI coding agents
 
 Setup & service:
+  ygg                    Open the local Workspace (projects, chat, knowledge graph)
+  ygg ui [--restart] [--no-open] [--port PORT]  Run/open Workspace without Node.js
   ygg install            Guided setup: hardware-aware models, background service, MCP registration
   ygg recommend          Show the hardware-aware model catalog
   ygg providers          Scan for local LLM runtimes (Ollama / LM Studio / llama.cpp)
@@ -729,12 +731,16 @@ def main() -> int:
 
 def _run() -> int:
     argv = sys.argv[1:]
-    cmd = argv[0] if argv else "help"
+    cmd = argv[0] if argv else "ui"
     rest = argv[1:]
+
+    if cmd == "ui":
+        from . import ygg_workspace
+        return ygg_workspace.main(rest)
 
     # Surface a cached "newer version available" nudge on user-facing commands
     # (reads the cache the engine maintains — never hits the network here).
-    if cmd not in ("version", "--version", "-V", "help", "-h", "--help",
+    if cmd not in ("version", "--version", "-V", "help", "-h", "--help", "-help",
                    "mcp", "mcp-http", "serve", "ensure", "update", "redeploy"):
         try:
             from . import ygg_update_check
@@ -747,7 +753,7 @@ def _run() -> int:
     if cmd in ("version", "--version", "-V"):
         print(f"yggdrasil {__version__}")
         return 0
-    if cmd in ("help", "-h", "--help"):
+    if cmd in ("help", "-h", "--help", "-help"):
         print(USAGE)
         return 0
     if cmd == "serve":

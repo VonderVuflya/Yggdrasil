@@ -132,6 +132,13 @@ step "CHANGELOG check"
 grep -q "## \[$VERSION\]" CHANGELOG.md || die "add a '## [$VERSION]' section to CHANGELOG.md first."
 ok "found ## [$VERSION]"
 
+# Workspace assets are shipped in the wheel. Build them before packaging so the
+# release cannot silently publish a previous UI. --no-tests skips tests only.
+info "Building Workspace UI (Node.js is needed by maintainers, not end users)"
+run npm --prefix web ci
+if [ -z "$NO_TESTS" ]; then run npm --prefix web test; fi
+run npm --prefix web run build
+
 # 3. Tests + gates.
 step "Tests + gates"
 if [ -z "$NO_TESTS" ]; then
@@ -237,6 +244,7 @@ fi
 #    its browser login, it just 401s — so check `npm whoami` and `npm login` first.
 step "npm"
 if [ -z "$SKIP_NPM" ]; then
+  run cp LICENSE clients/npm/LICENSE
   if ! command -v npm >/dev/null; then
     warn "no npm — skipped"; note skip "npm" "skipped (no npm)"
   elif [ -n "$DRY" ]; then

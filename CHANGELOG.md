@@ -3,6 +3,38 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
+## [0.18.0] — 2026-11-16 — local Workspace (release preparation)
+
+This entry describes the prepared release; publication is a separate step.
+The Workspace has its own version, **UI 0.1 Experimental**.
+
+### Added
+- **Local Workspace.** Running `ygg` opens a local browser interface for
+  projects, their overview, knowledge and sources, Operations and Settings.
+  Existing CLI commands and help forms, including `ygg -help`, remain available.
+- **Task-oriented Operations.** Seed, doctor and sync cards lead into grouped,
+  described commands: 14 everyday commands with advanced commands available
+  on demand. Seed defaults to `--dry-run`. Progress, logs, interactive input,
+  stop controls and confirmations remain available.
+- **Configuration and models.** Settings exposes the full CLI configuration
+  and model selection for background processing and embeddings.
+- **Appearance and languages.** Seven languages with English as the default,
+  plus five palettes, each with light and dark modes.
+- **Version and update controls.** Cached version and GitHub star metadata;
+  the version badge opens an update flow using `ygg update`, with background
+  progress, a session-preserving restart and completion notifications.
+- **Workspace documentation.** A user guide, release notes and three screenshots
+  made with isolated fictional English data, linked from all seven READMEs.
+
+### Changed
+- **Graph and Chat are temporarily hidden** from Workspace navigation, project
+  pages and related actions. Their backend modules and saved chats remain intact.
+- The Operations selector omits aliases, server/stdio commands, token and UI
+  launch commands. Configuration and updates use their dedicated UI flows.
+  The CLI command set is preserved.
+- Package, npm wrapper, MCP and agent-plugin manifests are prepared for 0.18.0;
+  the UI retains its independent 0.1.0 version.
+
 ## [0.15.0] — 2026-08-06 — distillation that stays on task
 
 ### Added
