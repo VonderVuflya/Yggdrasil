@@ -58,6 +58,7 @@ with patch.object(management.subprocess, 'Popen', side_effect=launch):
                    'YGG_USER_ID':'fixture', 'YGG_NAMESPACE':'fixture', 'YGG_ENGINE_URL':'http://127.0.0.1:9'}
             with (root / 'server.log').open('w+') as log:
                 process = subprocess.Popen([sys.executable, str(launch_file), str(port)], env=env, cwd=root, stdout=log, stderr=log)
+                replacement_pid = None
                 def request(path, body=None, headers=None):
                     connection = http.client.HTTPConnection('127.0.0.1',port,timeout=2)
                     connection.request('POST' if body is not None else 'GET',path, json.dumps(body) if body is not None else None,
@@ -105,12 +106,21 @@ with patch.object(management.subprocess, 'Popen', side_effect=launch):
                     else:
                         log.seek(0)
                         self.fail(log.read())
+                    status, _, launched = request('/_launch', {}, {'Authorization':'Bearer '+key})
+                    self.assertEqual(status, 200)
+                    replacement_pid = launched['pid']
                     self.assertEqual(value['current'],'99.0.0')
                     self.assertEqual(value['update']['status'],'completed')
                     self.assertFalse(value['restart_required'])
                     self.assertEqual(value['update']['output'],'')
                     self.assertEqual(list(home.glob('workspace-resume-*')),[])
                 finally:
+                    # Windows execv starts a new process instead of retaining the PID.
+                    # Reap only this authenticated fixture's replacement, including
+                    # its inherited log handle, before removing the temporary home.
+                    if os.name == 'nt' and replacement_pid is not None and replacement_pid != process.pid:
+                        subprocess.run(['taskkill', '/PID', str(replacement_pid), '/T', '/F'],
+                                       capture_output=True, timeout=10)
                     if process.poll() is None:
                         process.terminate()
                     process.wait(timeout=5)

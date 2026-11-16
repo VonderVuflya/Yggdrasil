@@ -126,6 +126,10 @@ class WorkspaceServer(ThreadingHTTPServer):
         if self._management is not None:
             self._management.close()
         super().server_close()
+        with self.chat_lock:
+            if self._chat is not None:
+                with self._chat._lock:
+                    self._chat._db.close()
 
 
 class WorkspaceHandler(BaseHTTPRequestHandler):

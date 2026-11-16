@@ -77,13 +77,13 @@ class Provider:
 class ChatTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
         self.engine = Engine()
         self.service = ChatService(self.home, self.engine, "user", "personal")
 
     def tearDown(self):
         self.service._db.close()
-        self.tmp.cleanup()
 
     def test_new_chat_title_is_locale_neutral(self):
         self.assertEqual(self.service.create_chat("alpha")["title"], "")

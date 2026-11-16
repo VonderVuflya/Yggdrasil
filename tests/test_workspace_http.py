@@ -28,6 +28,14 @@ class WorkspaceHTTPTests(unittest.TestCase):
         self.thread.join()
         self.tmp.cleanup()
 
+    def test_server_close_releases_the_chat_database(self):
+        import sqlite3
+        chat = self.server.chat
+        self.server.shutdown()
+        self.server.server_close()
+        with self.assertRaises(sqlite3.ProgrammingError):
+            chat._db.execute('SELECT 1')
+
     def request(self, path, body=None, headers=None, method=None):
         conn = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
         hdrs = {'Content-Type': 'application/json', 'X-Ygg-Request': '1'}

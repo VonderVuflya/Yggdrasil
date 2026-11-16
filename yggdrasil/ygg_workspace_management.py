@@ -374,7 +374,7 @@ class Management:
             public_args = [_mask(arg, secrets) for arg in public_args]
             self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
             env = os.environ.copy()
-            env.update(YGG_HOME=str(self.home), PYTHONUNBUFFERED='1')
+            env.update(YGG_HOME=str(self.home), PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8')
             package_root = Path(__file__).resolve().parent.parent
             env['PYTHONPATH'] = str(package_root) + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
             master = slave = None

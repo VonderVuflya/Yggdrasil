@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -121,7 +122,8 @@ class RestartHandoffTests(unittest.TestCase):
             server.sessions = {'live':time.monotonic()+3600, 'expired':0}
             server.completed_update = {'id':'update-1','status':'completed','output':''}
             key = _save_resume(server)
-            self.assertEqual((server.home / ('workspace-resume-'+key)).stat().st_mode & 0o777, 0o600)
+            if os.name == 'posix':
+                self.assertEqual((server.home / ('workspace-resume-'+key)).stat().st_mode & 0o777, 0o600)
             server.sessions = {}
             _restore_resume(server, key)
             self.assertEqual(set(server.sessions), {'live'})

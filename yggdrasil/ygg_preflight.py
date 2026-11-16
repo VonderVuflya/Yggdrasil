@@ -61,7 +61,7 @@ def check_connection(url: str) -> None:
         addresses = socket.getaddrinfo(address.hostname, port, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise PreflightError('DNS', url, 'cannot resolve hostname; check the address and DNS') from exc
-    print(f"  ✓ {'Proxy DNS' if via_proxy else 'DNS'}: {address.hostname}")
+    print(f"  [OK] {'Proxy DNS' if via_proxy else 'DNS'}: {address.hostname}")
     deadline = time.monotonic() + PROBE_TIMEOUT
     failure: OSError = TimeoutError()
     for family, kind, proto, _, target in addresses:
@@ -72,7 +72,7 @@ def check_connection(url: str) -> None:
             with socket.socket(family, kind, proto) as sock:
                 sock.settimeout(remaining)
                 sock.connect(target)
-            print(f"  ✓ {'Proxy TCP' if via_proxy else 'TCP'}: {address.hostname}:{port}")
+            print(f"  [OK] {'Proxy TCP' if via_proxy else 'TCP'}: {address.hostname}:{port}")
             return
         except OSError as exc:
             failure = exc
@@ -160,7 +160,7 @@ def probe_endpoint(url: str, *, api_key: str = '', backend: str = 'auto',
                                      classify("", str(family)) == "embed") else "llm")
         inventory = ModelInventory(root, kind, tuple(row[id_field] for row in rows),
                                    purpose if openrouter else 'all', tuple(kinds))
-        print(f"  ✓ API ({kind}): {root}")
+        print(f"  [OK] API ({kind}): {root}")
         return inventory
     raise PreflightError('API', url, 'no supported model-list API; check the server address '
                          'and enable the LM Studio/Ollama API')
@@ -178,4 +178,4 @@ def require_model(inventory: ModelInventory, model: str, setting: str) -> None:
         raise PreflightError('model', inventory.url,
                              f'{setting}: {model!r} is unavailable. Available IDs: {available}. '
                              'Download/load that model on the server or correct the model setting.')
-    print(f"  ✓ {setting}: {model}")
+    print(f"  [OK] {setting}: {model}")

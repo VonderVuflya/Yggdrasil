@@ -18,8 +18,9 @@ class ManagementTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.home = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {}, clear=True)
+        self.home = Path(self.temp.name).resolve()
+        self.env = patch.dict(os.environ, {k: v for k, v in os.environ.items()
+                                             if not k.startswith("YGG_")}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
         self.manager = management.Management(self.home)
@@ -61,12 +62,21 @@ class ManagementTest(unittest.TestCase):
         self.assertEqual(settings['distill_url']['value'], 'http://environment:1234')
         self.assertTrue(settings['user_id']['restart_required'])
 
+    def test_subprocess_output_uses_utf8_even_with_legacy_parent_encoding(self):
+        with patch.dict(os.environ, {'PYTHONIOENCODING': 'cp1252'}):
+            job, calls = self.fixture("print('Привет ✓')")
+        self.assertEqual(calls[0][1]['env']['PYTHONIOENCODING'], 'utf-8')
+        result = self.wait(job)
+        self.assertEqual(result['status'], 'completed', result['output'])
+        self.assertIn('Привет ✓', result['output'])
+
     def test_save_preserves_config_and_hides_private_keys(self):
         (self.home / 'config.json').write_text(json.dumps({'unrelated': {'keep': 1}}))
         result = self.manager.save_configuration({'values': {'embed_api_key': 'secret-key', 'user_id': 'alice'}})
         self.assertEqual(json.loads((self.home / 'config.json').read_text()), {'unrelated': {'keep': 1}, 'user_id': 'alice'})
         self.assertEqual((self.home / 'embed_api_key').read_text(), 'secret-key')
-        self.assertEqual(stat.S_IMODE((self.home / 'embed_api_key').stat().st_mode), 0o600)
+        if os.name == 'posix':
+            self.assertEqual(stat.S_IMODE((self.home / 'embed_api_key').stat().st_mode), 0o600)
         entry = self.settings(result)['embed_api_key']
         self.assertEqual([entry[k] for k in ('value', 'stored_value', 'default')], ['', '', ''])
         self.assertTrue(entry['has_value'])
