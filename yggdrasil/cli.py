@@ -33,7 +33,7 @@ USAGE = """\
 ygg — one shared, durable memory for your AI coding agents
 
 Setup & service:
-  ygg                    Open the local Workspace (projects, chat, knowledge graph)
+  ygg                    Open the local Workspace (projects, knowledge, operations)
   ygg ui [--restart] [--no-open] [--port PORT]  Run/open Workspace without Node.js
   ygg install            Guided setup: hardware-aware models, background service, MCP registration
   ygg recommend          Show the hardware-aware model catalog
@@ -61,6 +61,8 @@ Cold start (seed memory from your existing work):
   ygg seed --schedule 03:30     Nightly auto-distill (off/status to manage)
   ygg distill --source P Distill one dir/file into atomic lessons (local Ollama model)
   ygg sync [--repo R]    Sync memory across machines through YOUR git repo (no cloud)
+  ygg link [code]        Link two of YOUR machines directly — one live memory over the LAN
+  ygg link --list        Show linked machines (ygg unlink <name> to revoke)
 
 Memory ops:
   ygg health
@@ -72,6 +74,7 @@ Memory ops:
   ygg export-native --project P [--out AGENTS.md]   Write a curated digest into AGENTS.md/MEMORY.md (feeds the native memory)
   ygg import --from mcp-memory|basic-memory --path P   Migrate FROM another memory tool (then delete it)
   ygg review [--apply] [--project P]   Work the governance queue: consolidate duplicates, flag stale/conflicts (archives, reversible)
+  ygg unarchive --id ID    Restore an archived/superseded memory (on linked machines too)
   ygg delete --id ID       Hard-delete ONE memory (irreversible; prefer supersede)
   ygg reset --project P | --source S | --all   Bulk hard-delete (undo a bad seed; confirms first)
 
@@ -84,7 +87,7 @@ SERVICE_CMDS = {
     "consolidate", "unconsolidate",
 }
 MEMORY_CMDS = {"health", "bootstrap", "search", "recall", "remember", "materialize",
-               "pin", "unpin", "supersede", "delete", "reset", "export-native", "review",
+               "pin", "unpin", "supersede", "unarchive", "delete", "reset", "export-native", "review",
                "import", "relate", "relations", "quality", "migrate"}
 
 
@@ -288,6 +291,22 @@ def _doctor() -> int:
     tok = YGG_HOME / "token"
     check(tok.exists(), "token", str(tok) if tok.exists() else "not generated",
           "" if tok.exists() else "ygg install")
+
+    # Linked machines: a peer that stopped accepting writes looks exactly like
+    # one with nothing to say, unless something asks.
+    if h:
+        try:
+            from .ygg import request_json
+            from . import ygg_link
+            links = request_json("GET", "/sync/peers")["data"]
+        except Exception:  # noqa: BLE001 — an older engine without the uplink
+            links = {"peers": []}
+        for peer in links.get("peers") or []:
+            kind, text = ygg_link.peer_state(peer.get("health"))
+            if kind == "fail":
+                ok = False
+            check({"ok": True, "fail": False}.get(kind), f"link {peer.get('name')}", text,
+                  "ygg link --list" if kind == "fail" else "")
 
     cfg = _config()
     embed, bg = cfg.get("embed_model") or "", cfg.get("bg_model") or ""
@@ -796,6 +815,11 @@ def _run() -> int:
         service.ensure_running()
         from . import ygg_sync
         return ygg_sync.main(cmd, rest)
+    if cmd in ("link", "unlink"):
+        from . import service
+        service.ensure_running()  # pairing and reconcile both run inside the engine
+        from . import ygg_link
+        return ygg_link.main(cmd, rest)
     if cmd in MEMORY_CMDS:
         from . import ygg as m
         sys.argv = ["ygg", cmd, *rest]

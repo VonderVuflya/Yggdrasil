@@ -324,7 +324,20 @@ def run_ygg(args: list[str]) -> str:
     return (stdout + ("\n" + stderr if stderr else "")).strip()
 
 
+def _check_required(name: str, arguments: dict[str, Any]) -> None:
+    """Fail with a clear message instead of a bare stringified KeyError."""
+    for tool in tool_schema():
+        if tool["name"] == name:
+            for key in tool["inputSchema"].get("required", []):
+                if key not in arguments:
+                    raise ValueError(f"missing required argument: {key}")
+            return
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> str:
+    if not isinstance(arguments, dict):
+        raise ValueError("arguments must be an object")
+    _check_required(name, arguments)
     if name == "ygg_health":
         return run_ygg(["health"])
     if name == "ygg_bootstrap":

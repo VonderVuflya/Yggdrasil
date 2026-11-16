@@ -88,6 +88,7 @@ _CATALOG = (
     ('reset', 'Permanently delete a selected group of memories', 'Memory', True, True, ['--project', 'project']),
     ('relate', 'Add a relation between memories', 'Memory', False, True, ['--from', 'ID', '--rel', 'solves', '--to', 'ID']),
     ('relations', 'List memory relations', 'Memory', False, False, ['--id', 'ID']),
+    ('unarchive', 'Restore an archived memory', 'Memory', False, True, ['--id', 'ID']),
     ('quality', 'Inspect memory quality', 'Memory', False, False, []),
     ('migrate', 'Migrate stored memories', 'Memory', False, True, []),
 ) + tuple((name, 'Show CLI help', 'Help', False, False, []) for name in ('help', '-h', '--help', '-help')) + tuple(

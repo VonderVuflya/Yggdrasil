@@ -35,6 +35,7 @@ export const commandGroups = [
       "pin",
       "unpin",
       "supersede",
+      "unarchive",
       "relate",
       "delete",
       "reset",

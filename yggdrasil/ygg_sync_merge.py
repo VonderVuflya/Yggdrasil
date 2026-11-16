@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Conflict resolution — the ONE policy every sync transport shares.
+
+Both `ygg sync` (git repo) and the peer uplink import from here. Two nodes
+reconcile independently and never agree on an order, so every rule below has to
+be **commutative**: merge(a, b) must equal merge(b, a). Otherwise the machines
+don't converge, they take turns overwriting each other and the digests disagree
+forever.
+
+That requirement is why this module exists instead of the rules living inline.
+It is pure — no I/O, no clock, no database — so the properties are cheap to
+test exhaustively (see tests/test_sync_merge.py).
+
+Field rules, in the spirit of archive-never-delete:
+  - archived            the later archive DECISION wins, by its own stamp
+                        (metadata `archived_changed_at`), so restoring a
+                        memory sticks and an unrelated edit elsewhere never
+                        undoes an archive; on equal stamps (records from
+                        before the stamp: none at all) archiving wins
+  - confidence/importance max  — trust the stronger signal
+  - content             the more recently updated record wins; on an equal
+                        stamp the longer text (corrections shrink text, so
+                        "longer always wins" reverted every tightening edit)
+  - created_at          min  — the earliest creation is the true one
+  - updated_at          max
+  - metadata_json       union of keys; `pinned` is OR'd
+  - everything else     the value from the more recently updated record
+
+Relation edges: an edge lives while its newest link is later than its newest
+unlink (see edge_survives); both stamps only ever grow, so arrival order never
+matters.
+
+Ties are broken by value, not by side: picking "local" on a tie is exactly the
+asymmetry that keeps two machines apart.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+# How long a deletion keeps blocking the record's return. Long enough to outlive
+# a machine that was off for a holiday; not forever, because tombstones are dead
+# weight in every digest.
+TOMBSTONE_TTL = 90 * 24 * 3600.0
+
+# How far ahead of our clock a peer's stamp may be. A box whose clock runs a
+# year fast would otherwise win every recency-resolved field forever, and its
+# tombstones would never expire. Generous enough for ordinary NTP drift.
+MAX_CLOCK_SKEW = 300.0
+
+# When the archived flag last changed. Kept apart from updated_at on purpose:
+# a content edit on a machine that never saw the archive is newer, but it is not
+# a decision to bring the memory back.
+ARCHIVE_STAMP = "archived_changed_at"
+
+# Fields with no semantic ordering of their own — resolved by recency.
+_BY_RECENCY = ("user_id", "namespace", "scope", "project", "type", "source")
+
+
+def _ts(rec: dict[str, Any]) -> float:
+    """Best available 'last touched' stamp. Records written before the
+    updated_at migration only carry created_at."""
+    for field in ("updated_at", "created_at"):
+        value = rec.get(field)
+        if value is not None:
+            return float(value)
+    return 0.0
+
+
+def clamp_stamp(stamp: float, *, now: float) -> float:
+    """A peer's timestamp, bounded by what our own clock finds plausible."""
+    return min(float(stamp), now + MAX_CLOCK_SKEW)
+
+
+def _order(value: Any) -> tuple:
+    """Total order for tie-breaks. A missing value always loses; the type name
+    keeps 1 and "1" apart (str() made them equal, and max() then returned
+    whichever argument came first)."""
+    return (value is not None, type(value).__name__,
+            json.dumps(value, sort_keys=True, default=str))
+
+
+def _pick(lv: Any, rv: Any, lts: float, rts: float) -> Any:
+    """Symmetric choice between two values: newer wins; on an equal stamp the
+    larger value wins. Symmetric because the tie-break looks only at the
+    values, never at which argument they arrived in."""
+    if lv == rv:
+        return lv
+    if lts != rts:
+        return lv if lts > rts else rv
+    return max((lv, rv), key=_order)
+
+
+def _loads(raw: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def merge_memory(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic union of two versions of the SAME memory (same id)."""
+    lts, rts = _ts(local), _ts(remote)
+    merged = dict(remote)
+    merged.update({k: v for k, v in local.items() if k not in merged})
+
+    for field in ("confidence", "importance"):
+        vals = [v for v in (local.get(field), remote.get(field)) if v is not None]
+        merged[field] = max(vals) if vals else None
+
+    # Content and its hash move together — a record carrying the other version's
+    # hash breaks dedup in both directions.
+    lc, rc = local.get("content") or "", remote.get("content") or ""
+    if lc == rc:
+        merged["content"] = lc
+        merged["content_hash"] = _pick(local.get("content_hash"), remote.get("content_hash"), lts, rts)
+    else:
+        winner = local if (lts, len(lc), lc) > (rts, len(rc), rc) else remote
+        merged["content"] = winner.get("content")
+        merged["content_hash"] = winner.get("content_hash")
+
+    stamps = [v for v in (local.get("created_at"), remote.get("created_at")) if v is not None]
+    if stamps:
+        merged["created_at"] = min(stamps)
+    merged["updated_at"] = max(lts, rts)
+
+    for field in _BY_RECENCY:
+        merged[field] = _pick(local.get(field), remote.get(field), lts, rts)
+
+    lmd, rmd = _loads(local.get("metadata_json")), _loads(remote.get("metadata_json"))
+    md = dict(rmd)
+    for key, lval in lmd.items():
+        md[key] = _pick(lval, rmd[key], lts, rts) if key in rmd else lval
+    if lmd.get("pinned") or rmd.get("pinned"):
+        md["pinned"] = True
+
+    # (stamp, flag) as one key: the later decision wins, and an equal stamp —
+    # including two records that predate the stamp — archives, which is the
+    # old OR. Its status travels with it, or an "archived" status left behind
+    # would still hide a restored memory.
+    lkey = (_stamp(lmd), 1 if local.get("archived") else 0)
+    rkey = (_stamp(rmd), 1 if remote.get("archived") else 0)
+    merged["archived"] = max(lkey, rkey)[1]
+    if lkey != rkey:
+        side = lmd if lkey > rkey else rmd
+        if "status" in side:
+            md["status"] = side["status"]
+        else:
+            md.pop("status", None)
+    if max(lkey, rkey)[0]:
+        md[ARCHIVE_STAMP] = max(lkey, rkey)[0]
+    merged["metadata_json"] = json.dumps(md, sort_keys=True)
+
+    return merged
+
+
+def _stamp(md: dict[str, Any]) -> float:
+    try:
+        return float(md.get(ARCHIVE_STAMP) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def tombstone_wins(*, deleted_at: float, record: dict[str, Any], now: float) -> bool:
+    """Should a live tombstone suppress this record?
+
+    A live one ALWAYS does — deliberately, without comparing deleted_at to the
+    record's updated_at. Two machines' clocks drift, and "I deleted the leaked
+    token" must hold regardless of what the other box thinks the time is. The
+    cost is documented: a delete racing a remote edit discards the edit. Users
+    who mean "changed my mind" have `archive`, which merges without losing
+    anything.
+    """
+    del record  # deliberately unused: see docstring
+    return (now - float(deleted_at)) < TOMBSTONE_TTL
+
+
+def expired_tombstones(tombstones: dict[str, float], *, now: float) -> list[str]:
+    """Ids whose deletion is old enough to forget. Sorted, so callers (and
+    tests) get a stable order."""
+    return sorted(mid for mid, deleted_at in tombstones.items()
+                  if (now - float(deleted_at)) >= TOMBSTONE_TTL)
+
+
+def edge_key(from_id: str, to_id: str, rel_type: str) -> str:
+    """One string per edge, for the outbox and for test assertions."""
+    return f"{from_id}|{to_id}|{(rel_type or '').upper()}"
+
+
+def edge_survives(created_at: float | None, deleted_at: float | None) -> bool:
+    """Whether an edge stands against an unlink of it.
+
+    An unlink beats every link it could have seen; a link made after it wins.
+    Equal stamps go to the unlink, as a delete racing an edit does. A link with
+    no stamp (a 0.16.0 peer sends none) never beats an unlink.
+    """
+    return deleted_at is None or float(created_at or 0.0) > float(deleted_at)
+

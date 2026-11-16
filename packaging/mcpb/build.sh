@@ -28,7 +28,7 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/server"
 cp "$HERE/manifest.json" "$STAGE/manifest.json"
 # Minimal payload: the stdio facade + the CLI it shells out to + their shared core.
-for f in ygg_mcp_server.py ygg.py ygg_core.py; do
+for f in ygg_mcp_server.py ygg.py ygg_core.py ygg_config.py ygg_ui.py __init__.py; do
   cp "$PKG/$f" "$STAGE/server/$f"
 done
 

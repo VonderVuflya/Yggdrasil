@@ -26,6 +26,7 @@ class SeedConnectionTest(unittest.TestCase):
             self.sources.append({"kind": "obsidian", "project": project,
                                  "path": str(folder)})
         self.state = {}
+        self.stack.enter_context(mock.patch.object(s._preflight, "check_connection"))
         self.stack.enter_context(mock.patch.object(s, "OLLAMA_URL", "http://studio:1234"))
         self.stack.enter_context(mock.patch.object(s, "discover", return_value=self.sources))
         self.stack.enter_context(mock.patch.object(s, "_load_seed_state", return_value=self.state))
@@ -133,14 +134,19 @@ class EndpointStartupTest(unittest.TestCase):
 
 
 class EndpointProbeTest(unittest.TestCase):
-    def test_ollama_fallback_after_openai_404(self):
+    def setUp(self):
+        connection = mock.patch.object(s._preflight, "check_connection")
+        connection.start()
+        self.addCleanup(connection.stop)
+
+    def test_openai_fallback_after_ollama_404(self):
         response = mock.MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"models": []}'
+        response.__enter__.return_value.read.return_value = b'{"data": []}'
         missing = urllib.error.HTTPError("http://localhost/v1/models", 404, "missing", {}, None)
         with mock.patch.object(s, "OLLAMA_URL", "http://localhost:11434"), \
                 mock.patch.object(s.urllib.request, "urlopen", side_effect=[missing, response]) as request:
             s._ping_endpoint()
-        self.assertEqual(request.call_args.args[0], "http://localhost:11434/api/tags")
+        self.assertEqual(request.call_args.args[0].full_url, "http://localhost:11434/v1/models")
 
     def test_unrelated_http_server_is_not_ready(self):
         response = mock.MagicMock()

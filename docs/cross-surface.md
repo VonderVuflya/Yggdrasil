@@ -49,6 +49,18 @@ cloudflared tunnel route dns yggdrasil ygg.example.com
 cloudflared tunnel run --url http://127.0.0.1:42071 yggdrasil
 ```
 
+**Allow the public hostname.** The facade rejects any `Host` or browser `Origin`
+that isn't loopback — that is what stops a web page from reaching your memory
+through DNS rebinding or a forged cross-site POST. A tunnel forwards the public
+hostname in `Host`, so name it explicitly (comma-separated for several):
+
+```bash
+YGG_MCP_ALLOWED_HOSTS=ygg.example.com ygg mcp-http
+```
+
+Without it, requests through the tunnel get `403 forbidden host`. `POST /mcp`
+also requires `Content-Type: application/json` (`415` otherwise).
+
 ## 3. Authentication for claude.ai
 
 claude.ai custom connectors expect **OAuth 2.1** (per the MCP auth spec:
@@ -80,4 +92,6 @@ below it (transport, tools, tunnel) is done.
   OAuth for claude.ai). An open memory endpoint on the internet is a data leak.
 - Prefer a tunnel with its own access control over opening a raw port.
 - The facade binds localhost; the tunnel is the only public surface.
+- Only loopback and `YGG_MCP_ALLOWED_HOSTS` pass the `Host`/`Origin` check, in
+  every mode — including `YGG_MCP_INSECURE=1`.
 - Scope/rotate the token (`ygg token` lives in `~/.yggdrasil/token`, mode 600).

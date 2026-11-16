@@ -29,18 +29,25 @@ from __future__ import annotations
 
 import argparse
 import array
+import base64
+import errno
 import hashlib
 import hmac
+import itertools
 import json
 import math
+import operator
 import os
 import re
+import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -51,8 +58,10 @@ except ImportError:  # flat layout (deployed scripts dir / tests / direct run)
 
 try:
     from . import ygg_config as _cfg
+    from . import ygg_sync_merge as _merge
 except ImportError:
     import ygg_config as _cfg
+    import ygg_sync_merge as _merge
 
 
 # Identity migration: rebrand legacy demo memory to the configured default once.
@@ -229,6 +238,58 @@ def _dot(a, b) -> float | None:
     return sum(x * y for x, y in zip(a, b))
 
 
+# Bulk dot product for the all-pairs duplicate scan. math.sumprod (3.12+) over
+# plain float lists is ~8x the generator above; map(mul) is the 3.10/3.11 fallback.
+# Measured on 1024 dims: ~3 us vs ~9 us vs ~25 us per pair.
+_sumprod = getattr(math, "sumprod", None) or (lambda a, b: sum(map(operator.mul, a, b)))
+
+
+def _pairs_at_least(vecs: list[list[float]], threshold: float) -> dict[tuple[int, int], float]:
+    """{(i, j): cosine} for every i < j whose unit vectors have cosine >= threshold.
+
+    Exact, but most pairs are rejected without a full dot. Rewrite each vector
+    around the set's mean m:  a.b = (a-m).(b-m) + m.a + m.b - m.m,  and split the
+    centred part into the k highest-variance dims plus a remainder bounded by
+    Cauchy-Schwarz (|ra|*|rb|). Embeddings from one project share a strong common
+    direction and concentrate their spread in few dims, so a k=d*3/16 prefix
+    rejects ~99.6% of pairs on the real store (whole-project buckets: 16 s -> ~5 s).
+    The bound can only over-estimate, so no qualifying pair is ever dropped."""
+    n = len(vecs)
+    out: dict[tuple[int, int], float] = {}
+    if n < 2:
+        return out
+    d = len(vecs[0])
+    k = d * 3 // 16
+    if n < 64 or k < 8:  # the setup below costs more than brute force saves
+        for i in range(n - 1):
+            rest = vecs[i + 1:]
+            for off, s in enumerate(map(_sumprod, itertools.repeat(vecs[i], len(rest)), rest)):
+                if s >= threshold:
+                    out[(i, i + 1 + off)] = s
+        return out
+    mu = [s / n for s in map(math.fsum, zip(*vecs))]
+    cen = [list(map(operator.sub, v, mu)) for v in vecs]
+    var = [_sumprod(col, col) for col in zip(*cen)]
+    pick = operator.itemgetter(*sorted(range(d), key=var.__getitem__, reverse=True)[:k])
+    head = [pick(c) for c in cen]
+    tail = [math.sqrt(max(0.0, _sumprod(c, c) - _sumprod(h, h))) for c, h in zip(cen, head)]
+    lift = [_sumprod(mu, v) for v in vecs]
+    m2 = _sumprod(mu, mu)
+    del cen
+    for i in range(n - 1):
+        # 1e-6 of slack absorbs float rounding in the bound; it only admits extra
+        # candidates, which the exact dot below then rejects.
+        need, ti = threshold - lift[i] + m2 - 1e-6, tail[i]
+        heads = head[i + 1:]
+        bounds = map(_sumprod, itertools.repeat(head[i], len(heads)), heads)
+        for j, b, tj, lj in zip(range(i + 1, n), bounds, tail[i + 1:], lift[i + 1:]):
+            if b + ti * tj + lj >= need:
+                s = _sumprod(vecs[i], vecs[j])
+                if s >= threshold:
+                    out[(i, j)] = s
+    return out
+
+
 def expand_identifiers(text: str) -> str:
     """Append space-split forms of camelCase/PascalCase identifiers so code
     memory is searchable by words (e.g. 'scrollWidth' also matches 'scroll width').
@@ -243,8 +304,27 @@ def expand_identifiers(text: str) -> str:
     return text + (" " + " ".join(extra)) if extra else text
 
 
+def _clamp_archive_stamp(raw: Any, *, now: float) -> Any:
+    """The archive decision's stamp gets the same skew bound as updated_at —
+    otherwise a fast clock would win every archive/restore after it."""
+    try:
+        md = json.loads(raw) if raw else None
+        stamp = float(md[_merge.ARCHIVE_STAMP]) if isinstance(md, dict) and md.get(_merge.ARCHIVE_STAMP) else None
+    except (TypeError, ValueError):
+        return raw
+    if stamp is None or stamp <= now + _merge.MAX_CLOCK_SKEW:
+        return raw
+    md[_merge.ARCHIVE_STAMP] = _merge.clamp_stamp(stamp, now=now)
+    return json.dumps(md, sort_keys=True)
+
+
 class MemoryStore:
     """SQLite-backed memory store with FTS5 (or in-Python fallback) search."""
+
+    # Ceiling on unsent uplink work. Past it the queue is dropped and a full
+    # reconcile is requested instead: a peer that has been off for a week is not
+    # worth unbounded disk, and the digest comparison catches up regardless.
+    OUTBOX_MAX = 10_000
 
     def __init__(self, db_path: str, embedder: Any = None):
         self.db_path = db_path
@@ -284,6 +364,10 @@ class MemoryStore:
         # no-op; `_reindex_progress` is what the CLI polls to draw a bar.
         self._reindex_gate = threading.Lock()
         self._reindex_progress = {"running": False, "done": 0, "total": 0}
+        # Uplink bookkeeping. `outbox_signal` wakes the sender thread the moment a
+        # write lands, so a push costs the caller nothing but a set() call.
+        self.needs_reconcile = False
+        self.outbox_signal = threading.Event()
         # seq -> unit vector. Built once at startup (single-threaded here) and
         # kept warm incrementally on every write; None-guarded so lexical-only
         # runs pay nothing.
@@ -353,6 +437,57 @@ class MemoryStore:
             cur.execute("ALTER TABLE memories ADD COLUMN embedding_blob BLOB")
         if "embed_model" not in existing_cols:
             cur.execute("ALTER TABLE memories ADD COLUMN embed_model TEXT")
+        if "updated_at" not in existing_cols:
+            # Last mutation time. created_at alone cannot see a metadata- or
+            # importance-only edit: the text is untouched, so content_hash matches
+            # and a peer's digest would call the two rows identical.
+            cur.execute("ALTER TABLE memories ADD COLUMN updated_at REAL")
+            cur.execute("UPDATE memories SET updated_at=created_at WHERE updated_at IS NULL")
+        # Digests fingerprint a record through content_hash. Rows written before
+        # it was routinely set would all share the empty hash and compare equal to
+        # each other, so backfill once here rather than hashing on every reconcile.
+        for row in cur.execute(
+                "SELECT seq, content FROM memories WHERE content_hash IS NULL OR content_hash=''").fetchall():
+            cur.execute("UPDATE memories SET content_hash=? WHERE seq=?",
+                        (hashlib.sha256((row["content"] or "").encode("utf-8")).hexdigest(), row["seq"]))
+        # A deletion has to travel, or the machine that still has the record puts
+        # it back on the next reconcile — and "I deleted the leaked token" would be
+        # a lie. Collected after ygg_sync_merge.TOMBSTONE_TTL.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tombstones (
+                id         TEXT PRIMARY KEY,
+                deleted_at REAL NOT NULL,
+                origin     TEXT
+            )
+            """
+        )
+        # An unlinked edge has to travel too, or the peer that still has it puts
+        # it back on the next reconcile. Keyed by the edge; the stamp only grows.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relation_tombstones (
+                from_id    TEXT NOT NULL,
+                to_id      TEXT NOT NULL,
+                rel_type   TEXT NOT NULL,
+                deleted_at REAL NOT NULL,
+                PRIMARY KEY (from_id, to_id, rel_type)
+            )
+            """
+        )
+        # Outbox: what changed locally and still owes the peers a push. UNIQUE
+        # gives coalescing for free — one row per entity, not one per edit.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS outbox (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind       TEXT NOT NULL,
+                ref_id     TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(kind, ref_id)
+            )
+            """
+        )
         # One-time backfill: convert any legacy JSON-text embeddings to packed
         # float32 blobs (tagged '(legacy)' so a later reindex re-embeds them with
         # the real model name). Bounded, runs once — after it, only blobs matter.
@@ -501,18 +636,19 @@ class MemoryStore:
                 cur = self._conn.execute(
                     """
                     INSERT INTO memories
-                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json,embedding_blob,embed_model)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?)
+                        (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,updated_at,access_count,archived,metadata_json,embedding_blob,embed_model)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?)
                     """,
                     (
                         memory_id, user_id, namespace, scope, project, mem_type, content,
-                        content_hash, source, confidence, importance, created_at,
+                        content_hash, source, confidence, importance, created_at, created_at,
                         json.dumps(metadata, sort_keys=True), embedding_blob, embed_model,
                     ),
                 )
                 seq = cur.lastrowid
                 if self.use_fts:
                     self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)", (seq, expand_identifiers(content)))
+                self._enqueue_locked("memory", memory_id)
             if vec:  # keep the warm cache in sync
                 unit = _unit(vec)
                 if unit is not None:
@@ -548,12 +684,17 @@ class MemoryStore:
             archived_flag = row["archived"]
             if archived is not None:
                 archived_flag = 1 if archived else 0
+                if archived_flag != row["archived"]:
+                    # The decision's own clock — see ygg_sync_merge.ARCHIVE_STAMP.
+                    metadata[_merge.ARCHIVE_STAMP] = time.time()
                 if archived:
                     metadata["status"] = "archived"
+                elif str(metadata.get("status") or "").lower() in ("archived", "superseded"):
+                    metadata["status"] = "active"  # or record_is_archived() still hides it
 
             with self._conn:  # row + FTS in one transaction (rollback on error)
                 self._conn.execute(
-                    "UPDATE memories SET content=?, content_hash=?, project=?, type=?, source=?, archived=?, metadata_json=? WHERE seq=?",
+                    "UPDATE memories SET content=?, content_hash=?, project=?, type=?, source=?, archived=?, metadata_json=?, updated_at=? WHERE seq=?",
                     (
                         content,
                         content_hash,
@@ -562,11 +703,13 @@ class MemoryStore:
                         metadata.get("source", row["source"]),
                         archived_flag,
                         json.dumps(metadata, sort_keys=True),
+                        time.time(),
                         seq,
                     ),
                 )
                 if data is not None and self.use_fts:
                     self._conn.execute("UPDATE mem_fts SET content=? WHERE rowid=?", (expand_identifiers(content), seq))
+                self._enqueue_locked("memory", memory_id)
             row = self._conn.execute("SELECT * FROM memories WHERE seq=?", (seq,)).fetchone()
         if data is not None and self.embedder is not None:
             vec = self._embed_raw(content)  # network call outside the lock
@@ -672,6 +815,105 @@ class MemoryStore:
             "near_dup_threshold": near_dup_threshold,
         }
 
+    def near_duplicates(self, *, user_id: str, threshold: float = 0.95,
+                        project: str | None = None, namespace: str | None = None,
+                        across_types: bool = False) -> list[dict[str, Any]]:
+        """Groups of live memories that say the same thing: cosine >= threshold
+        within one (project, type, embed_model) — or (project, embed_model) with
+        across_types, since the same note is often filed as a fix by one session
+        and a lesson by another. Groups are connected components (A~B, B~C ->
+        {A,B,C}), records oldest-first, each carrying its cosine to the oldest;
+        `similarity` is the group's weakest pair, so a caller acting on it never
+        archives anything less alike than that; `types` lists the types mixed in.
+
+        Exact all-pairs per bucket (see _pairs_at_least): no approximate index,
+        so nothing at or above the threshold is missed. Sync never calls this:
+        consolidation goes through review, whose archive merges by OR."""
+        sql = ("SELECT seq, project, type, embed_model, embedding_blob, created_at "
+               "FROM memories WHERE user_id=? AND archived=0 AND embedding_blob IS NOT NULL")
+        params: list[Any] = [user_id]
+        if namespace:
+            sql += " AND namespace=?"
+            params.append(namespace)
+        if project:
+            sql += " AND project=?"
+            params.append(project)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+
+        # Vectors from different models (or dims) live in different spaces —
+        # comparing them would be noise, so they never share a bucket.
+        buckets: dict[tuple, list[tuple[float, int, "array.array"]]] = {}
+        for row in rows:
+            unit = self._row_unit(row)
+            if unit is None:
+                continue
+            key = (row["project"], None if across_types else row["type"], row["embed_model"], len(unit))
+            buckets.setdefault(key, []).append((row["created_at"] or 0.0, row["seq"], unit))
+        del rows
+
+        threshold = float(threshold)
+        found: list[tuple[tuple, list[int], dict[int, float], float, float]] = []
+        for key, members in buckets.items():
+            if len(members) < 2:
+                continue
+            members.sort(key=lambda m: (m[0], m[1]))
+            # Per-bucket float lists: _sumprod is ~2.5x faster on them than on
+            # float32 arrays, and only one bucket is materialized at a time.
+            vecs = [m[2].tolist() for m in members]
+            sims = _pairs_at_least(vecs, threshold)
+            if not sims:
+                continue
+            parent = list(range(len(vecs)))
+
+            def root(i: int) -> int:
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+
+            for i, j in sims:
+                ri, rj = root(i), root(j)
+                if ri != rj:
+                    parent[max(ri, rj)] = min(ri, rj)
+            comps: dict[int, list[int]] = {}
+            for i in {k for pair in sims for k in pair}:
+                comps.setdefault(root(i), []).append(i)
+            for idx in comps.values():
+                idx.sort()  # members are oldest-first, so idx[0] is the keeper
+                pair_sims = [sims.get((a, b)) or _sumprod(vecs[a], vecs[b])
+                             for a, b in itertools.combinations(idx, 2)]
+                to_keep = {i: (1.0 if i == idx[0] else
+                               sims.get((idx[0], i)) or _sumprod(vecs[idx[0]], vecs[i]))
+                           for i in idx}
+                found.append((key, [members[i][1] for i in idx],
+                              {members[i][1]: to_keep[i] for i in idx},
+                              min(pair_sims), max(pair_sims)))
+
+        if not found:
+            return []
+        seqs = [s for _, group, _, _, _ in found for s in group]
+        by_seq: dict[int, dict[str, Any]] = {}
+        with self._lock:
+            for start in range(0, len(seqs), 500):  # stay under SQLite's host-param cap
+                chunk = seqs[start:start + 500]
+                for row in self._conn.execute(
+                        f"SELECT * FROM memories WHERE seq IN ({','.join('?' * len(chunk))})", chunk):
+                    by_seq[row["seq"]] = self._row_to_record(row)
+        groups = []
+        for (proj, _type, model, _dim), group, to_keep, lo, hi in found:
+            records = [dict(by_seq[s], similarity=round(to_keep[s], 4))
+                       for s in group if s in by_seq]  # a row vanishes only if deleted mid-scan
+            if len(records) < 2:
+                continue
+            types = sorted({r["type"] or "" for r in records})
+            groups.append({"project": proj, "type": types[0] if len(types) == 1 else None,
+                           "types": types, "embed_model": model,
+                           "similarity": round(lo, 4), "max_similarity": round(hi, 4),
+                           "records": records})
+        groups.sort(key=lambda g: (-g["similarity"], g["project"] or "", g["types"]))
+        return groups
+
     def get_by_id(self, memory_id: str) -> dict[str, Any] | None:
         """Direct indexed lookup by memory id (any store size, archived included)."""
         with self._lock:
@@ -732,6 +974,11 @@ class MemoryStore:
                 self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
                 self._conn.execute("DELETE FROM relations WHERE from_id=? OR to_id=?",
                                    (memory_id, memory_id))
+                # Same transaction as the DELETE on purpose: a crash between the
+                # two would let the peer that still has the row put it straight
+                # back on the next reconcile.
+                self._tombstone_locked(memory_id, time.time(), "local")
+                self._enqueue_locked("tombstone", memory_id)
             self._vec_cache.pop(row["seq"], None)
         return True
 
@@ -768,6 +1015,10 @@ class MemoryStore:
                     self._conn.execute(
                         f"DELETE FROM relations WHERE from_id IN ({marks}) OR to_id IN ({marks})",
                         chunk + chunk)
+                deleted_at = time.time()
+                for mid in ids:
+                    self._tombstone_locked(mid, deleted_at, "local")
+                    self._enqueue_locked("tombstone", mid)
             for s in seqs:
                 self._vec_cache.pop(s, None)
         return len(seqs)
@@ -779,9 +1030,15 @@ class MemoryStore:
     REL_TYPES = ("SOLVES", "SUPERSEDES", "CONTRADICTS")
 
     def relate(self, *, from_id: str, to_id: str, rel_type: str,
-               user_id: str, source: str | None = None) -> dict[str, Any]:
+               user_id: str, source: str | None = None,
+               stamp: float | None = None, remote: bool = False) -> dict[str, Any]:
         """Create one edge. Idempotent (UNIQUE); SUPERSEDES archives the target —
-        the edge records WHY it left the active set. Raises ValueError on bad input."""
+        the edge records WHY it left the active set. Raises ValueError on bad input.
+
+        `remote` marks an edge arriving from a peer (or a git import): `stamp` is
+        its creation time there (None from a 0.16.0 peer), it must beat any
+        unlink of the edge to land (ygg_sync_merge.edge_survives), and it is not
+        queued back towards the peers."""
         rel = (rel_type or "").upper()
         if rel not in self.REL_TYPES:
             raise ValueError(f"unknown rel_type {rel_type!r}: use one of {', '.join(self.REL_TYPES)}")
@@ -793,23 +1050,69 @@ class MemoryStore:
             missing = {from_id, to_id} - found
             if missing:
                 raise ValueError(f"memory not found: {', '.join(sorted(missing))}")
+            when = float(stamp or 0.0) if remote else time.time()
+            buried = self._conn.execute(
+                "SELECT deleted_at FROM relation_tombstones WHERE from_id=? AND to_id=? AND rel_type=?",
+                (from_id, to_id, rel)).fetchone()
+            if buried is not None and not _merge.edge_survives(when, buried["deleted_at"]):
+                return {"from_id": from_id, "to_id": to_id, "rel_type": rel, "created": False}
             with self._conn:
                 cur = self._conn.execute(
                     "INSERT OR IGNORE INTO relations (from_id, to_id, rel_type, user_id, source, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (from_id, to_id, rel, user_id, source, time.time()))
+                    (from_id, to_id, rel, user_id, source, when or time.time()))
                 created = cur.rowcount > 0
+                if not created and remote and when:  # the newest link is what an unlink must beat
+                    self._conn.execute(
+                        "UPDATE relations SET created_at=MAX(created_at, ?) "
+                        "WHERE from_id=? AND to_id=? AND rel_type=?", (when, from_id, to_id, rel))
+                if created and not remote:
+                    self._enqueue_locked("relation", _merge.edge_key(from_id, to_id, rel))
                 if rel == "SUPERSEDES":
                     self._conn.execute(
                         "UPDATE memories SET archived=1 WHERE id=? AND archived=0", (to_id,))
         return {"from_id": from_id, "to_id": to_id, "rel_type": rel, "created": created}
 
     def unrelate(self, *, from_id: str, to_id: str, rel_type: str) -> bool:
+        rel = (rel_type or "").upper()
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "DELETE FROM relations WHERE from_id=? AND to_id=? AND rel_type=?",
-                (from_id, to_id, (rel_type or "").upper()))
+                (from_id, to_id, rel))
+            if cur.rowcount > 0:
+                self._bury_edge_locked(from_id, to_id, rel, time.time())
+                self._enqueue_locked("relation", _merge.edge_key(from_id, to_id, rel))
         return cur.rowcount > 0
+
+    def _bury_edge_locked(self, from_id: str, to_id: str, rel: str, deleted_at: float) -> None:
+        """Record an unlink and drop any copy of the edge it beats. The stamp only
+        grows: the newest unlink is the one a later link has to outrun."""
+        self._conn.execute(
+            "INSERT INTO relation_tombstones (from_id, to_id, rel_type, deleted_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(from_id, to_id, rel_type) DO UPDATE "
+            "SET deleted_at=MAX(relation_tombstones.deleted_at, excluded.deleted_at)",
+            (from_id, to_id, rel, float(deleted_at)))
+        self._conn.execute(
+            "DELETE FROM relations WHERE from_id=? AND to_id=? AND rel_type=? AND created_at<=?",
+            (from_id, to_id, rel, float(deleted_at)))
+
+    def sync_edges(self, keys: list[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """Edges WITH their stamps, plus unlinks — what the live uplink ships.
+        `keys` (ygg_sync_merge.edge_key) narrows it to what the outbox names.
+        Kept apart from sync_export so the git format does not change."""
+        want = set(keys) if keys is not None else None
+        with self._lock:
+            edges = [dict(r) for r in self._conn.execute(
+                "SELECT from_id, to_id, rel_type, user_id, source, created_at FROM relations "
+                "ORDER BY from_id, to_id, rel_type")]
+            buried = [dict(r) for r in self._conn.execute(
+                "SELECT from_id, to_id, rel_type, deleted_at FROM relation_tombstones "
+                "ORDER BY from_id, to_id, rel_type")]
+        if want is not None:
+            key = lambda e: _merge.edge_key(e["from_id"], e["to_id"], e["rel_type"])  # noqa: E731
+            edges = [e for e in edges if key(e) in want]
+            buried = [b for b in buried if key(b) in want]
+        return {"relations": edges, "relation_tombstones": buried}
 
     def relations_for(self, memory_id: str) -> dict[str, list[dict[str, Any]]]:
         """Both directions, each edge carrying the other end's content preview —
@@ -838,14 +1141,243 @@ class MemoryStore:
         return out
 
     # ------------------------------------------------------------------ #
+    # peer uplink primitives — tombstones, the outbox, and remote import.
+    # The engine owns the transactions; the POLICY (what beats what) lives
+    # in ygg_sync_merge and the WIRE FORMAT in ygg_sync_protocol, so the
+    # git transport and the live uplink can never disagree.
+    # ------------------------------------------------------------------ #
+
+    def _tombstone_locked(self, memory_id: str, deleted_at: float, origin: str) -> None:
+        """Record a deletion. The caller holds the lock and owns the transaction.
+
+        On conflict the EARLIER stamp wins: whichever machine deleted first is
+        the one that decided, and keeping the earliest makes the row identical on
+        every node instead of drifting with arrival order.
+        """
+        self._conn.execute(
+            "INSERT INTO tombstones (id, deleted_at, origin) VALUES (?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET deleted_at=MIN(tombstones.deleted_at, excluded.deleted_at)",
+            (memory_id, float(deleted_at), origin))
+
+    def _enqueue_locked(self, kind: str, ref_id: str) -> None:
+        """Note that something changed locally and still owes the peers a push.
+
+        References, not bodies — the sender reads current state at send time, so
+        three quick edits ship one final version instead of three stale ones.
+        Called INSIDE the mutation's own transaction, so a crash can never leave
+        a change that no one will ever send.
+        """
+        # Re-enqueue with a FRESH seq rather than keeping the old row: an edit
+        # landing while the previous version is in flight must outlive the ack
+        # for that flight, and acks are by seq.
+        self._conn.execute("DELETE FROM outbox WHERE kind=? AND ref_id=?", (kind, ref_id))
+        self._conn.execute(
+            "INSERT INTO outbox (kind, ref_id, created_at) VALUES (?,?,?)",
+            (kind, ref_id, time.time()))
+        if self._conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] > self.OUTBOX_MAX:
+            self._conn.execute("DELETE FROM outbox")
+            self.needs_reconcile = True
+        self.outbox_signal.set()
+
+    def tombstones(self) -> dict[str, float]:
+        with self._lock:
+            return {r["id"]: r["deleted_at"]
+                    for r in self._conn.execute("SELECT id, deleted_at FROM tombstones")}
+
+    def gc_tombstones(self, *, now: float | None = None) -> int:
+        """Forget deletions old enough that no peer can still be carrying the
+        record. Returns how many were collected."""
+        now = time.time() if now is None else now
+        dead = _merge.expired_tombstones(self.tombstones(), now=now)
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM relation_tombstones WHERE deleted_at <= ?",
+                               (now - _merge.TOMBSTONE_TTL,))
+        if not dead:
+            return 0
+        with self._lock, self._conn:
+            for i in range(0, len(dead), 500):
+                chunk = dead[i:i + 500]
+                marks = ",".join("?" for _ in chunk)
+                self._conn.execute(f"DELETE FROM tombstones WHERE id IN ({marks})", chunk)
+        return len(dead)
+
+    def outbox_pending(self, limit: int = 500, *, after: int = 0) -> list[dict[str, Any]]:
+        """Queued rows in order — those past `after`, for a peer that has
+        already confirmed everything up to it."""
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT seq, kind, ref_id FROM outbox WHERE seq > ? ORDER BY seq LIMIT ?",
+                (int(after), limit))]
+
+    def outbox_ack_through(self, seq: int) -> int:
+        """Drop every row up to and including `seq` — what all peers have taken."""
+        with self._lock, self._conn:
+            return self._conn.execute("DELETE FROM outbox WHERE seq <= ?", (int(seq),)).rowcount
+
+    def outbox_ack(self, seqs: list[int]) -> int:
+        """Drop rows the peer has confirmed. Acking by seq (not by ref_id) is what
+        keeps a write that landed mid-flight from being swallowed by the ack for
+        the batch before it."""
+        if not seqs:
+            return 0
+        with self._lock, self._conn:
+            for i in range(0, len(seqs), 500):
+                chunk = seqs[i:i + 500]
+                marks = ",".join("?" for _ in chunk)
+                self._conn.execute(f"DELETE FROM outbox WHERE seq IN ({marks})", chunk)
+        return len(seqs)
+
+    def outbox_count(self, *, after: int = 0) -> int:
+        with self._lock:
+            return int(self._conn.execute(
+                "SELECT COUNT(*) FROM outbox WHERE seq > ?", (after,)).fetchone()[0])
+
+    def records_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Sync-shaped rows for the given ids, in the order SQLite finds them.
+        Missing ids are simply absent — a peer asking for something we deleted is
+        normal, not an error."""
+        out: list[dict[str, Any]] = []
+        if not ids:
+            return out
+        fields = ",".join(self.SYNC_FIELDS)
+        with self._lock:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" for _ in chunk)
+                out.extend(dict(r) for r in self._conn.execute(
+                    f"SELECT {fields} FROM memories WHERE id IN ({marks})", chunk))
+        return out
+
+    def export_vector(self, memory_id: str) -> dict[str, Any] | None:
+        """The stored vector, base64'd, tagged with the model that produced it.
+
+        Vectors are per-machine state and normally stay home, with one deliberate
+        exception: when both machines run the SAME embedding model, shipping the
+        vector saves the receiver a reindex — which matters when one box does the
+        computing for both. The model tag is what makes that safe.
+        """
+        if not self._embed_model:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT embedding_blob, embed_model FROM memories WHERE id=?", (memory_id,)).fetchone()
+        if row is None or not row["embedding_blob"] or not row["embed_model"]:
+            return None
+        return {"embedding": base64.b64encode(row["embedding_blob"]).decode("ascii"),
+                "embed_model": row["embed_model"]}
+
+    def _accept_vectors_locked(self, vectors: dict[str, str]) -> int:
+        stored = 0
+        for memory_id, encoded in vectors.items():
+            row = self._conn.execute("SELECT seq FROM memories WHERE id=?", (memory_id,)).fetchone()
+            if row is None:
+                continue
+            try:
+                blob = base64.b64decode(encoded)
+                unit = _unit(_blob_to_array(blob))
+            except (ValueError, TypeError):
+                continue
+            if unit is None:
+                continue
+            self._conn.execute("UPDATE memories SET embedding_blob=?, embed_model=? WHERE seq=?",
+                               (blob, self._embed_model, row["seq"]))
+            self._vec_cache[row["seq"]] = unit
+            stored += 1
+        return stored
+
+    def apply_remote(self, *, memories: list[dict[str, Any]] | None = None,
+                     tombstones: dict[str, float] | None = None,
+                     relations: list[dict[str, Any]] | None = None,
+                     relation_tombstones: list[dict[str, Any]] | None = None,
+                     now: float | None = None) -> dict[str, int]:
+        """Import what a peer sent us: delete what they deleted, merge the rest.
+
+        NEVER enqueues. Anything that arrived from a peer must not be queued back
+        towards that peer, or the two nodes bounce one record between them
+        forever; the digest comparison is what propagates it onward.
+        """
+        now = time.time() if now is None else now
+        # A peer's clock is not ours: a stamp from the future would win every
+        # recency-resolved field forever, and a tombstone from the future would
+        # never expire. Bound both by what our own clock finds plausible.
+        incoming = {str(k): _merge.clamp_stamp(v, now=now) for k, v in (tombstones or {}).items()}
+        unlinks = [u for u in (relation_tombstones or []) if isinstance(u, dict)
+                   and u.get("from_id") and u.get("to_id") and u.get("rel_type")
+                   and isinstance(u.get("deleted_at"), (int, float))]
+        if unlinks:
+            with self._lock, self._conn:
+                for u in unlinks:
+                    self._bury_edge_locked(str(u["from_id"]), str(u["to_id"]),
+                                           str(u["rel_type"]).upper(),
+                                           _merge.clamp_stamp(u["deleted_at"], now=now))
+        deleted = 0
+        if incoming:
+            with self._lock, self._conn:
+                for memory_id, deleted_at in incoming.items():
+                    self._tombstone_locked(memory_id, deleted_at, "remote")
+                    row = self._conn.execute("SELECT seq FROM memories WHERE id=?", (memory_id,)).fetchone()
+                    if row is None:
+                        continue
+                    if self.use_fts:
+                        self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
+                    self._conn.execute("DELETE FROM memories WHERE seq=?", (row["seq"],))
+                    self._conn.execute("DELETE FROM relations WHERE from_id=? OR to_id=?",
+                                       (memory_id, memory_id))
+                    self._vec_cache.pop(row["seq"], None)
+                    deleted += 1
+
+        graveyard = self.tombstones()
+        candidates = []
+        for rec in memories or []:
+            if not (rec.get("id") and rec.get("content")):
+                continue
+            rec = dict(rec)
+            for stamp in ("created_at", "updated_at"):
+                if rec.get(stamp) is not None:
+                    rec[stamp] = _merge.clamp_stamp(rec[stamp], now=now)
+            rec["metadata_json"] = _clamp_archive_stamp(rec.get("metadata_json"), now=now)
+            candidates.append(rec)
+        mine = {r["id"]: r for r in self.records_by_ids([r["id"] for r in candidates])}
+        merged: list[dict[str, Any]] = []
+        vectors: dict[str, str] = {}
+        blocked = 0
+        for rec in candidates:
+            memory_id = rec["id"]
+            buried = graveyard.get(memory_id)
+            if buried is not None and _merge.tombstone_wins(deleted_at=buried, record=rec, now=now):
+                blocked += 1
+                continue
+            local = mine.get(memory_id)
+            merged.append(_merge.merge_memory(dict(local), rec) if local else dict(rec))
+            if rec.get("embedding") and rec.get("embed_model") == self._embed_model:
+                vectors[memory_id] = rec["embedding"]
+
+        counts = {"added": 0, "updated": 0, "unchanged": 0,
+                  "relations_added": 0, "relations_skipped": 0}
+        if merged or relations:
+            counts.update(self.sync_upsert(merged, relations))
+        stored = 0
+        if vectors:
+            with self._lock, self._conn:
+                stored = self._accept_vectors_locked(vectors)
+        counts.update({"deleted": deleted, "blocked": blocked, "vectors": stored,
+                       "unlinked": len(unlinks)})
+        return counts
+
+    # ------------------------------------------------------------------ #
     # git-backed sync — stable export + id-preserving upsert. The MERGE
-    # policy lives in ygg_sync (pure, unit-tested); the engine only reads
-    # and writes exactly what it's told.
+    # policy lives in ygg_sync_merge (pure, unit-tested); the engine only
+    # reads and writes exactly what it's told.
     # ------------------------------------------------------------------ #
 
     SYNC_FIELDS = ("id", "user_id", "namespace", "scope", "project", "type", "content",
                    "content_hash", "source", "confidence", "importance", "created_at",
-                   "archived", "metadata_json")
+                   "updated_at", "archived", "metadata_json")
+
+    # What decides "this row already matches what arrived". updated_at is excluded
+    # deliberately: two machines that imported the same record at different moments
+    # must not rewrite it (and re-push it) on every single sync.
+    COMPARE_FIELDS = tuple(f for f in SYNC_FIELDS if f != "updated_at")
 
     def sync_export(self) -> dict[str, Any]:
         """Everything another machine needs to reproduce this store: all memories
@@ -879,11 +1411,20 @@ class MemoryStore:
                         rec.get("user_id"), rec.get("namespace"))
                     row = self._conn.execute("SELECT * FROM memories WHERE id=?", (mid,)).fetchone()
                     if row is None:
+                        # Re-checked under the write lock: callers look at the
+                        # graveyard before taking it, and a local delete landing
+                        # in between must not be undone by this insert.
+                        buried = self._conn.execute(
+                            "SELECT deleted_at FROM tombstones WHERE id=?", (mid,)).fetchone()
+                        if buried is not None and _merge.tombstone_wins(
+                                deleted_at=buried["deleted_at"], record=rec, now=time.time()):
+                            unchanged += 1
+                            continue
                         cur = self._conn.execute(
                             """
                             INSERT INTO memories
-                                (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,access_count,archived,metadata_json)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)
+                                (id,user_id,namespace,scope,project,type,content,content_hash,source,confidence,importance,created_at,updated_at,access_count,archived,metadata_json)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)
                             """,
                             (mid, rec.get("user_id") or "global_user", rec.get("namespace"),
                              rec.get("scope"), rec.get("project"), rec.get("type"),
@@ -891,26 +1432,30 @@ class MemoryStore:
                              rec.get("confidence"),
                              rec.get("importance") if rec.get("importance") is not None else 0.5,
                              rec.get("created_at") or time.time(),
+                             rec.get("updated_at") or rec.get("created_at") or time.time(),
                              1 if rec.get("archived") else 0, rec.get("metadata_json")))
                         if self.use_fts:
                             self._conn.execute("INSERT INTO mem_fts(rowid, content) VALUES (?, ?)",
                                                (cur.lastrowid, expand_identifiers(rec["content"])))
                         added += 1
                         continue
-                    same = all((dict(row).get(f) == rec.get(f)) for f in self.SYNC_FIELDS)
+                    same = all((dict(row).get(f) == rec.get(f)) for f in self.COMPARE_FIELDS)
                     if same:
                         unchanged += 1
                         continue
                     content_changed = row["content"] != rec["content"]
                     self._conn.execute(
-                        "UPDATE memories SET scope=?, project=?, type=?, content=?, content_hash=?, "
-                        "source=?, confidence=?, importance=?, archived=?, metadata_json=?"
+                        "UPDATE memories SET user_id=?, namespace=?, scope=?, project=?, type=?, "
+                        "content=?, content_hash=?, source=?, confidence=?, importance=?, "
+                        "archived=?, metadata_json=?, updated_at=?"
                         + (", embedding_blob=NULL, embed_model=NULL" if content_changed else "")
                         + " WHERE seq=?",
-                        (rec.get("scope"), rec.get("project"), rec.get("type"), rec["content"],
+                        (rec.get("user_id") or row["user_id"], rec.get("namespace"),
+                         rec.get("scope"), rec.get("project"), rec.get("type"), rec["content"],
                          rec.get("content_hash"), rec.get("source"), rec.get("confidence"),
                          rec.get("importance") if rec.get("importance") is not None else 0.5,
-                         1 if rec.get("archived") else 0, rec.get("metadata_json"), row["seq"]))
+                         1 if rec.get("archived") else 0, rec.get("metadata_json"),
+                         rec.get("updated_at") or row["updated_at"] or time.time(), row["seq"]))
                     if content_changed:
                         if self.use_fts:
                             self._conn.execute("DELETE FROM mem_fts WHERE rowid=?", (row["seq"],))
@@ -921,16 +1466,33 @@ class MemoryStore:
         for rel in relations or []:
             try:
                 rel_uid, _ = rebrand_legacy_identity(rel.get("user_id"), _cfg.DEMO_NAMESPACE)
+                stamp = rel.get("created_at")
                 r = self.relate(from_id=str(rel.get("from_id") or ""),
                                 to_id=str(rel.get("to_id") or ""),
                                 rel_type=str(rel.get("rel_type") or ""),
                                 user_id=str(rel_uid or "global_user"),
-                                source=rel.get("source") or "sync")
+                                source=rel.get("source") or "sync", remote=True,
+                                stamp=_merge.clamp_stamp(stamp, now=time.time())
+                                if isinstance(stamp, (int, float)) else None)
                 rel_added += 1 if r["created"] else 0
             except ValueError:
                 rel_skipped += 1
         return {"added": added, "updated": updated, "unchanged": unchanged,
                 "relations_added": rel_added, "relations_skipped": rel_skipped}
+
+    def close(self) -> None:
+        """Release the database file.
+
+        The daemon runs until the machine does, so it never needed this — but
+        anything embedding a store (tests, tooling) does: on Windows an open
+        SQLite handle makes the containing directory undeletable, so a caller
+        with no way to close is a caller that leaks temp directories.
+        """
+        self._vec_cache.clear()
+        try:
+            self._conn.close()
+        except sqlite3.Error:
+            pass
 
     def count(self) -> int:
         with self._lock:
@@ -1185,6 +1747,306 @@ class MemoryStore:
             self._reindex_gate.release()
 
 
+# Interface names that are never the link to another machine on the desk: VM
+# and container bridges (OrbStack, Docker, libvirt, VirtualBox), tunnels and
+# VPNs, Apple's peer-to-peer radios. A name on neither list ranks in between.
+_VIRTUAL_IFACE = re.compile(
+    r"^(lo|bridge|docker|br-|veth|vmnet|vmenet|vboxnet|virbr|utun|tun|tap|wg|zt|"
+    r"tailscale|ipsec|ppp|gif|stf|awdl|llw|anpi|ap\d)", re.I)
+_PHYSICAL_IFACE = re.compile(r"^(en\d|eth|enp|eno|ens|enx|wl)", re.I)
+_IPV4 = r"(\d{1,3}(?:\.\d{1,3}){3})"
+
+
+def _parse_ifconfig(text: str) -> list[tuple[str, str]]:
+    """(interface, IPv4) pairs from BSD/macOS or net-tools `ifconfig` output."""
+    pairs: list[tuple[str, str]] = []
+    iface = ""
+    for line in text.splitlines():
+        head = re.match(r"^(\S+?):? (?:flags=|Link )", line)
+        if head:
+            iface = head.group(1)
+            continue
+        addr = re.search(r"\binet (?:addr:)?" + _IPV4, line)
+        if addr and iface:
+            pairs.append((iface, addr.group(1)))
+    return pairs
+
+
+def _parse_ip_addr(text: str) -> list[tuple[str, str]]:
+    """(interface, IPv4) pairs from Linux `ip -4 -o addr show` output."""
+    return re.findall(r"^\d+:\s+(\S+)\s+inet\s+" + _IPV4, text, re.M)
+
+
+def _interface_addresses() -> list[tuple[str, str]]:
+    """Every IPv4 address with the interface it lives on. The stdlib cannot
+    enumerate interfaces portably, so ask the OS tool; empty when there is none."""
+    for cmd, parse in ((["ip", "-4", "-o", "addr", "show"], _parse_ip_addr),
+                       (["ifconfig"], _parse_ifconfig)):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        pairs = parse(out)
+        if pairs:
+            return pairs
+    return []
+
+
+def _probed_addresses() -> list[str]:
+    """Addresses the routing table and the resolver hand out, in that order."""
+    found: list[str] = []
+    for target in ("192.168.0.1", "10.0.0.1", "172.16.0.1", "8.8.8.8"):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect((target, 9))  # UDP connect sends nothing; it only picks a route
+            found.append(probe.getsockname()[0])
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    try:
+        found.extend(info[4][0] for info in
+                     socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
+    except OSError:
+        pass
+    return found
+
+
+def _private_addresses() -> list[str]:
+    """Every private IPv4 address this host answers on, most-likely-LAN first.
+
+    Only consulted when there is no peer to route towards yet, i.e. when
+    printing a pairing code. Neither the route probes nor the hostname are
+    reliable alone: behind a VPN every probe answers with the tunnel's
+    link-local address, and the hostname resolves to whichever VM bridge
+    registered first. So each address is ranked by the interface it sits on
+    (a real Ethernet or Wi-Fi port beats a bridge or a tunnel), then by how
+    unusual it looks (OrbStack hands its bridge the .0 of a /24), then by
+    RFC1918 block.
+    """
+    pairs = _interface_addresses()
+    iface_of = {addr: iface for iface, addr in pairs}
+    found: list[str] = []
+    for addr in [*_probed_addresses(), *(addr for _, addr in pairs)]:
+        if addr and addr not in found:
+            found.append(addr)
+
+    def block(addr: str) -> int:
+        if addr.startswith("192.168."):
+            return 0
+        if addr.startswith("10."):
+            return 1
+        if addr.startswith("172.") and 16 <= int(addr.split(".")[1] or 0) <= 31:
+            return 2
+        if _is_tailnet(addr):
+            return 3  # reachable from anywhere on the tailnet, but the LAN is shorter
+        return 9
+
+    def rank(addr: str) -> tuple[int, int, int]:
+        iface = iface_of.get(addr, "")
+        kind = 0 if _PHYSICAL_IFACE.match(iface) else 2 if _VIRTUAL_IFACE.match(iface) else 1
+        odd = 1 if addr.rsplit(".", 1)[-1] in ("0", "255") else 0
+        return (odd, kind, block(addr))
+
+    return sorted((a for a in found if block(a) < 9), key=rank)
+
+
+def _is_tailnet(addr: str) -> bool:
+    """100.64.0.0/10 — the shared address space Tailscale numbers its nodes from."""
+    parts = addr.split(".")
+    return len(parts) == 4 and parts[0] == "100" and parts[1].isdigit() and 64 <= int(parts[1]) <= 127
+
+
+def _tailscale_address() -> str | None:
+    """This machine's Tailscale IPv4, if it is on a tailnet."""
+    return next((addr for _, addr in _interface_addresses() if _is_tailnet(addr)), None)
+
+
+def _listen_addresses(peer_hosts: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """One address per distinct route to a linked machine, in peer order — a
+    LAN peer and a Tailscale peer each need the interface that reaches them.
+    Before any peer exists, the single best guess."""
+    try:
+        from . import ygg_sync_peers as _p
+    except ImportError:  # flat layout
+        import ygg_sync_peers as _p
+    out: list[str] = []
+    for host in peer_hosts:
+        source = _p.route_source(host)
+        if source and source not in out:
+            out.append(source)
+    return out or [_lan_address()]
+
+
+def _lan_address(peer_hosts: list[str] | tuple[str, ...] = ()) -> str:
+    """The address peers should reach us on.
+
+    With a peer already known the routing table answers exactly: whichever
+    local address it would send from to reach that peer. Without one it is a
+    guess — loopback when there is no private address at all, in which case
+    the uplink is useless but the engine still starts, and `ygg config set
+    sync_host` overrides all of this in one command."""
+    try:
+        from . import ygg_sync_peers as _p
+    except ImportError:  # flat layout
+        import ygg_sync_peers as _p
+    for host in peer_hosts:
+        source = _p.route_source(host)
+        if source:
+            return source
+    candidates = _private_addresses()
+    return candidates[0] if candidates else "127.0.0.1"
+
+
+def _peer_hosts() -> list[str]:
+    """Hosts of the machines already linked, read from peers.json."""
+    try:
+        from . import ygg_sync_peers as _p
+    except ImportError:  # flat layout
+        import ygg_sync_peers as _p
+    try:
+        peers = _p.load()["peers"].values()
+    except Exception:  # noqa: BLE001 — an unreadable registry just means "guess"
+        return []
+    return [h for h in (urlparse(p.get("url") or "").hostname for p in peers) if h]
+
+
+# Windows reports a port another socket holds as WSAEADDRINUSE (10048) or, when
+# that socket is exclusive, WSAEACCES (10013). Elsewhere EACCES means a
+# privileged port, not a busy one, so it stays out.
+_ADDR_IN_USE = {errno.EADDRINUSE} | ({10048, 10013} if os.name == "nt" else set())
+
+
+def _addr_in_use(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and (
+        exc.errno in _ADDR_IN_USE or getattr(exc, "winerror", None) in _ADDR_IN_USE)
+
+
+def _port_holder(port: int) -> str | None:
+    """`name (pid N)` of whoever listens on `port`, when lsof can tell; else None."""
+    try:
+        out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pid = name = None
+    for line in out.splitlines():
+        if line[:1] == "p" and pid is None:
+            pid = line[1:]
+        elif line[:1] == "c" and name is None:
+            name = line[1:]
+    return f"{name or 'a process'} (pid {pid})" if pid else None
+
+
+def _port_busy(port: int, *, retrying: bool) -> str:
+    """`Address already in use` says nothing about who, or what happens next."""
+    holder = _port_holder(port)
+    msg = f"port {port} is already in use" + (f" by {holder}" if holder else "")
+    if retrying:
+        msg += f" — retrying every {_Uplink.RETRY_SECONDS:.0f}s"
+    return msg + f"; free it, or move sync: ygg config set sync_port <port>"
+
+
+class _Uplink:
+    """Lazily-started holder for the peer-sync node.
+
+    Nothing binds a network interface until the user actually links two machines.
+    An always-on memory daemon should not open a port to the LAN merely because
+    the feature exists — so the listener starts on the first `ygg link`, and on
+    every subsequent boot only if peers.json already has someone in it.
+    """
+
+    # A port still held at boot (the old daemon shutting down, another engine on
+    # 42070) used to leave the machine unreachable until the next restart.
+    RETRY_SECONDS = 15.0
+
+    def __init__(self) -> None:
+        self.node = None
+        self.error: str | None = None
+        self._lock = threading.Lock()  # boot retry vs `ygg link` racing to bind
+        self._retrying = False
+
+    def ensure(self, store, *, name: str | None = None):
+        with self._lock:
+            return self._ensure(store, name=name)
+
+    def _ensure(self, store, *, name: str | None):
+        if self.node is not None:
+            return self.node
+        node = None
+        port = int(_cfg.resolve("sync_port", None) or 42070)
+        try:
+            try:
+                from . import ygg_sync_node as _node
+            except ImportError:  # flat layout
+                import ygg_sync_node as _node
+            home = Path(os.environ.get("YGG_HOME") or str(Path.home() / ".yggdrasil"))
+            pinned = _cfg.resolve("sync_host", None)
+            hosts = [pinned] if pinned else _listen_addresses(_peer_hosts())
+            node = _node.SyncNode(
+                store, home=home, name=name or socket.gethostname().split(".")[0],
+                host=hosts[0], port=port,
+                insecure=str(_cfg.resolve("sync_insecure", None) or "0") not in ("0", "", "false"),
+                host_pinned=bool(pinned), extra_hosts=hosts[1:])
+            node.start()
+            node.start_sender()
+        except Exception as exc:  # noqa: BLE001 — sync must never stop the engine
+            self.error = str(exc)
+            if _addr_in_use(exc):
+                self.error = _port_busy(port, retrying=self._retrying)
+            if node is not None:  # release whatever did bind, or the retry never can
+                try:
+                    node.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+        self.node, self.error = node, None
+        return node
+
+    def start_if_paired(self, store) -> None:
+        try:
+            from . import ygg_sync_peers as _p
+        except ImportError:  # flat layout
+            import ygg_sync_peers as _p
+        if _p.load()["peers"] and self.ensure(store) is None:
+            self._retry_later(store)
+            if self.error and self.error.startswith("port "):
+                self.error = _port_busy(int(_cfg.resolve("sync_port", None) or 42070),
+                                        retrying=True)
+
+    def _retry_later(self, store) -> None:
+        if self._retrying:
+            return
+        self._retrying = True
+
+        def loop() -> None:
+            while self.node is None:
+                time.sleep(self.RETRY_SECONDS)
+                self.ensure(store)
+            self._retrying = False
+
+        threading.Thread(target=loop, name="ygg-sync-retry", daemon=True).start()
+
+    def trigger(self) -> None:
+        """Called from read routes. Never blocks and never raises: a peer that is
+        down must not add a timeout to every recall."""
+        if self.node is not None:
+            self.node.maybe_reconcile_async()
+
+
+def _public_peer(peer: dict[str, Any]) -> dict[str, Any]:
+    """A peer as the CLI may see it. The per-pair keys NEVER leave the engine —
+    not over the local API either, so a curious agent cannot read itself a
+    credential to the other machine."""
+    return {"node_id": peer.get("node_id"), "name": peer.get("name"),
+            "url": peer.get("url"), "embed_model": peer.get("embed_model"),
+            "fingerprint": (peer.get("fingerprint") or "")[:16],
+            "last_seen": peer.get("last_seen")}
+
+
+UPLINK = _Uplink()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "YggMemory/0.1"
     store: MemoryStore = None  # type: ignore[assignment]
@@ -1297,6 +2159,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             self._send(401, {"success": False, "error": "unauthorized"})
+            return
+        if parsed.path == "/sync/peers":
+            node = UPLINK.node
+            try:
+                from . import ygg_sync_peers as _p
+            except ImportError:
+                import ygg_sync_peers as _p
+            state = node.peers_state if node is not None else _p.load()
+            health = node.peer_health() if node is not None else {}
+            self._send(200, {"success": True, "data": {
+                "running": node is not None,
+                "url": node.url if node is not None else None,
+                "urls": [node.url_on(h) for h in node.hosts] if node is not None else [],
+                "error": UPLINK.error,
+                "peers": [{**_public_peer(x), "health": health.get(x.get("node_id")),
+                           "local_url": node._local_url_for(urlparse(x.get("url") or "").hostname or "")
+                           if node is not None else None}
+                          for x in state.get("peers", {}).values()]}})
             return
         if parsed.path == "/get_all":
             qs = parse_qs(parsed.query)
@@ -1454,12 +2334,99 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"success": True, "data": self.store.relations_for(str(memory_id))})
             return
+        if parsed.path == "/near_duplicates":
+            # Lexical-only engines have no vectors to compare: say so instead of
+            # erroring, and let `ygg review` fall back to its text-signature finder.
+            if self.store.embedder is None:
+                self._send(200, {"success": True, "data": {"dense": False, "groups": []}})
+                return
+            threshold = float(body.get("threshold") or 0.95)
+            started = time.monotonic()
+            groups = self.store.near_duplicates(
+                user_id=str(body.get("user_id") or "global_user"),
+                threshold=threshold,
+                project=body.get("project") or None,
+                namespace=body.get("namespace") or None,
+                across_types=bool(body.get("across_types")),
+            )
+            self._send(200, {"success": True, "data": {
+                "dense": True, "threshold": threshold, "groups": groups,
+                "elapsed_ms": int((time.monotonic() - started) * 1000)}})
+            return
+        if parsed.path == "/sync/link/issue":
+            node = UPLINK.ensure(self.store)
+            if node is None:
+                self._send(500, {"success": False,
+                                 "error": UPLINK.error or "could not start the sync listener"})
+                return
+            host = str(body.get("host") or "") or None
+            tailnet = _tailscale_address()
+            if body.get("via") == "tailscale":
+                if tailnet is None:
+                    self._send(400, {"success": False,
+                                     "error": "this machine has no Tailscale address (100.64.0.0/10)"})
+                    return
+                host = tailnet
+            try:
+                code = node.issue_pairing_code(host=host)
+            except (RuntimeError, ValueError) as exc:
+                self._send(400, {"success": False, "error": str(exc)})
+                return
+            self._send(200, {"success": True, "data": {
+                "code": code, "url": node.url_on(host or node.host),
+                # Offered as an alternative only when the code does not use it.
+                "tailscale": tailnet if tailnet and tailnet != (host or node.host) else None}})
+            return
+        if parsed.path == "/sync/link/redeem":
+            node = UPLINK.ensure(self.store)
+            if node is None:
+                self._send(500, {"success": False,
+                                 "error": UPLINK.error or "could not start the sync listener"})
+                return
+            try:
+                peer = node.pair_with(str(body.get("code") or ""), name=body.get("name") or None)
+            except (RuntimeError, ValueError) as exc:
+                self._send(400, {"success": False, "error": str(exc)})
+                return
+            self._send(200, {"success": True, "data": {
+                **_public_peer(peer), "port": node.port,
+                "reachable_back": peer.get("reachable_back"),
+                "back_error": peer.get("back_error")}})
+            return
+        if parsed.path == "/sync/peers/remove":
+            try:
+                from . import ygg_sync_peers as _p
+            except ImportError:
+                import ygg_sync_peers as _p
+            node = UPLINK.node
+            state = node.peers_state if node is not None else _p.load()
+            removed = _p.remove_peer(state, str(body.get("name") or ""))
+            if removed:
+                _p.save(state)
+            self._send(200, {"success": True, "data": {"removed": removed}})
+            return
+        if parsed.path == "/sync/reconcile":
+            node = UPLINK.ensure(self.store)
+            if node is None:
+                self._send(500, {"success": False,
+                                 "error": UPLINK.error or "could not start the sync listener"})
+                return
+            self._send(200, {"success": True,
+                             "data": node.reconcile(force=bool(body.get("force")))})
+            return
         if parsed.path == "/sync_export":
-            self._send(200, {"success": True, "data": self.store.sync_export()})
+            # Tombstones ride along so the git transport honours deletes the
+            # same way the uplink does instead of re-importing them.
+            data = dict(self.store.sync_export(), tombstones=self.store.tombstones())
+            self._send(200, {"success": True, "data": data})
             return
         if parsed.path == "/sync_upsert":
             mems = body.get("memories") if isinstance(body.get("memories"), list) else []
             rels = body.get("relations") if isinstance(body.get("relations"), list) else []
+            tombs = body.get("tombstones") if isinstance(body.get("tombstones"), dict) else {}
+            if tombs:
+                # Deletes first: sync_upsert then refuses to re-insert their ids.
+                self.store.apply_remote(tombstones=tombs)
             self._send(200, {"success": True, "data": self.store.sync_upsert(mems, rels)})
             return
         if parsed.path == "/search":
@@ -1471,6 +2438,9 @@ class Handler(BaseHTTPRequestHandler):
                 namespaces=body.get("namespaces") if isinstance(body.get("namespaces"), list) else None,
             )
             self.store.record_access([r.get("id") for r in data])
+            # Reads are what pull a peer's changes across — there is no polling
+            # timer. Fire-and-forget: recall must not wait on the network.
+            UPLINK.trigger()
             self._send(200, {"success": True, "data": data})
             return
         self._send(404, {"success": False, "error": f"not found: {parsed.path}"})
@@ -1611,6 +2581,14 @@ def main() -> int:
         f"dense={args.embed_model or 'off'}",
         flush=True,
     )
+
+    # Bring the peer link up only if machines are already paired — see _Uplink.
+    UPLINK.start_if_paired(store)
+    if UPLINK.node is not None:
+        print(f"ygg-memory: peer sync on {UPLINK.node.url}  "
+              f"peers={len(UPLINK.node.peers_state.get('peers', {}))}", flush=True)
+    elif UPLINK.error:
+        print(f"ygg-memory: peer sync off ({UPLINK.error})", file=sys.stderr, flush=True)
 
     # Periodically refresh the 'newer version available' cache (the CLI/MCP just
     # read it, so they never block on the network). Best-effort, daemon thread.

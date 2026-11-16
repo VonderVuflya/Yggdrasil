@@ -3,37 +3,64 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is [SemVer](https://semver.org/).
 
-## [0.18.0] — 2026-11-16 — local Workspace (release preparation)
+## [0.18.0] — 2026-11-16 — local Workspace
 
-This entry describes the prepared release; publication is a separate step.
-The Workspace has its own version, **UI 0.1 Experimental**.
+- **Local Workspace.** Run `ygg` to open the new local interface, marked **UI 0.1 Experimental**.
+- **Project browser.** Explore project overviews, searchable knowledge and original sources.
+- **Operations.** Run common tasks with grouped commands, descriptions, progress and logs; advanced actions are optional and seed starts with `--dry-run`.
+- **Full configuration.** Edit CLI settings and choose installed models from the browser.
+- **Appearance and languages.** Seven languages, English by default, and five palettes with light and dark modes.
+- **Updates in the browser.** See your version and GitHub stars, update with progress, and receive a completion notification after restart.
+- **Experimental scope.** Graph and Chat are temporarily hidden; existing data and CLI commands remain available.
+- **Documentation.** Updated guides and README screenshots use fictional English projects.
+
+Update with `ygg update`, then run `ygg`. Node.js is not required. See the [Workspace guide](docs/workspace.md).
+
+## [0.17.0] — 2026-11-16
+
+- **Checks before distillation.** `ygg seed` and `ygg distill` check the connection, model server and configured models before processing files.
+- **Missing-model wizard.** Choose an available model with the arrow keys and press Enter to save it. Distillation continues with the selected generation model.
+- **Local server startup.** Seed offers to start LM Studio or Ollama when the local server is stopped.
+- **Clearer model errors.** Connection failures, missing models and API errors show their actual cause instead of blaming slow generation or malformed JSON.
+- **Claude Desktop bundle.** Fixed missing-module errors when using the downloaded extension.
+- **Read-only review.** `ygg review` lists findings; changes require `--apply`.
+- **Reliable relation sync.** Added and removed memory relations reach linked machines and stay in sync.
+- **Busy-port recovery.** Sync retries a busy port automatically and shows which process is using it, including on Windows.
+
+Update with `ygg update` on both linked machines. After changing an embedding model, run `ygg redeploy` before retrying seed.
+
+## [0.16.0] — 2026-10-22 — one memory across your machines
 
 ### Added
-- **Local Workspace.** Running `ygg` opens a local browser interface for
-  projects, their overview, knowledge and sources, Operations and Settings.
-  Existing CLI commands and help forms, including `ygg -help`, remain available.
-- **Task-oriented Operations.** Seed, doctor and sync cards lead into grouped,
-  described commands: 14 everyday commands with advanced commands available
-  on demand. Seed defaults to `--dry-run`. Progress, logs, interactive input,
-  stop controls and confirmations remain available.
-- **Configuration and models.** Settings exposes the full CLI configuration
-  and model selection for background processing and embeddings.
-- **Appearance and languages.** Seven languages with English as the default,
-  plus five palettes, each with light and dark modes.
-- **Version and update controls.** Cached version and GitHub star metadata;
-  the version badge opens an update flow using `ygg update`, with background
-  progress, a session-preserving restart and completion notifications.
-- **Workspace documentation.** A user guide, release notes and three screenshots
-  made with isolated fictional English data, linked from all seven READMEs.
+- **`ygg link` — two of your machines, one memory.** Pair once with a one-time
+  code; a memory written on one is on the other in about a second, and deletes
+  and archives follow. Direct over your own network: TLS with the certificate
+  named in the code itself, per-pair keys, no relay, no account. Nothing listens
+  beyond loopback until you run it. `ygg link --list` · `ygg unlink <name>`.
+- `ygg link --list` and `ygg doctor` show whether writes actually arrive. A
+  blocked port is caught at pairing, with the one command that opens it.
+  Machines on different networks can link with `ygg link --tailscale`.
+- `ygg review` checks the whole store and finds reworded duplicates by meaning
+  (`--threshold`); `--apply --yes` consolidates only the near-identical ones.
+- `ygg unarchive --id` brings an archived memory back, on linked machines too.
 
 ### Changed
-- **Graph and Chat are temporarily hidden** from Workspace navigation, project
-  pages and related actions. Their backend modules and saved chats remain intact.
-- The Operations selector omits aliases, server/stdio commands, token and UI
-  launch commands. Configuration and updates use their dedicated UI flows.
-  The CLI command set is preserved.
-- Package, npm wrapper, MCP and agent-plugin manifests are prepared for 0.18.0;
-  the UI retains its independent 0.1.0 version.
+- Deletes propagate through `ygg sync` (git) too; before, the next sync from a
+  machine that still had the record brought it back.
+- `ygg sync` and `ygg link` share one merge policy: the newer edit wins, and
+  two machines always converge.
+- Recalled memory reaches the agent as reference notes with their source, never
+  as instructions.
+- Transcripts are scrubbed of more secret formats (Stripe, npm, Hugging Face,
+  Bearer, `.env` keys, private keys) before distillation.
+- **HTTP MCP behind a tunnel:** set `YGG_MCP_ALLOWED_HOSTS` to the public
+  hostname or requests get 403 ([docs/cross-surface.md](docs/cross-surface.md)).
+- MCP tools called without a required argument name the missing one.
+- The database migrates itself on first start. Nothing to run.
+
+### Note
+- Both machines need 0.16 to link. A delete racing an edit on the other machine
+  resolves to the delete; when you mean "changed my mind", archive instead.
 
 ## [0.15.0] — 2026-08-06 — distillation that stays on task
 
